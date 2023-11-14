@@ -3,6 +3,6 @@
 # @Author  : Kem
 # @Desc    :
 
-from bricks.bin.dispatch import Dispatcher, Task  # noqa
+from bricks.core.dispatch import Dispatcher, Task  # noqa
 from bricks.lib.request import Request
 from bricks.lib.response import Response
