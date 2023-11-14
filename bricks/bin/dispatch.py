@@ -19,7 +19,7 @@ from typing import Union, Dict, Optional
 
 from loguru import logger
 
-from bricks._core.events import Event
+from bricks.bin.events import Event
 
 
 class Task(Future):
