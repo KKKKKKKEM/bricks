@@ -110,8 +110,9 @@ class Dispatcher(threading.Thread):
 
     """
 
-    def __init__(self, max_workers=1):
+    def __init__(self, max_workers=1, trace=True):
         self.max_workers = max_workers
+        self.trace = trace
         self.pending = asyncio.Queue(maxsize=max_workers)
         self.tasks = queue.Queue()
         self._workers: Dict[str, Worker] = {}
@@ -134,7 +135,7 @@ class Dispatcher(threading.Thread):
         :return:
         """
         for _ in range(size):
-            worker = Worker(self, name=f"worker-{next(self._counter)}")
+            worker = Worker(self, name=f"worker-{next(self._counter)}", trace=self.trace)
             self._workers[worker.name] = worker
             worker.start()
 
