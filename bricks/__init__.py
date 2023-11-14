@@ -3,4 +3,4 @@
 # @Author  : Kem
 # @Desc    :
 
-from bricks._api._dispatch import Dispatcher, Task
+from bricks._core.dispatch import Dispatcher, Task
