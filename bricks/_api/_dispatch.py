@@ -33,6 +33,7 @@ class Task(Future):
         self.kwargs = kwargs or {}
         self.callback = callback
         self.dispatcher: Optional["Dispatcher"] = None
+        self.worker: Optional["Worker"] = None
         callback and self.add_done_callback(callback)
         super().__init__()
 
@@ -64,6 +65,7 @@ class Worker(threading.Thread):
         while self.dispatcher.is_running() and not self._shutdown:
             try:
                 task: Task = self.dispatcher.tasks.get(timeout=5)
+                task.worker = self
 
             except queue.Empty:
                 self.dispatcher.stop_worker(self.name)
@@ -114,6 +116,14 @@ class Dispatcher(threading.Thread):
     """
     Dispatcher: Responsible for task scheduling, assignment and execution
 
+    Outstanding features of this dispatcher:
+
+    1. Supports setting a maximum number of concurrent tasks, and can automatically add or close workers based on the number of currently submitted tasks.
+    2. Workers support manual pause and shutdown.
+    3. The submitted tasks, whether asynchronous or synchronous, are all efficiently managed.
+    4. After submission, a future is returned. To wait for the result, you simply need to call `future.result()`. You can also cancel the task, which simplifies asynchronous programming.
+
+
     """
 
     def __init__(self, max_workers=1, trace=True):
@@ -129,7 +139,6 @@ class Dispatcher(threading.Thread):
         self._running = threading.Event()
         self._counter = itertools.count()
 
-        # atexit.register(self.shutdown)
         super().__init__(daemon=False, name="ForkConsumer")
 
     def create_worker(self, size: int = 1):
@@ -205,9 +214,15 @@ class Dispatcher(threading.Thread):
         :return:
         """
         with self.tasks.not_empty:
+            # If the task is still in the task queue and has not been retrieved for use, it will be deleted from the task queue
             if task in self.tasks.queue:
                 self.tasks.queue.remove(task)
                 self.tasks.not_full.notify()
+            else:
+                # If there is a worker and the task is running, shut down the worker
+                task.worker and task.running() and self.stop_worker(task.worker.name)
+                # notify the scheduler to reassign the worker
+                self.loop.call_soon_threadsafe(self._awake.set)
 
     def create_future(self, task: Task):
         """
@@ -273,6 +288,7 @@ class Dispatcher(threading.Thread):
                     if not self.tasks.empty() and not self._current_workers.locked():
                         await self._current_workers.acquire()
                         self.create_worker()
+
                 finally:
                     self._awake.clear()
 

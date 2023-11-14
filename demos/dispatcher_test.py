@@ -35,17 +35,21 @@ if __name__ == '__main__':
             time.sleep(1)
 
 
+    tasks = []
     for i in range(2):
-        dispatcher.submit_task(Task(demo2, args=[i]), timeout=5)
+        t = dispatcher.submit_task(Task(demo2, args=[i]), timeout=5)
+        tasks.append(t)
     #
     time.sleep(2)
-    fu = dispatcher.submit_task(Task(demo2, args=[999, lambda: False]), timeout=-1)
+    fu = dispatcher.submit_task(Task(demo2, args=[999, lambda: True]), timeout=-1)
+    fu2 = dispatcher.submit_task(Task(demo2, args=["xxx", lambda: True]), timeout=-1)
     # time.sleep(1)
     print("dispatcher.running", dispatcher.running)
     time.sleep(3)
 
-    # print(fu.result())
-    fu.cancel()
+    print(fu2.cancel())
+    # print(tasks[0].cancel())
+    # print(tasks[0])
     while True:
         time.sleep(1)
         print("dispatcher.running", dispatcher.running)
