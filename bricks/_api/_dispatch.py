@@ -22,7 +22,7 @@ from bricks._api._events import Event
 
 class Task(asyncio.Future):
     """
-    任务类, 用于存放任务信息
+    A future that is used to store task information
 
     """
 
