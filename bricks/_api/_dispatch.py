@@ -35,6 +35,7 @@ class Task(Future):
         self.callback = callback
         self.dispatcher: Optional["Dispatcher"] = None
         self.worker: Optional["Worker"] = None
+        self.future: Optional["asyncio.Future"] = None
         callback and self.add_done_callback(callback)
         super().__init__()
 
@@ -44,6 +45,7 @@ class Task(Future):
 
     def cancel(self) -> bool:
         self.dispatcher and self.dispatcher.cancel_task(self)
+        self.future and self.future.cancel()
         return super().cancel()
 
 
@@ -75,6 +77,7 @@ class Worker(threading.Thread):
             try:
                 if task.is_async:
                     future = self.dispatcher.create_future(task)
+                    task.future = future
                     future.result()
                 else:
                     ret = task.func(*task.args, **task.kwargs)
@@ -142,7 +145,7 @@ class Dispatcher(threading.Thread):
 
     """
 
-    def __init__(self, max_workers=1, trace=True):
+    def __init__(self, max_workers=1, trace=False):
         self.max_workers = max_workers
         self.trace = trace
         self.tasks = queue.Queue()

@@ -24,8 +24,9 @@ if __name__ == '__main__':
 
 
     async def demo(j):
-        await asyncio.sleep(1)
-        print(j)
+        while True:
+            await asyncio.sleep(1)
+            print(j)
 
 
     def demo2(j, con=None):
@@ -37,7 +38,7 @@ if __name__ == '__main__':
 
     tasks = []
     for i in range(2):
-        t = dispatcher.submit_task(Task(demo2, args=[i]), timeout=5)
+        t = dispatcher.submit_task(Task(demo, args=[i]), timeout=5)
         tasks.append(t)
     #
     time.sleep(2)
