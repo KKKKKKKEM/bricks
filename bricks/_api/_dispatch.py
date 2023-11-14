@@ -149,12 +149,13 @@ class Dispatcher(threading.Thread):
         self.max_workers = max_workers
         self.trace = trace
         self.tasks = queue.Queue()
-        self._workers: Dict[str, Worker] = {}
+        self.workers: Dict[str, Worker] = {}
+        self.loop = asyncio.get_event_loop()
+
         self._current_workers = asyncio.Semaphore(self.max_workers)
         self._semaphore = asyncio.Semaphore(self.max_workers)
         self._awake = asyncio.Event()
         self._shutdown = asyncio.Event()
-        self.loop = asyncio.get_event_loop()
         self._running = threading.Event()
         self._counter = itertools.count()
 
@@ -169,7 +170,7 @@ class Dispatcher(threading.Thread):
         """
         for _ in range(size):
             worker = Worker(self, name=f"worker-{next(self._counter)}", trace=self.trace)
-            self._workers[worker.name] = worker
+            self.workers[worker.name] = worker
             worker.start()
 
     def stop_worker(self, *idents: str):
@@ -180,7 +181,7 @@ class Dispatcher(threading.Thread):
         :return:
         """
         for ident in idents:
-            worker = self._workers.pop(ident, None)
+            worker = self.workers.pop(ident, None)
             worker and self.loop.call_soon_threadsafe(self._current_workers.release)
             worker and worker.stop()
 
@@ -192,7 +193,7 @@ class Dispatcher(threading.Thread):
         :return:
         """
         for ident in idents:
-            worker = self._workers.get(ident)
+            worker = self.workers.get(ident)
             worker and worker.pause()
 
     def awake_worker(self, *idents: str):
@@ -203,7 +204,7 @@ class Dispatcher(threading.Thread):
         :return:
         """
         for ident in idents:
-            worker = self._workers.get(ident)
+            worker = self.workers.get(ident)
             worker and worker.awake()
 
     async def run_task(self, task: Task, timeout=None):
@@ -319,7 +320,7 @@ class Dispatcher(threading.Thread):
             pass
 
     def stop(self):
-        self.stop_worker(*self._workers.keys())
+        self.stop_worker(*self.workers.keys())
         # note: It must be called this way, otherwise the thread is unsafe and the write over there cannot be closed
         self.loop.call_soon_threadsafe(self._shutdown.set)
         self.loop.call_soon_threadsafe(self._awake.set)
