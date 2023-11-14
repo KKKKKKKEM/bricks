@@ -8,8 +8,18 @@ import time
 
 from bricks import Task, Dispatcher
 
+"""
+
+本调度器超好用的功能：
+
+1. 支持设置最大并发数，可以根据当前提交的任务数量自动新增 / 关闭 worker
+2. worker 支持手动暂停和关闭
+3. 提交的任务不管你是异步任务还是同步任务都能 hold 住
+4. 提交之后返回 future，想要等待结果只需要 future.result() 即可，你也可以取消任务, 避免异步编程
+
+"""
 if __name__ == '__main__':
-    dispatcher = Dispatcher(max_workers=3)
+    dispatcher = Dispatcher(max_workers=2)
     dispatcher.start()
 
 
@@ -29,10 +39,16 @@ if __name__ == '__main__':
         dispatcher.submit_task(Task(demo2, args=[i]), timeout=5)
     #
     time.sleep(2)
-    dispatcher.submit_task(Task(demo2, args=[999, lambda: False]), timeout=-1)
+    fu = dispatcher.submit_task(Task(demo2, args=[999, lambda: False]), timeout=-1)
+    # time.sleep(1)
+    print("dispatcher.running", dispatcher.running)
+    time.sleep(3)
+
+    # print(fu.result())
+    fu.cancel()
     while True:
         time.sleep(1)
-        print(dispatcher.running)
+        print("dispatcher.running", dispatcher.running)
     # 暂停一个 worker
     # dispatcher.pause_worker("worker-0")
     # print('暂停')

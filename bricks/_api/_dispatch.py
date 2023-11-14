@@ -13,14 +13,15 @@ import queue
 import sys
 import threading
 import traceback
-from typing import Union, Dict
+from concurrent.futures import Future
+from typing import Union, Dict, Optional
 
 from loguru import logger
 
 from bricks._api._events import Event
 
 
-class Task(asyncio.Future):
+class Task(Future):
     """
     A future that is used to store task information
 
@@ -31,12 +32,17 @@ class Task(asyncio.Future):
         self.args = args or []
         self.kwargs = kwargs or {}
         self.callback = callback
+        self.dispatcher: Optional["Dispatcher"] = None
         callback and self.add_done_callback(callback)
         super().__init__()
 
     @property
     def is_async(self):
         return asyncio.iscoroutinefunction(self.func)
+
+    def cancel(self) -> bool:
+        self.dispatcher and self.dispatcher.cancel_task(self)
+        return super().cancel()
 
 
 class Worker(threading.Thread):
@@ -175,20 +181,33 @@ class Dispatcher(threading.Thread):
     async def run_task(self, task: Task, timeout=None):
         if timeout == -1:
             self.tasks.put(task)
+
         else:
             async with self._semaphore:
                 self.tasks.put(task)
 
         self._awake.set()
 
-    def submit_task(self, task: Task, timeout: int = None) -> asyncio.Future:
+    def submit_task(self, task: Task, timeout: int = None) -> Task:
         if not self._running.wait(timeout=5):
             raise RuntimeError("dispatcher is not running")
 
+        task.dispatcher = self
         future = asyncio.run_coroutine_threadsafe(self.run_task(task, timeout=timeout), self.loop)
-        timeout != -1 and future.result(timeout=timeout)
-
+        future.result(timeout=timeout if timeout != -1 else None)
         return task
+
+    def cancel_task(self, task: Task):
+        """
+        cancel task
+
+        :param task:
+        :return:
+        """
+        with self.tasks.not_empty:
+            if task in self.tasks.queue:
+                self.tasks.queue.remove(task)
+                self.tasks.not_full.notify()
 
     def create_future(self, task: Task):
         """
@@ -248,11 +267,13 @@ class Dispatcher(threading.Thread):
             while not self._shutdown.is_set():
                 await self._awake.wait()
 
-                # The execution queue is not empty -> The task cannot be processed
-                # The current number of workers is less than the maximum number of workers -> and there is still worker capacity remaining
-                if not self.tasks.empty() and not self._current_workers.locked():
-                    await self._current_workers.acquire()
-                    self.create_worker()
+                try:
+                    # The execution queue is not empty -> The task cannot be processed
+                    # The current number of workers is less than the maximum number of workers -> and there is still worker capacity remaining
+                    if not self.tasks.empty() and not self._current_workers.locked():
+                        await self._current_workers.acquire()
+                        self.create_worker()
+                finally:
                     self._awake.clear()
 
         asyncio.set_event_loop(self.loop)
