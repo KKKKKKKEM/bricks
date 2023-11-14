@@ -11,7 +11,7 @@ from collections import OrderedDict
 from http.cookies import SimpleCookie
 from typing import Union, Optional, Dict
 
-from bricks._libs.headers import Header
+from bricks.libs.headers import Header
 
 
 class Request:
