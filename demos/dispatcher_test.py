@@ -9,7 +9,7 @@ import time
 from bricks import Task, Dispatcher
 
 if __name__ == '__main__':
-    dispatcher = Dispatcher(concurrents=2)
+    dispatcher = Dispatcher(max_workers=3)
     dispatcher.start()
 
 
@@ -18,8 +18,9 @@ if __name__ == '__main__':
         print(j)
 
 
-    def demo2(j):
-        while True:
+    def demo2(j, con=None):
+        con = con or (lambda: True)
+        while con():
             print(threading.current_thread(), j)
             time.sleep(1)
 
@@ -28,16 +29,18 @@ if __name__ == '__main__':
         dispatcher.submit_task(Task(demo2, args=[i]), timeout=5)
     #
     time.sleep(2)
+    dispatcher.submit_task(Task(demo2, args=[999, lambda: False]), timeout=-1)
+    print('dasdads')
     # 暂停一个 worker
-    dispatcher.pause_worker("worker-0")
-    print('暂停')
-
-    time.sleep(5)
-    # 唤醒一个 worker
-    dispatcher.awake_worker("worker-0")
-    time.sleep(5)
-    # 停止一个 worker
-    dispatcher.stop_worker("worker-0")
-    time.sleep(5)
-    dispatcher.shutdown()
-    print(dispatcher.loop.is_running())
+    # dispatcher.pause_worker("worker-0")
+    # print('暂停')
+    #
+    # time.sleep(5)
+    # # 唤醒一个 worker
+    # dispatcher.awake_worker("worker-0")
+    # time.sleep(5)
+    # # 停止一个 worker
+    # dispatcher.stop_worker("worker-0")
+    # time.sleep(5)
+    # dispatcher.stop()
+    # print(dispatcher.loop.is_running())

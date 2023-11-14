@@ -8,7 +8,6 @@ __all__ = (
 )
 
 import asyncio
-import contextlib
 import itertools
 import queue
 import sys
@@ -20,76 +19,20 @@ from loguru import logger
 
 from bricks._api._events import Event
 
-_counter = itertools.count()
 
-
-class Task:
+class Task(asyncio.Future):
     """
     任务类, 用于存放任务信息
 
     """
 
-    def __init__(self, func, args=None, kwargs=None, callback=None, errback=None):
+    def __init__(self, func, args=None, kwargs=None, callback=None):
         self.func = func
         self.args = args or []
         self.kwargs = kwargs or {}
         self.callback = callback
-        self.errback = errback
-        self._done = threading.Event()
-        self._result = None
-        self._done.clear()
-
-    def result(self, timeout=None):
-        self._done.wait(timeout=timeout)
-        return self._result
-
-    def set_result(self, v):
-        self._result = v
-
-    @property
-    def done(self):
-        return self._done.is_set()
-
-    def exec(self):
-        try:
-            ret = self.func(*self.args, **self.kwargs)
-            self.set_result(ret)
-            self._run_callback()
-            return ret
-
-        except Exception as e:
-            self.set_result(e)
-            self._run_errback()
-            raise e
-
-        finally:
-            self._done.set()
-
-    async def async_exec(self):
-        try:
-            ret = await self.func(*self.args, **self.kwargs)
-            self.set_result(ret)
-            self._run_callback()
-            return ret
-
-        except Exception as e:
-            self.set_result(e)
-            self._run_errback()
-            raise e
-        finally:
-            self._done.set()
-
-    def _run_callback(self):
-        try:
-            self.callback and self.callback(self._result)
-        except Exception as e:
-            logger.exception(e)
-
-    def _run_errback(self):
-        try:
-            self.errback and self.errback(self._result)
-        except Exception as e:
-            logger.exception(e)
+        callback and self.add_done_callback(callback)
+        super().__init__()
 
     @property
     def is_async(self):
@@ -115,15 +58,24 @@ class Worker(threading.Thread):
         while self.dispatcher.is_running() and not self._shutdown:
             try:
                 task: Task = self.dispatcher.tasks.get(timeout=5)
-                self.dispatcher.exec(task)
 
             except queue.Empty:
-                pass
+                self.dispatcher.stop_worker(self.name)
+                return
+
+            try:
+                if task.is_async:
+                    future = self.dispatcher.create_future(task)
+                    future.result()
+                else:
+                    ret = task.func(*task.args, **task.kwargs)
+                    task.set_result(ret)
 
             except (KeyboardInterrupt, SystemExit) as e:
                 raise e
 
             except Exception as e:
+                task.set_exception(e)
                 Event.spark_events({
                     "type": Event.ErrorOccurred,
                     "error": e,
@@ -158,30 +110,23 @@ class Dispatcher(threading.Thread):
 
     """
 
-    def __init__(self, concurrents=1):
-        self.concurrents = concurrents
+    def __init__(self, max_workers=1):
+        self.max_workers = max_workers
+        self.pending = asyncio.Queue(maxsize=max_workers)
         self.tasks = queue.Queue()
         self._workers: Dict[str, Worker] = {}
-
+        self._current_workers = asyncio.Semaphore(self.max_workers)
+        self._semaphore = asyncio.Semaphore(self.max_workers)
+        self._awake = asyncio.Event()
         self._shutdown = asyncio.Event()
         self.loop = asyncio.get_event_loop()
         self._running = threading.Event()
-        self._semaphore = threading.Semaphore(self.concurrents)
+        self._counter = itertools.count()
+
         # atexit.register(self.shutdown)
         super().__init__(daemon=False, name="ForkConsumer")
 
-    def create_future(self, task: Task):
-        """
-        create a async task future object
-
-        :param task:
-        :return:
-        """
-
-        assert task.is_async, "task must be async function"
-        return asyncio.run_coroutine_threadsafe(task.async_exec(), self.loop)
-
-    def create_worker(self, size: int):
+    def create_worker(self, size: int = 1):
         """
         create workers
 
@@ -189,7 +134,7 @@ class Dispatcher(threading.Thread):
         :return:
         """
         for _ in range(size):
-            worker = Worker(self, name=f"worker-{next(_counter)}")
+            worker = Worker(self, name=f"worker-{next(self._counter)}")
             self._workers[worker.name] = worker
             worker.start()
 
@@ -202,7 +147,7 @@ class Dispatcher(threading.Thread):
         """
         for ident in idents:
             worker = self._workers.pop(ident, None)
-            # worker and terminate_thread(worker, SystemExit)
+            worker and self.loop.call_soon_threadsafe(self._current_workers.release)
             worker and worker.stop()
 
     def pause_worker(self, *idents: str):
@@ -227,72 +172,37 @@ class Dispatcher(threading.Thread):
             worker = self._workers.get(ident)
             worker and worker.awake()
 
-    def submit_task(self, task: Task, limit=True, timeout=None):
-        if not self._running.wait(timeout=timeout):
+    async def run_task(self, task: Task, timeout=None):
+        if timeout == -1:
+            self.tasks.put(task)
+        else:
+            async with self._semaphore:
+                self.tasks.put(task)
+
+        self._awake.set()
+
+    def submit_task(self, task: Task, timeout: int = None) -> asyncio.Future:
+        if not self._running.wait(timeout=5):
             raise RuntimeError("dispatcher is not running")
 
-        if self.concurrents == 1:
-            self.do(task)
-
-        elif task.is_async and limit is True:
-            self._semaphore.acquire(timeout=timeout)
-            try:
-                future = self.create_future(task)
-                future.add_done_callback(lambda _: self._semaphore.release())
-            except Exception as e:
-                self._semaphore.release()
-                raise e
-
-        elif task.is_async:
-            self.create_future(task)
-
-        elif limit is True:
-            with self._semaphore:
-                self.tasks.put(task)
-        else:
-            self.tasks.put(task)
+        future = asyncio.run_coroutine_threadsafe(self.run_task(task, timeout=timeout), self.loop)
+        timeout != -1 and future.result(timeout=timeout)
 
         return task
 
-    def exec(self, task: Task) -> Task:
+    def create_future(self, task: Task):
         """
-        Handles a task and executes the callback function while it exists
-        When an exception occurs during task execution, a 'ErrorOccurred' signal is issued
+        create a async task future object
 
-        :return: `None`
+        :param task:
+        :return:
         """
 
-        if self.concurrents != 1:
-            context = self._semaphore
-        else:
-            context = contextlib.nullcontext()
-
-        with context:
-            if task.is_async:
-                future = self.create_future(task)
-                # block it
-                future.result()
-            else:
-                task.exec()
-        return task
-
-    def do(self, task: Task) -> Task:
-        try:
-            self.exec(task)
-        except (KeyboardInterrupt, SystemExit) as e:
-            raise e
-
-        except Exception as e:
-            Event.spark_events({
-                "type": Event.ErrorOccurred,
-                "error": e,
-                "stack": traceback.format_exc(),
-            })
-
-        return task
+        assert task.is_async, "task must be async function"
+        return asyncio.run_coroutine_threadsafe(task.func(*task.args, **task.kwargs), self.loop)
 
     @staticmethod
-    def wrap_task(task: Union[dict, Task]) -> Task:
+    def make_task(task: Union[dict, Task]) -> Task:
         """
         package a task
 
@@ -315,40 +225,36 @@ class Dispatcher(threading.Thread):
 
         # get callback function
         callback = task.get("callback")
-        errback = task.get("errback")
 
         return Task(
             func=func,
             args=positional,
             kwargs=keyword,
             callback=callback,
-            errback=errback,
         )
 
-    def is_empty(self):
-        return self.running == 0
-
     def is_running(self):
-        return self._running.is_set() and not self._shutdown.is_set()
+        return not self._shutdown.is_set()
 
     @property
     def running(self):
-        return self.concurrents + self.coroutines - self._semaphore._value - self._asemaphore._value + len(  # noqa
-            self.tasks.queue)  # noqa
+        return self._current_workers._value  # noqa
 
     def run(self):
         async def main():
             logger.debug("dispatcher is running")
             self._running.set()
-            if self.concurrents != 1: self.create_worker(self.concurrents)
-            while True:
-                try:
+            # if self.max_workers != 1: self.create_worker(self.max_workers)
+            while not self._shutdown.is_set():
+                await self._awake.wait()
 
-                    shutdown = await asyncio.wait_for(self._shutdown.wait(), timeout=100)
-                    if shutdown:
-                        return
-                except asyncio.TimeoutError:
-                    pass
+                # The execution queue is not empty -> The task cannot be processed
+                # The current number of workers is less than the maximum number of workers -> and there is still worker capacity remaining
+                if not self.tasks.empty() and not self._current_workers.locked():
+                    await self._current_workers.acquire()
+                    logger.debug('create worker')
+                    self.create_worker()
+                    self._awake.clear()
 
         asyncio.set_event_loop(self.loop)
         self.loop.run_until_complete(main())
@@ -357,13 +263,12 @@ class Dispatcher(threading.Thread):
         except:
             pass
 
-    def shutdown(self):
+    def stop(self):
         for worker in self._workers.values():
             worker.stop()
 
-        self._shutdown.set()
-
         # note: It must be called this way, otherwise the thread is unsafe and the write over there cannot be closed
         self.loop.call_soon_threadsafe(self._shutdown.set)
+        self.loop.call_soon_threadsafe(self._awake.set)
 
         self._running.clear()
