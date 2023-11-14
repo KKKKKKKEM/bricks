@@ -48,7 +48,7 @@ if __name__ == '__main__':
     time.sleep(3)
 
     print(fu2.cancel())
-    # print(tasks[0].cancel())
+    print(tasks[0].cancel())
     # print(tasks[0])
     while True:
         time.sleep(1)

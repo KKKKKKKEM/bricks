@@ -8,6 +8,7 @@ __all__ = (
 )
 
 import asyncio
+import ctypes
 import itertools
 import queue
 import sys
@@ -52,7 +53,7 @@ class Worker(threading.Thread):
 
     """
 
-    def __init__(self, dispatcher: 'Dispatcher', name: str, daemon=True, trace=True, **kwargs):
+    def __init__(self, dispatcher: 'Dispatcher', name: str, daemon=True, trace=False, **kwargs):
         self.dispatcher = dispatcher
         self._shutdown = False
         self.trace = trace
@@ -91,9 +92,24 @@ class Worker(threading.Thread):
                 })
 
     def stop(self) -> None:
+
+        if not self.is_alive():
+            return
+
+        exc = ctypes.py_object(SystemExit)
+        tid = ctypes.c_long(self.ident)
+
+        res = ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, exc)
+        if res == 0:
+            raise ValueError("nonexistent thread id")
+        elif res > 1:
+            ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, None)
+            raise SystemError("PyThreadState_SetAsyncExc failed")
+
         self._shutdown = True
 
     def pause(self) -> None:
+        assert self.trace, "The pause function must be turned on trace mode, which may cause a decrease in formation and is not recommended to turn on"
         self._awaken.clear()
 
     def awake(self) -> None:
@@ -220,7 +236,7 @@ class Dispatcher(threading.Thread):
                 self.tasks.not_full.notify()
             else:
                 # If there is a worker and the task is running, shut down the worker
-                task.worker and task.running() and self.stop_worker(task.worker.name)
+                task.worker and not task.done() and self.stop_worker(task.worker.name)
                 # notify the scheduler to reassign the worker
                 self.loop.call_soon_threadsafe(self._awake.set)
 
@@ -300,9 +316,7 @@ class Dispatcher(threading.Thread):
             pass
 
     def stop(self):
-        for worker in self._workers.values():
-            worker.stop()
-
+        self.stop_worker(*self._workers.keys())
         # note: It must be called this way, otherwise the thread is unsafe and the write over there cannot be closed
         self.loop.call_soon_threadsafe(self._shutdown.set)
         self.loop.call_soon_threadsafe(self._awake.set)
