@@ -21,7 +21,7 @@ if __name__ == '__main__':
     def demo2(j, con=None):
         con = con or (lambda: True)
         while con():
-            print(threading.current_thread(), j)
+            print(f'{threading.current_thread()} -- {j}')
             time.sleep(1)
 
 
@@ -30,7 +30,9 @@ if __name__ == '__main__':
     #
     time.sleep(2)
     dispatcher.submit_task(Task(demo2, args=[999, lambda: False]), timeout=-1)
-    print('dasdads')
+    while True:
+        time.sleep(1)
+        print(dispatcher.running)
     # 暂停一个 worker
     # dispatcher.pause_worker("worker-0")
     # print('暂停')

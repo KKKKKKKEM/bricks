@@ -113,7 +113,6 @@ class Dispatcher(threading.Thread):
     def __init__(self, max_workers=1, trace=True):
         self.max_workers = max_workers
         self.trace = trace
-        self.pending = asyncio.Queue(maxsize=max_workers)
         self.tasks = queue.Queue()
         self._workers: Dict[str, Worker] = {}
         self._current_workers = asyncio.Semaphore(self.max_workers)
@@ -239,7 +238,7 @@ class Dispatcher(threading.Thread):
 
     @property
     def running(self):
-        return self._current_workers._value  # noqa
+        return self.max_workers - self._current_workers._value + self.tasks.qsize()  # noqa
 
     def run(self):
         async def main():
@@ -253,7 +252,6 @@ class Dispatcher(threading.Thread):
                 # The current number of workers is less than the maximum number of workers -> and there is still worker capacity remaining
                 if not self.tasks.empty() and not self._current_workers.locked():
                     await self._current_workers.acquire()
-                    logger.debug('create worker')
                     self.create_worker()
                     self._awake.clear()
 
