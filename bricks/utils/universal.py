@@ -56,7 +56,7 @@ def load_objects(path_or_reference, reload=False):
                     return module
             except (ImportError, AttributeError):
                 continue
-        raise ImportError(f"无法导入指定路径或引用：{path_or_reference}")
+        raise ImportError(f"无法导入指定路径或引用: {path_or_reference}")
 
 
 def iterable(_object: Any, enforce=(dict, str, bytes), exclude=(), convert_null=True) -> List[Any]:
