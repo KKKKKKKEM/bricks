@@ -8,9 +8,9 @@ from typing import Union, Callable, Any, List
 from lxml import etree
 from w3lib.encoding import http_content_type_encoding, html_body_declared_encoding
 
-from bricks.libs import extractors
-from bricks.libs.headers import Header
-from bricks.libs.request import Request
+from bricks.lib import extractors
+from bricks.lib.headers import Header
+from bricks.lib.request import Request
 from bricks.utils import universal
 
 

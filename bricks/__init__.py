@@ -4,5 +4,5 @@
 # @Desc    :
 
 from bricks.bin.dispatch import Dispatcher, Task  # noqa
-from bricks.libs.request import Request
-from bricks.libs.response import Response
+from bricks.lib.request import Request
+from bricks.lib.response import Response
