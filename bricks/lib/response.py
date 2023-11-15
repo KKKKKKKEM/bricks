@@ -51,6 +51,9 @@ class Response:
     )
 
     def guess_encoding(self):
+        if not self.content:
+            return
+
         # 1. 从header中获取编码
         content_type = self.headers.get("Content-Type")
         temp = http_content_type_encoding(content_type)
