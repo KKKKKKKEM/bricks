@@ -29,6 +29,24 @@ class MetaClass(type):
 
 class Chaos(metaclass=MetaClass):
 
+    def get_attr(self, name, default=None):
+        """
+        获取属性
+        :param name:
+        :param default:
+        :return:
+        """
+        return getattr(self, name, default)
+
+    def set_attr(self, name, value):
+        """
+        设置属性
+        :param name:
+        :param value:
+        :return:
+        """
+        return setattr(self, name, value)
+
     def run_task(self, task_name: str, *args, **kwargs):
         """
         Run a task
@@ -36,7 +54,7 @@ class Chaos(metaclass=MetaClass):
         :param task_name: task name
         :return:
         """
-        method = getattr(self, task_name, None)
+        method = getattr(self, f'run_{task_name}', None)
         if method:
             return method(*args, **kwargs)
         else:
