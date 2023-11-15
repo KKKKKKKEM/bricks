@@ -66,6 +66,7 @@ class Worker(threading.Thread):
     def run(self) -> None:
         self.trace and sys.settrace(self._trace)
         while self.dispatcher.is_running() and not self._shutdown:
+            not self.trace and self._awaken.wait()
             try:
                 task: Task = self.dispatcher.tasks.get(timeout=5)
                 task.worker = self
@@ -108,7 +109,6 @@ class Worker(threading.Thread):
         self._shutdown = True
 
     def pause(self) -> None:
-        assert self.trace, "The pause function must be turned on trace mode, which may cause a decrease in formation and is not recommended to turn on"
         self._awaken.clear()
 
     def awake(self) -> None:
