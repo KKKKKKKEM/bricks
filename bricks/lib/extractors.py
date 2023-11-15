@@ -43,7 +43,7 @@ class Rule:
         self.const = const
         self.default = default
         self.engine: Optional["Extractor"] = self.to_engine(engine)
-        self.bakup: Optional['Rule'] = None
+        self.backup: Optional['Rule'] = None
 
     @classmethod
     def to_rule(cls, value, engine=None):
@@ -80,8 +80,8 @@ class Rule:
 
         # 设置默认值
         if res in self.engine.empty:
-            if self.bakup:
-                return self.bakup.apply(obj)
+            if self.backup:
+                return self.backup.apply(obj)
             else:
                 res = self.default
 
@@ -109,10 +109,10 @@ class Rule:
         return self.condition(obj)
 
     def __or__(self, other):
-        if not self.bakup:
-            self.bakup = other
+        if not self.backup:
+            self.backup = other
         else:
-            self.bakup = self.bakup | other
+            self.backup = self.backup | other
 
         return self
 
