@@ -2,6 +2,7 @@
 # @Time    : 2023-11-14 21:40
 # @Author  : Kem
 # @Desc    : Response Model
+import re
 import sys
 from typing import Union, Callable, Any, List
 
@@ -12,6 +13,8 @@ from bricks.lib import extractors
 from bricks.lib.headers import Header
 from bricks.lib.request import Request
 from bricks.utils import universal
+
+_HEADER_ENCODING_RE = re.compile(r"charset=([\w-]+)", re.I)
 
 
 class Response:
@@ -28,19 +31,17 @@ class Response:
             request: 'Request' = ...,
             error: Any = ...,
     ):
-        self._raw_content: Union[str, bytes] = content
+        self.content: Union[str, bytes] = content
         self.status_code = status_code
         self._headers = Header(headers, _dtype=str)
         self.url = url
-        self._encoding = encoding
+        self.encoding = encoding or self.guess_encoding()
         self.reason = reason
         self.cookies = cookies
         self.history: List['Response'] = history or []
         self.request: 'Request' = request
         self.error = error
-        self._cached_json = None
-        self._cached_selector = None
-        self._cached_text = ""
+        self._cache = {}
 
     headers: Header = property(
         fget=lambda self: self._headers,
@@ -49,88 +50,40 @@ class Response:
         doc="请求头"
     )
 
-    def clear_cache(self):
-        self._cached_json = None
-        self._cached_selector = None
-        self._cached_text = None
+    def guess_encoding(self):
+        # 1. 从header中获取编码
+        content_type = self.headers.get("Content-Type")
+        temp = http_content_type_encoding(content_type)
+        if temp:
+            return temp
 
-    @property
-    def encoding(self):
-        """
-        编码优先级：自定义编码 > header中编码 > 页面编码 > 根据content猜测的编码
-        """
-        self._encoding = (
-                self._encoding
-                or self._headers_encoding()
-                or self._body_declared_encoding()
-                or 'utf-8'
-        )
-        return self._encoding
+        temp = html_body_declared_encoding(self.content)
+        if temp:
+            return temp
 
-    @encoding.setter
-    def encoding(self, value):
-        self.clear_cache()
-        self._encoding = value
-
-    @property
-    def content(self):
-        return self._raw_content
-
-    @content.setter
-    def content(self, value):
-        self.clear_cache()
-        self._raw_content = value
+        return 'utf-8'
 
     @property
     def text(self):
         """
         :return: the str for response content.
         """
-        if not self._cached_text:
-            if isinstance(self.content, bytes):
+        if isinstance(self.content, bytes):
 
-                if not self.content:
-                    return str('')
+            if not self.content:
+                return str('')
 
-                try:
-                    self._cached_text = str(self.content, self.encoding, errors='replace')
-                except (LookupError, TypeError):
+            try:
+                return str(self.content, self.encoding, errors='replace')
+            except (LookupError, TypeError):
+                return str(self.content, errors='replace')
 
-                    self._cached_text = str(self.content, errors='replace')
-
-            else:
-                self._cached_text = self.content
-
-        return self._cached_text
-
-    @text.setter
-    def text(self, value):
-        self.clear_cache()
-        self._cached_text = value
+        else:
+            return self.content
 
     @property
     def html(self):
-        if not self._cached_selector:
-            self._cached_selector = etree.HTML(self.text)
-        return self._cached_selector
-
-    def _headers_encoding(self):
-        """
-        从headers获取头部charset编码
-
-        """
-        content_type = self.headers.get("Content-Type") or self.headers.get(
-            "content-type"
-        )
-        return http_content_type_encoding(content_type)
-
-    def _body_declared_encoding(self):
-        """
-        从html xml等获取<meta charset="编码">
-
-        """
-
-        return html_body_declared_encoding(self.content)
+        return etree.HTML(self.text)
 
     @property
     def length(self):
@@ -152,9 +105,7 @@ class Response:
 
         Deserialize a JSON document to a Python object.
         """
-        if not self._cached_json:
-            self._cached_json = universal.json_or_eval(self.text, **kwargs) if isinstance(self.text, str) else self.text
-        return self._cached_json
+        return universal.json_or_eval(self.text, **kwargs) if isinstance(self.text, str) else self.text
 
     def extract_all(
             self,
@@ -233,10 +184,11 @@ class Response:
         :param kwargs:
         :return:
         """
-        obj = obj or self.html
 
         if not xpath:
             return obj
+
+        obj = obj or self.html
 
         return extractors.XpathExtractor.extract(
             obj=obj,
@@ -255,17 +207,7 @@ class Response:
         :return:
         """
 
-        obj = obj or self.html
-
-        if not xpath:
-            return obj
-
-        return extractors.XpathExtractor.extract_first(
-            obj=obj,
-            exprs=xpath,
-            default=default,
-            **kwargs
-        )
+        return universal.single(self.xpath(xpath, obj, **kwargs), default=default)
 
     def jsonpath(self, jpath, obj=None, strict=True, **kwargs):
         """
@@ -277,12 +219,8 @@ class Response:
         :param kwargs:
         :return:
         """
-
+        if not jpath: return obj
         obj = obj or self.text
-
-        if not jpath:
-            return obj
-
         return extractors.JsonpathExtractor.extract(
             obj=obj,
             exprs=jpath,
@@ -301,18 +239,7 @@ class Response:
         :param kwargs:
         :return:
         """
-        obj = obj or self.text
-
-        if not jpath:
-            return obj
-
-        return extractors.JsonpathExtractor.extract_first(
-            obj=obj,
-            exprs=jpath,
-            default=default,
-            jsonp=not strict,
-            **kwargs
-        )
+        return universal.single(self.jsonpath(jpath, obj, strict, **kwargs), default=default)
 
     def re(self, regex, obj=None, **kwargs):
         """
@@ -344,17 +271,7 @@ class Response:
         :param kwargs:
         :return:
         """
-        obj = obj or self.text
-
-        if not regex:
-            return obj
-
-        return extractors.RegexExtractor.extract_first(
-            obj=obj,
-            exprs=regex,
-            default=default,
-            **kwargs
-        )
+        return universal.single(self.re(regex, obj, **kwargs), default=default)
 
     def get(self, rule: str, obj=None, strict=True, **kwargs):
         """
@@ -392,21 +309,7 @@ class Response:
         :return:
 
         """
-        obj = obj or self.text
-
-        if not rule:
-            return obj
-
-        return extractors.JsonExtractor.extract_first(
-            obj=obj,
-            exprs=rule,
-            default=default,
-            jsonp=not strict,
-            **kwargs
-        )
-
-    def __bool__(self):
-        return self.ok
+        return universal.single(self.get(rule, obj, strict, **kwargs), default=default)
 
     @property
     def ok(self):
@@ -430,11 +333,6 @@ class Response:
         else:
             return 200 <= self.status_code < 400
 
-    def __str__(self):
-        return f'<Response [{self.error if self.status_code == -1 else self.status_code}] {self.url}>'
-
-    __repr__ = __str__
-
     @classmethod
     def make_response(cls, **kwargs):
         """
@@ -454,3 +352,56 @@ class Response:
             return True
         except:
             return False
+
+    def __str__(self):
+        return f'<Response [{self.error if self.status_code == -1 else self.status_code}] {self.url}>'
+
+    __repr__ = __str__
+
+    def __bool__(self):
+        return self.ok
+
+    def __setattr__(self, key, value):
+
+        if key in ["encoding", "content"]:
+            # 修改这三个属性的时候, 需要把缓存清空
+            object.__setattr__(self, "_cache", {})
+
+        return object.__setattr__(self, key, value)
+
+    def __getattribute__(self, item):
+
+        def cache_method(func):
+            def wrapper(*args, **kwargs):
+                # 生成缓存的键
+                cache_key = (args, tuple(kwargs.items()))
+                # 检查缓存
+                if cache_key not in self._cache:
+                    self._cache[cache_key] = func(*args, **kwargs)
+                return self._cache[cache_key]
+
+            return wrapper
+
+        if item in ["text", "html", "json"]:
+            cache = self._cache
+            if cache and item in cache:
+                cached = cache[item]
+                return cached
+            else:
+                ret = object.__getattribute__(self, item)
+                self._cache[item] = cache_method(ret) if callable(ret) else ret
+                return self._cache[item]
+
+        return object.__getattribute__(self, item)
+
+
+if __name__ == '__main__':
+    res = Response('{"name":"kem"}')
+    print(res.json())
+    print(res.json())
+    print(res.json())
+    print(res.json())
+    res.content = '{"name":"kem2"}'
+    print(res.json())
+    print(res.json())
+    print(res.json())
