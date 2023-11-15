@@ -18,8 +18,8 @@ from typing import Union, Dict, Optional
 
 from loguru import logger
 
-from bricks.core.events import Event
-from bricks.lib.context import ExceptionContext
+from bricks.core import events
+from bricks.lib.context import ErrorContext
 
 
 class Task(Future):
@@ -88,7 +88,7 @@ class Worker(threading.Thread):
 
             except Exception as e:
                 task.set_exception(e)
-                Event.invoke(ExceptionContext(error=e, form=Event.ErrorOccurred))
+                events.Event.invoke(ErrorContext(error=e, form=events.EventEnum.ErrorOccurred))
 
     def stop(self) -> None:
 
