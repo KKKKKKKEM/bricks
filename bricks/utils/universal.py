@@ -5,6 +5,7 @@
 import ast
 import importlib
 import importlib.util
+import inspect
 import json
 import os
 import re
@@ -57,6 +58,72 @@ def load_objects(path_or_reference, reload=False):
             except (ImportError, AttributeError):
                 continue
         raise ImportError(f"无法导入指定路径或引用: {path_or_reference}")
+
+
+def invoke(func, args=None, kwargs: dict = None, annotations: dict = None):
+    """
+    调用函数, 自动修正参数
+
+    :param func:
+    :param args:
+    :param kwargs:
+    :param annotations:
+    :return:
+    """
+    assert callable(func), f"func must be callable, but got {type(func)}"
+
+    args = args or []
+    kwargs = kwargs or []
+    # 获取已提供参数的名称
+    new_args = []
+    new_kwargs = {}
+    annotations = annotations or {}
+
+    try:
+        parameters = inspect.signature(func).parameters
+    except:
+        parameters = {}
+        new_args = [*args]
+        kwargs and new_args.append(kwargs)
+
+    index = 0
+
+    for name, param in parameters.items():
+
+        # 参数在 kwargs 里面 -> 从 kwargs 里面取
+        if name in kwargs:
+            value = kwargs[name]
+
+        # 参数类型存在于 annotations, 并且还可以从 args 里面取值, 并且刚好取到的对应的值也是当前类型 -> 直接从 args 里面取
+        elif param.annotation in annotations and index < len(args) and type(args[index]) == param.annotation:
+            value = args[index]
+            index += 1
+
+        # 参数类型存在于 annotations, -> 从 annotations 里面取
+        elif param.annotation in annotations:
+            value = annotations[param.annotation]
+
+        # 直接取 args 里面的值
+        elif index < len(args):
+            value = args[index]
+            index += 1
+
+        # 没有传这个参数, 并且也没有可以备选的 annotations  -> 报错
+        else:
+            raise TypeError(f"missing required argument: {name}")
+
+        if param.kind == inspect.Parameter.POSITIONAL_ONLY:
+            new_args.append(value)
+        if param.kind == inspect.Parameter.VAR_POSITIONAL:
+            new_args.append(value)
+        if param.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD:
+            new_kwargs[name] = value
+        if param.kind == inspect.Parameter.KEYWORD_ONLY:
+            new_kwargs[name] = value
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            new_kwargs[name] = value
+
+    return func(*new_args, **new_kwargs)
 
 
 def iterable(_object: Any, enforce=(dict, str, bytes), exclude=(), convert_null=True) -> List[Any]:
