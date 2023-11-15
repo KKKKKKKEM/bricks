@@ -13,13 +13,13 @@ import itertools
 import queue
 import sys
 import threading
-import traceback
 from concurrent.futures import Future
 from typing import Union, Dict, Optional
 
 from loguru import logger
 
 from bricks.core.events import Event
+from bricks.lib.context import ExceptionContext
 
 
 class Task(Future):
@@ -55,7 +55,7 @@ class Worker(threading.Thread):
 
     """
 
-    def __init__(self, dispatcher: 'Dispatcher', name: str, daemon=True, trace=False, **kwargs):
+    def __init__(self, dispatcher: 'Dispatcher', name: str, daemon=False, trace=False, **kwargs):
         self.dispatcher = dispatcher
         self._shutdown = False
         self.trace = trace
@@ -88,11 +88,7 @@ class Worker(threading.Thread):
 
             except Exception as e:
                 task.set_exception(e)
-                Event.spark_events({
-                    "type": Event.ErrorOccurred,
-                    "error": e,
-                    "stack": traceback.format_exc(),
-                })
+                Event.invoke(ExceptionContext(error=e, form=Event.ErrorOccurred))
 
     def stop(self) -> None:
 
@@ -159,7 +155,7 @@ class Dispatcher(threading.Thread):
         self._running = threading.Event()
         self._counter = itertools.count()
 
-        super().__init__(daemon=False, name="ForkConsumer")
+        super().__init__(daemon=True, name="ForkConsumer")
 
     def create_worker(self, size: int = 1):
         """
