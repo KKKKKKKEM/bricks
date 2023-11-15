@@ -8,21 +8,21 @@ from collections import defaultdict
 
 from loguru import logger
 
-from bricks.lib.context import Context, ExceptionContext
+from bricks.lib.context import Context, ErrorContext
 from bricks.utils import universal
 
 
 class RegisteredEvents:
     def __init__(self):
-        def output_exception(context: ExceptionContext):
+        def output_exception(context: ErrorContext):
             logger.exception(context.error)
 
         # 持久事件
         self.permanent = defaultdict(functools.partial(defaultdict, list))
-        self.permanent[None][Event.ErrorOccurred].append(
+        self.permanent[None][EventEnum.ErrorOccurred].append(
             {
                 "func": output_exception,
-                "type": Event.ErrorOccurred
+                "type": EventEnum.ErrorOccurred
             }
         )
 
@@ -38,8 +38,13 @@ class RegisteredEvents:
         self.lock.release()
 
 
-class Event:
+class EventEnum:
     ErrorOccurred = 'ErrorOccurred'
+    BeforeStart = 'BeforeStart'
+    BeforeClose = 'BeforeClose'
+
+
+class Event:
 
     @classmethod
     def trigger(cls, context: Context):
