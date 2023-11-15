@@ -77,7 +77,6 @@ class Chaos(metaclass=MetaClass):
             events.Event.invoke(context.Context(
                 form=events.EventEnum.BeforeStart,
                 target=self,
-                status="before_start",
                 args=args,
                 kwargs=kwargs
             ))
@@ -99,7 +98,6 @@ class Chaos(metaclass=MetaClass):
             events.Event.invoke(context.Context(
                 form=events.EventEnum.BeforeClose,
                 target=self,
-                status="before_start",
                 args=args,
                 kwargs=kwargs
             ))
