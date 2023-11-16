@@ -5,6 +5,7 @@
 import copy
 import functools
 import json
+import os
 import queue
 import threading
 import time
@@ -14,7 +15,7 @@ from typing import Optional, Union
 from loguru import logger
 
 from bricks.core import genesis
-from bricks.utils import universal
+from bricks.utils import pandora
 
 
 class Item(dict):
@@ -25,7 +26,7 @@ class Item(dict):
 
         elif isinstance(__dict, str):
             self.fingerprint = __dict
-            __dict = universal.json_or_eval(__dict)
+            __dict = pandora.json_or_eval(__dict)
 
         elif isinstance(__dict, dict):
             self.fingerprint = copy.deepcopy(__dict)
@@ -425,10 +426,7 @@ class TaskQueue(metaclass=genesis.MetaClass):
 
         return inner
 
-    def store(self, name: str, order: dict):
-        raise NotImplementedError
-
-    def obtain(self, name: str, order: dict):
+    def command(self, name: str, order: dict):
         raise NotImplementedError
 
 
@@ -438,6 +436,7 @@ class LocalQueue(TaskQueue):
         self._box = dict()
         self._container = getattr(self, "_container", None) or defaultdict(SmartQueue)
         self._locks = defaultdict(threading.Lock)
+        self._status = defaultdict(threading.Event)
 
     def size(self, *names: str, qtypes: tuple = ('current', 'temp', 'failure'), **kwargs) -> int:
         if not names:
@@ -495,13 +494,12 @@ class LocalQueue(TaskQueue):
 
     def replace(self, name: str, old, new, **kwargs):
         kwargs.setdefault('qtypes', 'current')
-        self.remove(name, *universal.iterable(old), **kwargs)
-        return self.put(name, *universal.iterable(new), **kwargs)
+        self.remove(name, *pandora.iterable(old), **kwargs)
+        return self.put(name, *pandora.iterable(new), **kwargs)
 
     def remove(self, name: str, *values, **kwargs):
         backup = kwargs.pop('backup', None)
-        if backup:  self.put(name, *values, qtypes=backup)
-
+        backup and self.put(name, *values, qtypes=backup)
         name = self.name2key(name, kwargs.get('qtypes', 'temp'))
         return self._container[name].remove(*values)
 
@@ -519,7 +517,7 @@ class LocalQueue(TaskQueue):
         add_key = self.name2key(name, 'temp')
         tail = kwargs.pop('tail', False)
         items = self._container[pop_key].get(block=False, timeout=None, count=count, tail=tail)
-        items is not None and self._container[add_key].put(*universal.iterable(items))
+        items is not None and self._container[add_key].put(*pandora.iterable(items))
         return items
 
     def clear(self, *names, qtypes=('current', 'temp', "failure", "lock", "record"), **kwargs):
@@ -527,17 +525,34 @@ class LocalQueue(TaskQueue):
             for qtype in qtypes:
                 self._container.pop(self.name2key(name, qtype), None)
 
-    def store(self, name: str, order: dict):
-        pass
+    def command(self, name: str, order: dict):
+        def set_init_record():
+            os.environ[f'{name}-init-record'] = json.dumps(order['record'], default=str)
 
-    def obtain(self, name: str, order: dict):
+        def reset_init_record():
+            os.environ.pop(f'{name}-init-record', None)
+            self.clear(name)
+
+        def backup_init_record():
+            record = order['record']
+            os.environ[f'{name}-init-record-backup'] = json.dumps(record, default=str)
+
+        actions = {
+            "get-permission": lambda: True,
+
+            "get-init-record": lambda: json.loads(os.environ.get(f'{name}-init-record') or "{}"),
+            "reset-init-record": reset_init_record,
+            "continue-init-record": lambda: self.reverse(name),
+            "set-init-record": set_init_record,
+            "backup-init-record": backup_init_record,
+
+            "set-init-status": lambda: self._status[f'{name}-init-status'].set(),
+            "is-init-status": lambda: self._status[f'{name}-init-status'].is_set(),
+            "release-init-status": lambda: self._status[f'{name}-init-status'].clear(),
+
+        }
         action = order['action']
-
-        if action == 'get-permission':
-            return True
-
-
-if __name__ == '__main__':
-    item = Item({"name": "kem"})
-    print(item)
-    item.rebuild_fingerprint()
+        if action in actions:
+            return actions[action]()
+        else:
+            raise ValueError(f"Action {action} not found")
