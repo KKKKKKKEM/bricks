@@ -442,8 +442,6 @@ class Spider(Pangu):
             if IP_REGEX.match((str(request.proxy) or "")):
                 request.proxy = ""
 
-            context.flow({"next": self.on_request})
-
         else:
             indent = '\n            '
             header = f"\n{'=' * 25} \033[33m[WARNING]\033[0m {'=' * 25}"
@@ -457,10 +455,10 @@ class Spider(Pangu):
             logger.warning(f'{header}\n{indent.join(msg)}{header}')
 
             if request.retry > options.get('$requestRetry', math.inf):
-                context.success()
+                raise signals.Success
 
             else:
-                context.failure()
+                raise signals.Failure
 
     def _when_on_retry(self, raw_method):  # noqa
         @functools.wraps(raw_method)
@@ -490,7 +488,27 @@ class Spider(Pangu):
                 kwargs=kwargs,
                 annotations={Context: context}
             )
-            return prepared.func(*prepared.args, **prepared.kwargs)
+
+            try:
+                ret = prepared.func(*prepared.args, **prepared.kwargs)
+            except signals.Success:
+                # 重试前收到 Success 信号 -> 不重试了
+                context.success()
+                context.flow({"next": None})
+                return
+
+            except signals.Failure:
+                # 重试前收到 Failure 信号 -> 暂时不重试了
+                context.failure()
+                context.flow({"next": None})
+                return
+
+            except signals.Signal as e:
+                logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
+                raise e
+
+            context.flow({"next": self.on_request})
+            return ret
 
         return wrapper
 
@@ -609,6 +627,7 @@ class Spider(Pangu):
     def _when_on_response(self, raw_method):  # noqa
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
+            context.form = const.ON_PARSING
             prepared = universal.prepare(
                 func=raw_method,
                 args=args,
@@ -628,8 +647,22 @@ class Spider(Pangu):
                         # 有多个 items, 直接开一个新 branch
                         context.branch({"items": product})
 
-            except signals.Signal:
-                pass
+            except signals.Success:
+                context.success()
+                context.flow({"next": None})
+                return
+
+            except signals.Failure:
+                context.failure()
+                context.flow({"next": None})
+                return
+
+            except signals.Retry:
+                context.retry()
+                return
+
+            except signals.Signal as e:
+                logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
 
         return wrapper
 
@@ -682,6 +715,9 @@ class Spider(Pangu):
                 # 请求前收到 Failure 信号 -> 暂时不请求了
                 context.failure()
                 context.flow({"next": None})
+                return
+            except signals.Retry:
+                context.retry()
                 return
 
             except signals.Signal as e:
