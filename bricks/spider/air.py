@@ -23,7 +23,7 @@ from bricks.lib.items import Items
 from bricks.lib.queues import TaskQueue, LocalQueue, Item
 from bricks.lib.request import Request
 from bricks.lib.response import Response
-from bricks.utils import universal
+from bricks.utils import pandora
 
 IP_REGEX = re.compile(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+')
 
@@ -48,25 +48,25 @@ class Context(Flow):
 
     response: Response = property(
         fget=lambda self: getattr(self, "_response", None),
-        fset=lambda self, value: setattr(self, "_response", universal.ensure_type(value, Response)),
+        fset=lambda self, value: setattr(self, "_response", pandora.ensure_type(value, Response)),
         fdel=lambda self: setattr(self, "_response", None),
         doc="rtype: Response"
     )
 
     request: Request = property(
         fget=lambda self: getattr(self, "_request", None),
-        fset=lambda self, value: setattr(self, "_request", universal.ensure_type(value, Request)),
+        fset=lambda self, value: setattr(self, "_request", pandora.ensure_type(value, Request)),
         fdel=lambda self: setattr(self, "_request", None)
     )
     seeds: Item = property(
         fget=lambda self: getattr(self, "_seeds", None),
-        fset=lambda self, value: setattr(self, "_seeds", universal.ensure_type(value, Item)),
+        fset=lambda self, value: setattr(self, "_seeds", pandora.ensure_type(value, Item)),
         fdel=lambda self: setattr(self, "_seeds", None)
     )
 
     items: Items = property(
         fget=lambda self: getattr(self, "_items", None),
-        fset=lambda self, value: setattr(self, "_items", universal.ensure_type(value, Items)),
+        fset=lambda self, value: setattr(self, "_items", pandora.ensure_type(value, Items)),
         fdel=lambda self: setattr(self, "_items", None)
     )
 
@@ -91,30 +91,59 @@ class Context(Flow):
     def failure(self):
         return self.task_queue.remove(self.queue_name, self.seeds, backup='failure')
 
+    def stop(self):
+        self.flow({"next": None})
+
     def __copy__(self):
         return self.__class__(**self.__dict__)
 
     def branch(self, attrs: dict = None, rollback=False, submit=True):
-        attrs = attrs or {}
-        new = copy.copy(self)
-        for k, v in attrs.items(): setattr(new, k, v)
-        rollback and new.rollback()
-        submit and self.pending.append(new)
-        return new
-
-    def background(self, attrs: dict = None, rollback=False):
         """
-        后台执行, 会抢占 worker
+        当前线程分支, 执行完当前 context 之后就会执行这个分支
 
+        :param attrs:
+        :param rollback:
+        :param submit:
+        :return:
+        """
+        attrs = attrs or {}
+        context = copy.copy(self)
+        for k, v in attrs.items(): setattr(context, k, v)
+        rollback and context.rollback()
+        submit and self.pending.append(context)
+        return context
+
+    def background(self, attrs: dict = None, rollback=False, action="active"):
+        """
+        后台分支
+
+        submit 会抢占 worker / active 不会, 但是主任务不会等待他执行完毕, 类似后台守护任务
+        这个 context 会被提交至调度器, 可能被其他线程获取到
+
+        :param action: submit / active
         :param attrs:
         :param rollback:
         :return:
         """
         context = self.branch(attrs, rollback, False)
-        self.target.use(context, timeout=-1)
+        if action == "submit":
+            fun = self.target.submit
+        else:
+            fun = self.target.active
+
+        future = fun(dispatch.Task(context.next, [context]), timeout=-1)
+        context.future = future
         return context
 
     def submit(self, obj: Union[Request, Item, dict], call_later=False) -> "Context":
+        """
+        专门为新请求分支封装的方法, 会自动将请求放入队列
+        传入的对象可以是新的种子 / 新的 request
+
+        :param obj:
+        :param call_later: 是否延迟调用, 如果延迟调用, 就是将种子放到当前队列, 等待其他机器获取消费, 否则
+        :return:
+        """
         assert obj.__class__ in [Request, Item, dict], f"不支持的类型: {obj.__class__}"
         if obj.__class__ in [Item, dict]:
             if call_later:
@@ -160,131 +189,137 @@ class Spider(Pangu):
         初始化
         :return:
         """
+
         task_queue: TaskQueue = self.get_attr("init.task_queue", self.task_queue)
         queue_name: str = self.get_attr("init.queue_name", self.queue_name)
+        task_queue.command(queue_name, {"action": "set-init-status"})
 
-        # 本地的初始化记录 -> 启动传入的
-        local_init_record: dict = self.get_attr('init.record') or {}
-        # 云端的初始化记录 -> 初始化的时候会存储(如果支持的话)
-        remote_init_record = task_queue.obtain(queue_name, {"action": "get-init-record"}) or {}
+        try:
+            # 本地的初始化记录 -> 启动传入的
+            local_init_record: dict = self.get_attr('init.record') or {}
+            # 云端的初始化记录 -> 初始化的时候会存储(如果支持的话)
+            remote_init_record = task_queue.command(queue_name, {"action": "get-init-record"}) or {}
 
-        # 初始化记录信息
-        init_record: dict = {
-            **local_init_record,
-            **remote_init_record,
-            "queue_name": queue_name,
-            "task_queue": task_queue,
-            "identifier": const.MACHINE_ID,
-        }
+            # 初始化记录信息
+            init_record: dict = {
+                **local_init_record,
+                **remote_init_record,
+                "queue_name": queue_name,
+                "task_queue": task_queue,
+                "identifier": const.MACHINE_ID,
+            }
 
-        # 设置一个启动时间, 防止被覆盖
-        init_record.setdefault("start", str(datetime.datetime.now()))
+            # 设置一个启动时间, 防止被覆盖
+            init_record.setdefault("start", str(datetime.datetime.now()))
 
-        # 获取已经初始化的总量
-        total = int(init_record.setdefault('total', 0))
-        # 获取已经初始化的去重数量
-        success = int(init_record.setdefault('success', 0))
-        # 获取机器的唯一标识
-        identifier = const.MACHINE_ID
+            # 获取已经初始化的总量
+            total = int(init_record.setdefault('total', 0))
+            # 获取已经初始化的去重数量
+            success = int(init_record.setdefault('success', 0))
+            # 获取机器的唯一标识
+            identifier = const.MACHINE_ID
 
-        # 判断是否有初始化权限
-        has_permission = task_queue.obtain(queue_name, {"action": "get-permission", "identifier": identifier})
-        if not has_permission:
-            return
+            # 判断是否有初始化权限
+            has_permission = task_queue.command(queue_name, {"action": "get-permission", "identifier": identifier})
+            if not has_permission:
+                return
 
-        # 初始化模式: ignore/reset/continue
-        init_mode = self.get_attr('init.mode')
-        # 初始化总数量阈值 -> 大于这个数量停止初始化
-        init_total_size = self.get_attr('init.total.size', math.inf)
-        # 当前初始化总量阈值 -> 大于这个数量停止初始化
-        init_count_size = self.get_attr('init.count.size', math.inf)
-        # 初始化成功数量阈值 (去重) -> 大于这个数量停止初始化
-        init_success_size = self.get_attr('init.success.size', math.inf)
-        # 初始化队列最大数量 -> 大于这个数量暂停初始化
-        init_queue_size: int = self.get_attr("init.queue.size", 100000)
+            # 初始化模式: ignore/reset/continue
+            init_mode = self.get_attr('init.mode')
+            # 初始化总数量阈值 -> 大于这个数量停止初始化
+            init_total_size = self.get_attr('init.total.size', math.inf)
+            # 当前初始化总量阈值 -> 大于这个数量停止初始化
+            init_count_size = self.get_attr('init.count.size', math.inf)
+            # 初始化成功数量阈值 (去重) -> 大于这个数量停止初始化
+            init_success_size = self.get_attr('init.success.size', math.inf)
+            # 初始化队列最大数量 -> 大于这个数量暂停初始化
+            init_queue_size: int = self.get_attr("init.queue.size", 100000)
 
-        # 当前已经初始化的数量, 从 0 开始
-        count = 0
+            # 当前已经初始化的数量, 从 0 开始
+            count = 0
 
-        if init_mode == 'ignore':
-            # 忽略模式, 什么都不做
-            logger.debug("[停止投放] 忽略模式, 不进行种子初始化")
-            return init_record
-
-        elif init_mode == 'reset':
-            # 重置模式, 清空初始化记录和队列种子
-            task_queue.obtain(queue_name, {"action": "reset-init-record"})
-            logger.debug("[开始投放] 重置模式, 清空初始化队列及记录")
-
-        elif init_mode == 'continue':
-            # 继续模式, 从上次初始化的位置开始
-            logger.debug("[开始投放] 继续模式, 从上次初始化的位置开始")
-            task_queue.obtain(queue_name, {"action": "continue-init-record"})
-
-        else:
-            # 未知模式, 默认为重置模式
-            logger.debug("[开始投放] 未知模式, 默认为重置模式")
-
-        context = self.get_context(
-            task_queue=task_queue,
-            queue_name=queue_name
-        )
-
-        for seeds in universal.invoke(
-                func=self.make_seeds,
-                kwargs={
-                    "record": init_record,
-                },
-                annotations={Context: context}
-        ):
-            seeds = universal.iterable(seeds)
-
-            seeds = seeds[0:min([
-                init_count_size - count,
-                init_total_size - total,
-                init_success_size - success,
-                len(seeds)
-            ])]
-
-            context.seeds = seeds
-
-            fettle = universal.invoke(
-                func=self.put_seeds,
-                kwargs={
-
-                    "seeds": seeds,
-                    "maxsize": init_queue_size,
-                    "where": "init",
-                    "task_queue": task_queue,
-                    "queue_name": queue_name,
-
-                },
-                annotations={Context: context}
-            )
-
-            size = len(universal.iterable(seeds))
-            total += size
-            success += fettle
-            count += fettle
-            output = f"[投放成功] 总量: {success}/{total}; 当前: {fettle}/{size}; 目标: {queue_name}"
-            init_record.update({
-                "total": total,
-                "success": success,
-                "output": output,
-                "update": str(datetime.datetime.now()),
-            })
-
-            task_queue.store(queue_name, {"action": "set-init-record", "record": init_record})
-            logger.debug(output)
-
-            if total >= init_total_size or count >= init_count_size or success >= init_success_size:
-                init_record.update(finish=str(datetime.datetime.now()))
+            if init_mode == 'ignore':
+                # 忽略模式, 什么都不做
+                logger.debug("[停止投放] 忽略模式, 不进行种子初始化")
                 return init_record
 
-        else:
-            init_record.update(finish=str(datetime.datetime.now()))
-            task_queue.store(queue_name, {"action": "backup-init-record", "record": init_record})
-            return init_record
+            elif init_mode == 'reset':
+                # 重置模式, 清空初始化记录和队列种子
+                task_queue.command(queue_name, {"action": "reset-init-record"})
+                logger.debug("[开始投放] 重置模式, 清空初始化队列及记录")
+
+            elif init_mode == 'continue':
+                # 继续模式, 从上次初始化的位置开始
+                logger.debug("[开始投放] 继续模式, 从上次初始化的位置开始")
+                task_queue.command(queue_name, {"action": "continue-init-record"})
+
+            else:
+                # 未知模式, 默认为重置模式
+                logger.debug("[开始投放] 未知模式, 默认为重置模式")
+
+            context = self.get_context(
+                task_queue=task_queue,
+                queue_name=queue_name
+            )
+
+            for seeds in pandora.invoke(
+                    func=self.make_seeds,
+                    kwargs={
+                        "record": init_record,
+                    },
+                    annotations={Context: context},
+                    namespace={'context': context},
+            ):
+                seeds = pandora.iterable(seeds)
+
+                seeds = seeds[0:min([
+                    init_count_size - count,
+                    init_total_size - total,
+                    init_success_size - success,
+                    len(seeds)
+                ])]
+
+                context.seeds = seeds
+
+                fettle = pandora.invoke(
+                    func=self.put_seeds,
+                    kwargs={
+                        "seeds": seeds,
+                        "maxsize": init_queue_size,
+                        "where": "init",
+                        "task_queue": task_queue,
+                        "queue_name": queue_name,
+
+                    },
+                    annotations={Context: context},
+                    namespace={"context": context},
+                )
+
+                size = len(pandora.iterable(seeds))
+                total += size
+                success += fettle
+                count += fettle
+                output = f"[投放成功] 总量: {success}/{total}; 当前: {fettle}/{size}; 目标: {queue_name}"
+                init_record.update({
+                    "total": total,
+                    "success": success,
+                    "output": output,
+                    "update": str(datetime.datetime.now()),
+                })
+
+                task_queue.command(queue_name, {"action": "set-init-record", "record": init_record})
+                logger.debug(output)
+
+                if total >= init_total_size or count >= init_count_size or success >= init_success_size:
+                    init_record.update(finish=str(datetime.datetime.now()))
+                    return init_record
+
+            else:
+                init_record.update(finish=str(datetime.datetime.now()))
+                task_queue.command(queue_name, {"action": "backup-init-record", "record": init_record})
+                return init_record
+        finally:
+            task_queue.command(queue_name, {"action": "release-init-status"})
 
     def put_seeds(self, context: Context = None, **kwargs):
         """
@@ -308,10 +343,11 @@ class Spider(Pangu):
         maxsize = kwargs.pop('maxsize', None)
         priority = kwargs.pop('priority', False)
         task_queue.continue_(queue_name, maxsize=maxsize, interval=1)
-        return task_queue.put(queue_name, *universal.iterable(seeds), priority=priority, **kwargs)
+        return task_queue.put(queue_name, *pandora.iterable(seeds), priority=priority, **kwargs)
 
     def get_context(self, **kwargs) -> Context:
         flows = {
+            self.on_consume: self.on_seeds,
             self.on_seeds: self.on_request,
             self.on_request: self.on_response,
             self.on_response: self.on_pipline,
@@ -340,11 +376,12 @@ class Spider(Pangu):
                     task_queue=task_queue,
                     queue_name=queue_name,
                 )
-                prepared = universal.prepare(
+                prepared = pandora.prepare(
                     func=self.get_seeds,
                     args=[],
                     kwargs=kwargs,
-                    annotations={Context: context}
+                    annotations={Context: context},
+                    namespace={"context": context}
                 )
                 try:
                     fettle = prepared.func(*prepared.args, **prepared.kwargs)
@@ -356,7 +393,7 @@ class Spider(Pangu):
                     # 判断是否应该停止爬虫
                     #  没有初始化 + 本地没有运行的任务 + 任务队列为空 -> 退出
                     if (
-                            not task_queue.obtain(queue_name, {"action": "is_init_running"}) and
+                            not task_queue.command(queue_name, {"action": "is-init-status"}) and
                             # not self.forever and
                             task_queue.is_empty(queue_name, threshold=self.get_attr("spider.threshold", default=0))
                     ):
@@ -378,14 +415,14 @@ class Spider(Pangu):
                             time.sleep(1)
 
                 else:
-                    for seeds in universal.iterable(fettle):
+                    for seeds in pandora.iterable(fettle):
                         context = self.get_context(
                             seeds=seeds,
                             task_queue=task_queue,
                             queue_name=queue_name,
                         )
-                        context.flow({"next": self.on_seeds})
-                        self.use(context)
+                        context.flow({"next": self.on_consume})
+                        self.submit(dispatch.Task(context.next, [context]))
                         count += 1
         finally:
             self.dispatcher.stop()
@@ -418,11 +455,12 @@ class Spider(Pangu):
 
             count = self.dispatcher.max_workers - self.dispatcher.running
             kwargs.setdefault('count', 1 if count <= 0 else count)
-            prepared = universal.prepare(
+            prepared = pandora.prepare(
                 func=raw_method,
                 args=args,
                 kwargs=kwargs,
-                annotations={Context: context}
+                annotations={Context: context},
+                namespace={"context": context}
             )
             ret = prepared.func(*prepared.args, **prepared.kwargs)
 
@@ -524,11 +562,20 @@ class Spider(Pangu):
                 logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
                 raise e
 
-            prepared = universal.prepare(
+            prepared = pandora.prepare(
                 func=raw_method,
                 args=args,
                 kwargs=kwargs,
-                annotations={Context: context}
+                annotations={
+                    Context: context,
+                    Response: context.response,
+                    Item: context.seeds
+                },
+                namespace={
+                    "context": context,
+                    "response": context.response,
+                    "seeds": context.seeds,
+                }
             )
 
             try:
@@ -562,7 +609,7 @@ class Spider(Pangu):
         :return:
         """
         if inspect.iscoroutinefunction(self.downloader.fetch):
-            future = self.dispatcher.create_future(
+            future = self.active(
                 dispatch.Task(
                     func=self.downloader.fetch,
                     args=[context.request]
@@ -596,11 +643,20 @@ class Spider(Pangu):
                 logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
                 raise e
 
-            prepared = universal.prepare(
+            prepared = pandora.prepare(
                 func=raw_method,
                 args=args,
                 kwargs=kwargs,
-                annotations={Context: context}
+                annotations={
+                    Context: context,
+                    Item: context.seeds,
+                    Request: context.request,
+                },
+                namespace={
+                    "context": context,
+                    "seeds": context.seeds,
+                    "request": context.request
+                }
             )
             response: Response = prepared.func(*prepared.args, **prepared.kwargs)
 
@@ -640,7 +696,7 @@ class Spider(Pangu):
         :return:
         """
         callback: Callable = context.response.callback or self.parse
-        prepared = universal.prepare(
+        prepared = pandora.prepare(
             func=callback,
             args=[context],
             annotations={
@@ -648,11 +704,17 @@ class Spider(Pangu):
                 Request: context.request,
                 Item: context.seeds,
                 Context: context
+            },
+            namespace={
+                "context": context,
+                "request": context.request,
+                "response": context.response,
+                "seeds": context.seeds,
             }
         )
 
         if inspect.iscoroutinefunction(prepared.func):
-            future = self.dispatcher.create_future(
+            future = self.active(
                 dispatch.Task(
                     func=prepared.func,
                     args=prepared.args,
@@ -670,11 +732,22 @@ class Spider(Pangu):
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = const.ON_PARSING
-            prepared = universal.prepare(
+            prepared = pandora.prepare(
                 func=raw_method,
                 args=args,
                 kwargs=kwargs,
-                annotations={Context: context}
+                annotations={
+                    Response: context.response,
+                    Request: context.request,
+                    Item: context.seeds,
+                    Context: context
+                },
+                namespace={
+                    "context": context,
+                    "request": context.request,
+                    "response": context.response,
+                    "seeds": context.seeds,
+                }
             )
             try:
                 products = prepared.func(*prepared.args, **prepared.kwargs)
@@ -717,7 +790,7 @@ class Spider(Pangu):
         """
         items: Items = context.items
         callback: Callable = items.callback or self.item_pipline
-        prepared = universal.prepare(
+        prepared = pandora.prepare(
             func=callback,
             args=[items],
             annotations={
@@ -726,11 +799,18 @@ class Spider(Pangu):
                 Items: context.items,
                 Item: context.seeds,
                 Context: context
+            },
+            namespace={
+                "context": context,
+                "request": context.request,
+                "response": context.response,
+                "seeds": context.seeds,
+                "items": context.items,
             }
         )
 
         if inspect.iscoroutinefunction(callback):
-            future = self.dispatcher.create_future(
+            future = self.active(
                 dispatch.Task(
                     func=prepared.func,
                     args=prepared.args,
@@ -766,11 +846,24 @@ class Spider(Pangu):
                 logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
                 raise e
 
-            prepared = universal.prepare(
+            prepared = pandora.prepare(
                 func=raw_method,
                 args=args,
                 kwargs=kwargs,
-                annotations={Context: context}
+                annotations={
+                    Response: context.response,
+                    Request: context.request,
+                    Items: context.items,
+                    Item: context.seeds,
+                    Context: context
+                },
+                namespace={
+                    "context": context,
+                    "request": context.request,
+                    "response": context.response,
+                    "seeds": context.seeds,
+                    "items": context.items,
+                }
             )
             response: Response = prepared.func(*prepared.args, **prepared.kwargs)
             context.response = response
