@@ -546,10 +546,13 @@ class LocalQueue(TaskQueue):
             "set-init-record": set_init_record,
             "backup-init-record": backup_init_record,
 
+            "wait-for-init-start": lambda: self._status[f'{name}-init-start'].wait(),
+            "set-init-start": lambda: self._status[f'{name}-init-start'].set(),
+            "release-init-start": lambda: self._status.pop(f'{name}-init-start', None),
+
             "set-init-status": lambda: self._status[f'{name}-init-status'].set(),
             "is-init-status": lambda: self._status[f'{name}-init-status'].is_set(),
             "release-init-status": lambda: self._status[f'{name}-init-status'].clear(),
-
         }
         action = order['action']
         if action in actions:

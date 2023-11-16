@@ -192,6 +192,7 @@ class Spider(Pangu):
 
         task_queue: TaskQueue = self.get_attr("init.task_queue", self.task_queue)
         queue_name: str = self.get_attr("init.queue_name", self.queue_name)
+        task_queue.command(queue_name, {"action": "set-init-start"})
         task_queue.command(queue_name, {"action": "set-init-status"})
 
         try:
@@ -254,13 +255,14 @@ class Spider(Pangu):
                 task_queue.command(queue_name, {"action": "continue-init-record"})
 
             else:
-                # 未知模式, 默认为重置模式
-                logger.debug("[开始投放] 未知模式, 默认为重置模式")
+                # 默认模式, 队列内种子数量小于等于阈值, 且 get-permission 成功才进行初始化
+                init_threshold = self.get_attr('init.threshold', 0)
+                if task_queue.size(queue_name) < init_threshold:
+                    logger.debug("[开始投放] 默认模式, 开始投放")
+                else:
+                    logger.debug("[停止投放] 默认模式, 队列内种子大于阈值: {}")
 
-            context = self.get_context(
-                task_queue=task_queue,
-                queue_name=queue_name
-            )
+            context = self.get_context(task_queue=task_queue, queue_name=queue_name)
 
             for seeds in pandora.invoke(
                     func=self.make_seeds,
@@ -356,79 +358,81 @@ class Spider(Pangu):
         context = Context(target=self, flows=flows, **kwargs)
         return context
 
-    def run_spider(self, **kwargs):
+    def run_spider(self):
         """
         start run spider
         get seeds and convert it to Request for submit
 
-        :param kwargs:
         :return:
         """
         count = 0
-        self.dispatcher.start()
-        task_queue: TaskQueue = kwargs.get('task_queue') or self.task_queue
-        queue_name: str = kwargs.get('queue_name') or self.queue_name
+        task_queue: TaskQueue = self.get_attr("spider.task_queue", self.task_queue)
+        queue_name: str = self.get_attr("spider.queue_name", self.queue_name)
         output = time.time()
 
-        try:
-            while True:
-                context = self.get_context(
-                    task_queue=task_queue,
-                    queue_name=queue_name,
-                )
-                prepared = pandora.prepare(
-                    func=self.get_seeds,
-                    args=[],
-                    kwargs=kwargs,
-                    annotations={Context: context},
-                    namespace={"context": context}
-                )
-                try:
-                    fettle = prepared.func(*prepared.args, **prepared.kwargs)
+        while True:
+            context = self.get_context(
+                task_queue=task_queue,
+                queue_name=queue_name,
+            )
+            prepared = pandora.prepare(
+                func=self.get_seeds,
+                annotations={Context: context},
+                namespace={"context": context}
+            )
+            try:
+                fettle = prepared.func(*prepared.args, **prepared.kwargs)
 
-                except signals.Wait:
-                    time.sleep(1)
+            except signals.Wait:
+                time.sleep(1)
 
-                except signals.Empty:
-                    # 判断是否应该停止爬虫
-                    #  没有初始化 + 本地没有运行的任务 + 任务队列为空 -> 退出
-                    if (
-                            not task_queue.command(queue_name, {"action": "is-init-status"}) and
-                            # not self.forever and
-                            task_queue.is_empty(queue_name, threshold=self.get_attr("spider.threshold", default=0))
-                    ):
-                        if self.dispatcher.running == 0:
-                            return count
-                        else:
-                            time.sleep(1)
-
+            except signals.Empty:
+                # 判断是否应该停止爬虫
+                #  没有初始化 + 本地没有运行的任务 + 任务队列为空 -> 退出
+                if (
+                        not task_queue.command(queue_name, {"action": "is-init-status"}) and
+                        # not self.forever and
+                        task_queue.is_empty(queue_name, threshold=self.get_attr("spider.threshold", default=0))
+                ):
+                    if self.dispatcher.running == 0:
+                        return count
                     else:
-
-                        if task_queue.smart_reverse(queue_name, status=self.dispatcher.running):
-                            logger.debug(f"[翻转队列] 队列名称: {self.queue_name}")
-
-                        else:
-                            if time.time() - output > 60:
-                                logger.debug(f"[等待任务] 队列名称: {self.queue_name}")
-                                output = time.time()
-
-                            time.sleep(1)
+                        time.sleep(1)
 
                 else:
-                    for seeds in pandora.iterable(fettle):
-                        context = self.get_context(
-                            seeds=seeds,
-                            task_queue=task_queue,
-                            queue_name=queue_name,
-                        )
-                        context.flow({"next": self.on_consume})
-                        self.submit(dispatch.Task(context.next, [context]))
-                        count += 1
-        finally:
-            self.dispatcher.stop()
+
+                    if task_queue.smart_reverse(queue_name, status=self.dispatcher.running):
+                        logger.debug(f"[翻转队列] 队列名称: {self.queue_name}")
+
+                    else:
+                        if time.time() - output > 60:
+                            logger.debug(f"[等待任务] 队列名称: {self.queue_name}")
+                            output = time.time()
+
+                        time.sleep(1)
+
+            else:
+                for seeds in pandora.iterable(fettle):
+                    context = self.get_context(
+                        seeds=seeds,
+                        task_queue=task_queue,
+                        queue_name=queue_name,
+                    )
+                    context.flow({"next": self.on_consume})
+                    self.submit(dispatch.Task(context.next, [context]))
+                    count += 1
+
+    def run_all(self):
+        init_task = dispatch.Task(func=self.run_init)
+        self.active(init_task)
+        task_queue: TaskQueue = self.get_attr("init.task_queue", self.task_queue)
+        queue_name: str = self.get_attr("init.queue_name", self.queue_name)
+        task_queue.command(queue_name, {"action": "wait-for-init-start"})
+        task_queue.command(queue_name, {"action": "release-init-start"})
+        self.run_spider()
 
     @staticmethod
-    def get_seeds(context: Context, **kwargs) -> Union[Iterable[Item], Item]:
+    def get_seeds(context: Context) -> Union[Iterable[Item], Item]:
         """
         获取种子的真实方法
 
@@ -437,7 +441,7 @@ class Spider(Pangu):
         """
         task_queue: TaskQueue = context.task_queue
         queue_name: str = context.queue_name
-        return task_queue.get(queue_name, **kwargs)
+        return task_queue.get(queue_name)
 
     def _when_get_seeds(self, raw_method):
         @functools.wraps(raw_method)

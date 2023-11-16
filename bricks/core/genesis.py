@@ -23,7 +23,10 @@ class MetaClass(type):
         for interceptor in interceptors:
             # 修改被拦截的方法
             raw_method_name = interceptor.replace("_when_", "")
-            raw_method = getattr(instance, raw_method_name)
+            raw_method = getattr(instance, raw_method_name, None)
+            if not raw_method:
+                continue
+
             method_wrapper = getattr(instance, interceptor)
             raw_method and setattr(instance, raw_method_name, method_wrapper(raw_method))
 
@@ -52,13 +55,21 @@ class Chaos(metaclass=MetaClass):
             setattr(self, name, value)
             return value
 
-    def run_task(self, task_name: str, *args, **kwargs):
+    def run(self, task_name: str = "all", args=None, kwargs=None):
         """
         Run a task
 
+        :param kwargs:
+        :param args:
         :param task_name: task name
         :return:
         """
+        args = args or []
+        kwargs = kwargs or {}
+        task_name = task_name or self.get_attr("task_name")
+        if not task_name:
+            return
+
         method = getattr(self, f'run_{task_name}', None)
         if method:
             return method(*args, **kwargs)
@@ -66,7 +77,7 @@ class Chaos(metaclass=MetaClass):
             logger.warning(f"Task {task_name} not found")
             return None
 
-    def _when_run_task(self, raw_method):
+    def _when_run(self, raw_method):
         @functools.wraps(raw_method)
         def wrapper(*args, **kwargs):
             try:
@@ -144,6 +155,7 @@ class Pangu(Chaos):
             self.set_attr(k, v, nx=True)
         else:
             self.dispatcher = dispatch.Dispatcher(max_workers=self.get_attr("concurrency", 1))
+            self.dispatcher.start()
 
     def on_consume(self, context: Flow):  # noqa
         context.next.root == self.on_consume and context.flow()
@@ -180,4 +192,4 @@ class Pangu(Chaos):
 
 if __name__ == '__main__':
     clazz = Chaos()
-    clazz.run_task('before_start')
+    clazz.run('before_start')

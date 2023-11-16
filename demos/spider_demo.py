@@ -49,6 +49,5 @@ class MySpider(air.Spider):
 
 
 if __name__ == '__main__':
-    spider = MySpider(concurrency=1)
-    spider.run_init()
-    spider.run_task("spider")
+    spider = MySpider(concurrency=10)
+    spider.run()
