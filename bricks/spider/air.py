@@ -102,6 +102,18 @@ class Context(Flow):
         submit and self.pending.append(new)
         return new
 
+    def submit(self, obj: Union[Request, Item, dict], call_later=False) -> "Context":
+        assert obj.__class__ in [Request, Item, dict], f"不支持的类型: {obj.__class__}"
+        if obj.__class__ in [Item, dict]:
+            if call_later:
+                self.task_queue.put(self.queue_name, obj)
+                return self
+            else:
+                self.task_queue.put(self.queue_name, obj, qtypes="temp")
+                return self.branch({"seeds": obj, "next": self.target.on_seeds})
+        else:
+            return self.branch({"request": obj, "next": self.target.on_request})
+
 
 class Spider(Pangu):
     task_queue: TaskQueue
@@ -201,13 +213,17 @@ class Spider(Pangu):
             # 未知模式, 默认为重置模式
             logger.debug("[开始投放] 未知模式, 默认为重置模式")
 
+        context = self.get_context(
+            task_queue=task_queue,
+            queue_name=queue_name
+        )
+
         for seeds in universal.invoke(
                 func=self.make_seeds,
                 kwargs={
                     "record": init_record,
-                    "task_queue": task_queue,
-                    "queue_name": queue_name,
-                }
+                },
+                annotations={Context: context}
         ):
             seeds = universal.iterable(seeds)
 
@@ -218,15 +234,21 @@ class Spider(Pangu):
                 len(seeds)
             ])]
 
-            fettle = self.put_seeds(**{
+            context.seeds = seeds
 
-                "seeds": seeds,
-                "maxsize": init_queue_size,
-                "where": "init",
-                "task_queue": task_queue,
-                "queue_name": queue_name,
+            fettle = universal.invoke(
+                func=self.put_seeds,
+                kwargs={
 
-            })
+                    "seeds": seeds,
+                    "maxsize": init_queue_size,
+                    "where": "init",
+                    "task_queue": task_queue,
+                    "queue_name": queue_name,
+
+                },
+                annotations={Context: context}
+            )
 
             size = len(universal.iterable(seeds))
             total += size
@@ -252,18 +274,26 @@ class Spider(Pangu):
             task_queue.store(queue_name, {"action": "backup-init-record", "record": init_record})
             return init_record
 
-    def put_seeds(self, **kwargs):
+    def put_seeds(self, context: Context = None, **kwargs):
         """
         将种子放入容器
 
+        :param context:
         :param kwargs:
         :return:
         """
 
+        if context:
+            task_queue = context.task_queue
+            queue_name = context.queue_name
+            seeds = context.seeds
+
+        else:
+            task_queue: TaskQueue = kwargs.pop('task_queue', None) or self.task_queue
+            queue_name: str = kwargs.pop('queue_name', None) or self.queue_name
+            seeds = kwargs.pop('seeds', {})
+
         maxsize = kwargs.pop('maxsize', None)
-        task_queue: TaskQueue = kwargs.pop('task_queue', None) or self.task_queue
-        queue_name: str = kwargs.pop('queue_name', None) or self.queue_name
-        seeds = kwargs.pop('seeds', {})
         priority = kwargs.pop('priority', False)
         task_queue.continue_(queue_name, maxsize=maxsize, interval=1)
         return task_queue.put(queue_name, *universal.iterable(seeds), priority=priority, **kwargs)
@@ -760,7 +790,7 @@ class Spider(Pangu):
 
         return wrapper
 
-    def make_seeds(self):
+    def make_seeds(self, context: Context, **kwargs):
         raise NotImplementedError
 
     def make_request(self, context: Context) -> Request:
