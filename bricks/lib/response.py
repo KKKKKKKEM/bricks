@@ -12,7 +12,7 @@ from w3lib.encoding import http_content_type_encoding, html_body_declared_encodi
 from bricks.lib import extractors
 from bricks.lib.headers import Header
 from bricks.lib.request import Request
-from bricks.utils import universal
+from bricks.utils import pandora
 
 _HEADER_ENCODING_RE = re.compile(r"charset=([\w-]+)", re.I)
 
@@ -110,7 +110,7 @@ class Response:
 
         Deserialize a JSON document to a Python object.
         """
-        return universal.json_or_eval(self.text, **kwargs) if isinstance(self.text, str) else self.text
+        return pandora.json_or_eval(self.text, **kwargs) if isinstance(self.text, str) else self.text
 
     def extract_all(
             self,
@@ -125,7 +125,7 @@ class Response:
         :return:
         """
 
-        for rule in universal.iterable(rules):
+        for rule in pandora.iterable(rules):
             yield self.extract(
                 engine=engine,
                 rules=rule,
@@ -164,7 +164,7 @@ class Response:
                     )
                     return ret
                 else:
-                    engine = universal.load_objects(engine)
+                    engine = pandora.load_objects(engine)
 
             if callable(engine):
 
@@ -212,7 +212,7 @@ class Response:
         :return:
         """
 
-        return universal.single(self.xpath(xpath, obj, **kwargs), default=default)
+        return pandora.single(self.xpath(xpath, obj, **kwargs), default=default)
 
     def jsonpath(self, jpath, obj=None, strict=True, **kwargs):
         """
@@ -244,7 +244,7 @@ class Response:
         :param kwargs:
         :return:
         """
-        return universal.single(self.jsonpath(jpath, obj, strict, **kwargs), default=default)
+        return pandora.single(self.jsonpath(jpath, obj, strict, **kwargs), default=default)
 
     def re(self, regex, obj=None, **kwargs):
         """
@@ -276,7 +276,7 @@ class Response:
         :param kwargs:
         :return:
         """
-        return universal.single(self.re(regex, obj, **kwargs), default=default)
+        return pandora.single(self.re(regex, obj, **kwargs), default=default)
 
     def get(self, rule: str, obj=None, strict=True, **kwargs):
         """
@@ -314,7 +314,7 @@ class Response:
         :return:
 
         """
-        return universal.single(self.get(rule, obj, strict, **kwargs), default=default)
+        return pandora.single(self.get(rule, obj, strict, **kwargs), default=default)
 
     @property
     def ok(self):

@@ -13,7 +13,7 @@ from typing import Union, List
 import redis
 from loguru import logger
 
-from bricks.utils import universal
+from bricks.utils import pandora
 
 
 def _to_str(*args):
@@ -191,7 +191,7 @@ return ret
         while True:
             # If the number of the current queue is greater than the critical value, then sleep
             try:
-                if sum(universal.iterable(self.count(*names, db_num=db_num))) >= maxsize:
+                if sum(pandora.iterable(self.count(*names, db_num=db_num))) >= maxsize:
                     time.sleep(interval)
                 else:
                     return True
@@ -238,7 +238,7 @@ return ret
 """
         script = self.register_script(lua)
         ret = script(keys=keys, args=args)
-        return universal.single(ret) if len(names) == 1 else ret
+        return pandora.single(ret) if len(names) == 1 else ret
 
     def delete(self, *names, db_num=None):
         """
@@ -284,7 +284,7 @@ return success
             genre = "redis.call('TYPE', KEYS[index]).ok"
 
         db_num = self.database if db_num is None else db_num
-        keys = [db_num, maxsize, *universal.iterable(name)]
+        keys = [db_num, maxsize, *pandora.iterable(name)]
         args = _to_str(*values)
         lua = f'''
 redis.replicate_commands()
@@ -373,7 +373,7 @@ return success
         if not name:
             return
         db_num = self.database if db_num is None else db_num
-        keys = [backup or '', *universal.iterable(name)]
+        keys = [backup or '', *pandora.iterable(name)]
         args = [db_num, count]
         lua = '''
 redis.replicate_commands()
@@ -447,7 +447,7 @@ return ret
         if not name:
             return
         db_num = self.database if db_num is None else db_num
-        keys = [db_num, *universal.iterable(name)]
+        keys = [db_num, *pandora.iterable(name)]
         args = _to_str(*values)
         lua = '''
 redis.replicate_commands()
@@ -496,9 +496,9 @@ return success
         if not name:
             return
         db_num = self.database if db_num is None else db_num
-        keys = [*universal.iterable(name)]
+        keys = [*pandora.iterable(name)]
         args = [db_num, *[
-            j for i in zip(universal.iterable(old), universal.iterable(new)) for j in _to_str(*i)
+            j for i in zip(pandora.iterable(old), pandora.iterable(new)) for j in _to_str(*i)
         ]]
         lua = '''
 redis.replicate_commands()

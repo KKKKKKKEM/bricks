@@ -15,7 +15,7 @@ import jmespath
 import jsonpath
 from lxml import etree
 
-from bricks.utils import universal
+from bricks.utils import pandora
 
 
 class Rule:
@@ -91,10 +91,10 @@ class Rule:
 
         # 引擎适配逻辑
         if self.is_array is False:
-            res = universal.single(res)
+            res = pandora.single(res)
 
         elif self.is_array is True:
-            res = universal.iterable(res)
+            res = pandora.iterable(res)
 
         elif self.engine.is_array and isinstance(res, list) and len(res) == 1:
             res = res[0]
@@ -143,7 +143,7 @@ class Extractor:
             exprs=exprs,
             **kwargs
         )
-        return universal.single(res, default=default)
+        return pandora.single(res, default=default)
 
     @classmethod
     def match(cls, obj: Any, rules: Union[dict, list]):
@@ -152,7 +152,7 @@ class Extractor:
         def tree():
             return collections.defaultdict(tree)
 
-        for rule in universal.iterable(rules):
+        for rule in pandora.iterable(rules):
             vessel = tree()
 
             for item in cls._match(
@@ -194,7 +194,7 @@ class Extractor:
     def _match(cls, obj: Any, rules: dict, rkey="", pkey=""):
         flag = isinstance(obj, list)
         if obj in [None, []]: obj = [None]
-        obj = universal.iterable(obj, enforce=object, exclude=(set, list, tuple))
+        obj = pandora.iterable(obj, enforce=object, exclude=(set, list, tuple))
 
         def get_rkey(*keys, splice="."):
             return splice.join(filter(bool, keys))
@@ -304,7 +304,7 @@ class JsonExtractor(Extractor):
     @staticmethod
     def fmt(obj, **kwargs):
         if isinstance(obj, str):
-            obj = universal.json_or_eval(
+            obj = pandora.json_or_eval(
                 text=obj,
                 **kwargs
             )
@@ -333,7 +333,7 @@ class JsonpathExtractor(Extractor):
     @staticmethod
     def fmt(obj, **kwargs):
         if isinstance(obj, str):
-            obj = universal.json_or_eval(
+            obj = pandora.json_or_eval(
                 text=obj,
                 **kwargs
             )
