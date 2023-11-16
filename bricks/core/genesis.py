@@ -148,6 +148,7 @@ class Pangu(Chaos):
             if stuff is None: return
 
             while stuff.next and callable(stuff.next):
+                prev = stuff.next
                 if not inspect.iscoroutinefunction(stuff.next):
                     product = [stuff.next(stuff)]
                 else:
@@ -155,6 +156,10 @@ class Pangu(Chaos):
 
                 for _ in product:
                     pass
+
+                if prev == stuff.next and prev.root not in stuff.flows:
+                    stuff.flow({"next": None})
+                    break
 
     def use(self, context: Flow, timeout=None):
 
