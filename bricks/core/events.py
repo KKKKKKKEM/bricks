@@ -10,7 +10,7 @@ from loguru import logger
 
 from bricks import const
 from bricks.lib.context import Context, Error
-from bricks.utils import universal
+from bricks.utils import pandora
 
 
 class RegisteredEvents:
@@ -43,12 +43,7 @@ class Event:
 
         """
 
-        for event in REGISTERED_EVENTS.disposable[context.target][context.form]:
-            yield cls._call(event, context)
-
-        REGISTERED_EVENTS.disposable[context.target].clear()
-
-        for event in REGISTERED_EVENTS.permanent[context.target][context.form]:
+        for event in cls.aquire(context):
             yield cls._call(event, context)
 
     @classmethod
@@ -63,25 +58,62 @@ class Event:
             pass
 
     @classmethod
+    def aquire(cls, context: Context):
+        disposable = []
+        for event in REGISTERED_EVENTS.disposable[context.target][context.form]:
+            match = event.get("match", None)
+            if callable(match) and match(context):
+                disposable.append(event)
+                yield event
+            elif isinstance(match, str) and eval(match, globals(), {"context": context}):
+                disposable.append(event)
+                yield event
+            else:
+                disposable.append(event)
+                yield event
+
+        for event in disposable:
+            REGISTERED_EVENTS.disposable[context.target][context.form].remove(event)
+
+        for event in REGISTERED_EVENTS.permanent[context.target][context.form]:
+            match = event.get("match", None)
+            if callable(match) and match(context):
+                yield event
+            elif isinstance(match, str) and eval(match, globals(), {"context": context}):
+                yield event
+            else:
+                yield event
+
+    @classmethod
     def _call(cls, event, context: Context):
 
         func = event['func']
         args = event.get('args') or []
         kwargs = event.get('kwargs') or {}
-        return universal.invoke(func, args=args, kwargs=kwargs, annotations={type(context): context})
+        return pandora.invoke(
+            func,
+            args=args,
+            kwargs=kwargs,
+            annotations={type(context): context},
+            namespace={"context": context}
+        )
 
     @classmethod
-    def register(cls, *events: dict):
+    def register(cls, context: Context, *events: dict):
 
         for event in events:
 
             disposable = event.get("disposable", False)
-            event_type = event.get("type", None)
+            index = event.get("index", None)
 
             if disposable:
-                REGISTERED_EVENTS.disposable[event_type].append(event)
+                container = REGISTERED_EVENTS.disposable
             else:
-                REGISTERED_EVENTS.permanent[event_type].append(event)
+                container = REGISTERED_EVENTS.permanent
+            if index:
+                container[context.target][context.form].insert(index, event)
+            else:
+                container[context.target][context.form].append(event)
 
 
 # 已注册事件
