@@ -82,13 +82,13 @@ class Flow(Context):
         if queue:
             return queue.popleft()
 
-    def flow(self, attrs=None, handoff: bool = ...):
+    def flow(self, attrs=None):
         # 更新属性
         attrs = attrs or {}
         for k, v in attrs.items():
             setattr(self, k, v)
 
-        if handoff and "next" not in attrs and self.next.root in self.flows:
+        if "next" not in attrs and self.next.root in self.flows:
             self.next = self.flows[self.next.root]
 
     def rollback(self):
