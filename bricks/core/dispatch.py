@@ -13,13 +13,13 @@ import itertools
 import queue
 import sys
 import threading
+import time
 from concurrent.futures import Future
 from typing import Union, Dict, Optional
 
-from loguru import logger
-
+from bricks import const
 from bricks.core import events
-from bricks.lib.context import ErrorContext
+from bricks.lib import context
 
 
 class Task(Future):
@@ -89,7 +89,7 @@ class Worker(threading.Thread):
 
             except Exception as e:
                 task.set_exception(e)
-                events.Event.invoke(ErrorContext(error=e, form=events.EventEnum.ErrorOccurred))
+                events.Event.invoke(context.Error(error=e, form=const.ERROR_OCCURRED))
 
     def stop(self) -> None:
 
@@ -149,7 +149,7 @@ class Dispatcher(threading.Thread):
         self.loop = asyncio.get_event_loop()
 
         self._current_workers = asyncio.Semaphore(self.max_workers)
-        self._semaphore = asyncio.Semaphore(self.max_workers)
+        self._semaphore = threading.Semaphore(self.max_workers)
         self._awake = asyncio.Event()
         self._shutdown = asyncio.Event()
         self._running = threading.Event()
@@ -203,23 +203,18 @@ class Dispatcher(threading.Thread):
             worker = self.workers.get(ident)
             worker and worker.awake()
 
-    async def run_task(self, task: Task, timeout=None):
-        if timeout == -1:
-            self.tasks.put(task)
-
-        else:
-            async with self._semaphore:
-                self.tasks.put(task)
-
-        self._awake.set()
-
     def submit_task(self, task: Task, timeout: int = None) -> Task:
-        if not self._running.wait(timeout=5):
-            raise RuntimeError("dispatcher is not running")
+        assert self.is_running(), "dispatcher is not running"
 
         task.dispatcher = self
-        future = asyncio.run_coroutine_threadsafe(self.run_task(task, timeout=timeout), self.loop)
-        future.result(timeout=timeout if timeout != -1 else None)
+        if timeout != -1:
+            self.tasks.put(task)
+        else:
+            self._semaphore.acquire()
+            self.tasks.put(task)
+            task.add_done_callback(lambda: self._semaphore.release())
+
+        self.loop.call_soon_threadsafe(self._awake.set)
         return task
 
     def cancel_task(self, task: Task):
@@ -247,7 +242,7 @@ class Dispatcher(threading.Thread):
         :param task:
         :return:
         """
-
+        assert self.is_running(), "dispatcher is not running"
         assert task.is_async, "task must be async function"
         return asyncio.run_coroutine_threadsafe(task.func(*task.args, **task.kwargs), self.loop)
 
@@ -284,7 +279,7 @@ class Dispatcher(threading.Thread):
         )
 
     def is_running(self):
-        return not self._shutdown.is_set()
+        return not self._shutdown.is_set() and self._running.is_set()
 
     @property
     def running(self):
@@ -292,9 +287,8 @@ class Dispatcher(threading.Thread):
 
     def run(self):
         async def main():
-            logger.debug("dispatcher is running")
+            # logger.debug("dispatcher is running")
             self._running.set()
-            # if self.max_workers != 1: self.create_worker(self.max_workers)
             while not self._shutdown.is_set():
                 await self._awake.wait()
 
@@ -322,3 +316,16 @@ class Dispatcher(threading.Thread):
         self.loop.call_soon_threadsafe(self._awake.set)
 
         self._running.clear()
+
+    def start(self) -> None:
+        super().start()
+        self._running.wait(5)
+
+
+if __name__ == '__main__':
+    dis = Dispatcher()
+    dis.start()
+    time.sleep(1)
+    dis.stop()
+    time.sleep(1)
+    dis.start()

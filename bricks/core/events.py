@@ -8,23 +8,19 @@ from collections import defaultdict
 
 from loguru import logger
 
-from bricks.lib.context import Context, ErrorContext
+from bricks import const
+from bricks.lib.context import Context, Error
 from bricks.utils import universal
 
 
 class RegisteredEvents:
     def __init__(self):
-        def output_exception(context: ErrorContext):
+        def output_exception(context: Error):
             logger.exception(context.error)
 
         # 持久事件
         self.permanent = defaultdict(functools.partial(defaultdict, list))
-        self.permanent[None][EventEnum.ErrorOccurred].append(
-            {
-                "func": output_exception,
-                "type": EventEnum.ErrorOccurred
-            }
-        )
+        self.permanent[None][const.ERROR_OCCURRED].append({"func": output_exception})
 
         # 一次性事件
         self.disposable = defaultdict(functools.partial(defaultdict, list))
@@ -36,12 +32,6 @@ class RegisteredEvents:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.lock.release()
-
-
-class EventEnum:
-    ErrorOccurred = 'ErrorOccurred'
-    BeforeStart = 'BeforeStart'
-    BeforeClose = 'BeforeClose'
 
 
 class Event:

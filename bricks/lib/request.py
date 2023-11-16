@@ -28,7 +28,10 @@ class Request:
             timeout: int = ...,
             allow_redirects: bool = True,
             proxies: Optional[str] = None,
+            proxy: Optional[str] = "",
             status_codes: Optional[dict] = ...,
+            retry: int = 0,
+            max_retry: int = 5,
     ) -> None:
         self.url = url
         self.params = params
@@ -40,7 +43,10 @@ class Request:
         self.timeout = timeout
         self.allow_redirects = allow_redirects
         self.proxies = proxies
+        self.proxy = proxy
         self.status_codes = status_codes
+        self.retry = retry
+        self.max_retry = max_retry
 
     headers: Header = property(
         fget=lambda self: self._headers,

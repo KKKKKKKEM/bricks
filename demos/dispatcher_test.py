@@ -19,7 +19,7 @@ from bricks import Task, Dispatcher
 
 """
 if __name__ == '__main__':
-    dispatcher = Dispatcher(max_workers=2)
+    dispatcher = Dispatcher(max_workers=1)
     dispatcher.start()
 
 
@@ -38,7 +38,7 @@ if __name__ == '__main__':
 
     tasks = []
     for i in range(2):
-        t = dispatcher.submit_task(Task(demo, args=[i]), timeout=5)
+        t = dispatcher.submit_task(Task(demo, args=[i]), timeout=None)
         tasks.append(t)
     #
     time.sleep(2)

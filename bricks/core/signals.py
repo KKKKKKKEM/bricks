@@ -17,3 +17,24 @@ class Break(Signal):
 # 退出信号, 退出当前任务
 class Exit(Signal):
     ...
+
+
+class Wait(Signal):
+    ...
+
+
+class Empty(Signal):
+    ...
+
+class Retry(Signal):
+    ...
+class End(Signal):
+    ...
+
+
+class Success(Signal):
+    ...
+
+
+class Failure(Signal):
+    ...

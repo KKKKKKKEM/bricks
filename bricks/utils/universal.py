@@ -3,6 +3,7 @@
 # @Author  : Kem
 # @Desc    :
 import ast
+import collections
 import importlib
 import importlib.util
 import inspect
@@ -60,20 +61,27 @@ def load_objects(path_or_reference, reload=False):
         raise ImportError(f"无法导入指定路径或引用: {path_or_reference}")
 
 
-def invoke(func, args=None, kwargs: dict = None, annotations: dict = None):
+def invoke(func, args=None, kwargs: dict = None, annotations: dict = None, run=True):
     """
     调用函数, 自动修正参数
 
+    :param run:
     :param func:
     :param args:
     :param kwargs:
     :param annotations:
     :return:
     """
+    prepared = prepare(func, args, kwargs, annotations)
+    return prepared.func(*prepared.args, **prepared.kwargs)
+
+
+def prepare(func, args=None, kwargs: dict = None, annotations: dict = None):
     assert callable(func), f"func must be callable, but got {type(func)}"
+    prepared = collections.namedtuple("prepared", ["func", "args", "kwargs"])
 
     args = args or []
-    kwargs = kwargs or []
+    kwargs = kwargs or {}
     # 获取已提供参数的名称
     new_args = []
     new_kwargs = {}
@@ -89,10 +97,18 @@ def invoke(func, args=None, kwargs: dict = None, annotations: dict = None):
     index = 0
 
     for name, param in parameters.items():
+        if param.kind == inspect.Parameter.VAR_POSITIONAL:
+            new_args.extend(args[index:])
+            index = len(args) - index
+            continue
+
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            new_kwargs.update(kwargs)
+            continue
 
         # 参数在 kwargs 里面 -> 从 kwargs 里面取
-        if name in kwargs:
-            value = kwargs[name]
+        if name in kwargs or param.default != inspect.Parameter.empty:
+            value = kwargs.get(name, param.default)
 
         # 参数类型存在于 annotations, 并且还可以从 args 里面取值, 并且刚好取到的对应的值也是当前类型 -> 直接从 args 里面取
         elif param.annotation in annotations and index < len(args) and type(args[index]) == param.annotation:
@@ -112,18 +128,20 @@ def invoke(func, args=None, kwargs: dict = None, annotations: dict = None):
         else:
             raise TypeError(f"missing required argument: {name}")
 
-        if param.kind == inspect.Parameter.POSITIONAL_ONLY:
+        if param.kind in [inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD]:
             new_args.append(value)
-        if param.kind == inspect.Parameter.VAR_POSITIONAL:
-            new_args.append(value)
-        if param.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD:
-            new_kwargs[name] = value
+
         if param.kind == inspect.Parameter.KEYWORD_ONLY:
             new_kwargs[name] = value
-        if param.kind == inspect.Parameter.VAR_KEYWORD:
-            new_kwargs[name] = value
 
-    return func(*new_args, **new_kwargs)
+    return prepared(func=func, args=new_args, kwargs=new_kwargs)
+
+
+def ensure_type(_object, _type):
+    if not isinstance(_object, _type):
+        return _type(_object)
+    else:
+        return _object
 
 
 def iterable(_object: Any, enforce=(dict, str, bytes), exclude=(), convert_null=True) -> List[Any]:
@@ -202,4 +220,8 @@ def json_or_eval(text, jsonp=False, errors="strict", _step=0, **kwargs) -> Union
 
 
 if __name__ == '__main__':
-    print(load_objects("json.loads"))
+    def fun(a: int, *args, c=1, **kwargs):
+        print(a, args, c, kwargs)
+
+
+    print(invoke(fun, args=[], annotations={int: 1}, kwargs={"c":999}))

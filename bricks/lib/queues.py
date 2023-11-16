@@ -498,8 +498,6 @@ class LocalQueue(TaskQueue):
         self.remove(name, *universal.iterable(old), **kwargs)
         return self.put(name, *universal.iterable(new), **kwargs)
 
-
-
     def remove(self, name: str, *values, **kwargs):
         backup = kwargs.pop('backup', None)
         if backup:  self.put(name, *values, qtypes=backup)
@@ -537,8 +535,6 @@ class LocalQueue(TaskQueue):
 
         if action == 'get-permission':
             return True
-
-
 
 
 if __name__ == '__main__':

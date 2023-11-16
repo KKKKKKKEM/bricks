@@ -30,6 +30,7 @@ class Response:
             history: List['Response'] = None,
             request: 'Request' = ...,
             error: Any = ...,
+            callback: Callable = None
     ):
         self.content: Union[str, bytes] = content
         self.status_code = status_code
@@ -41,6 +42,7 @@ class Response:
         self.history: List['Response'] = history or []
         self.request: 'Request' = request
         self.error = error
+        self.callback = callback
         self._cache = {}
 
     headers: Header = property(

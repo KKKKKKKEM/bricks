@@ -3,11 +3,13 @@
 # @Author  : Kem
 # @Desc    :
 import functools
+import inspect
 
 from loguru import logger
 
-from bricks.core import signals, events
-from bricks.lib import context
+from bricks import const
+from bricks.core import signals, events, dispatch
+from bricks.lib.context import Flow, Context
 
 
 class MetaClass(type):
@@ -38,14 +40,16 @@ class Chaos(metaclass=MetaClass):
         """
         return getattr(self, name, default)
 
-    def set_attr(self, name, value):
-        """
-        设置属性
-        :param name:
-        :param value:
-        :return:
-        """
-        return setattr(self, name, value)
+    def set_attr(self, name, value, nx=False):
+        if nx:
+            if hasattr(self, name):
+                return getattr(self, name)
+            else:
+                setattr(self, name, value)
+                return value
+        else:
+            setattr(self, name, value)
+            return value
 
     def run_task(self, task_name: str, *args, **kwargs):
         """
@@ -92,12 +96,14 @@ class Chaos(metaclass=MetaClass):
 
         @functools.wraps(raw_method)
         def wrapper(*args, **kwargs):
-            events.Event.invoke(context.Context(
-                form=events.EventEnum.BeforeStart,
-                target=self,
-                args=args,
-                kwargs=kwargs
-            ))
+            events.Event.invoke(
+                Context(
+                    form=const.BEFORE_START,
+                    target=self,
+                    args=args,
+                    kwargs=kwargs
+                )
+            )
             ret = raw_method(*args, **kwargs)
             return ret
 
@@ -113,16 +119,52 @@ class Chaos(metaclass=MetaClass):
 
         @functools.wraps(raw_method)
         def wrapper(*args, **kwargs):
-            events.Event.invoke(context.Context(
-                form=events.EventEnum.BeforeClose,
-                target=self,
-                args=args,
-                kwargs=kwargs
-            ))
+            events.Event.invoke(
+                Context(
+                    form=const.BEFORE_CLOSE,
+                    target=self,
+                    args=args,
+                    kwargs=kwargs
+                )
+            )
             ret = raw_method(*args, **kwargs)
             return ret
 
         return wrapper
+
+
+class Pangu(Chaos):
+
+    def __init__(self, **kwargs) -> None:
+        for k, v in kwargs.items():
+            self.set_attr(k, v, nx=True)
+        else:
+            self.dispatcher = dispatch.Dispatcher(max_workers=self.get_attr("concurrency", 1))
+
+    def on_consume(self, context: Flow):  # noqa
+
+        while True:
+            stuff = context.produce()
+            if stuff is None: return
+
+            while stuff.next and callable(stuff.next):
+                if not inspect.iscoroutinefunction(stuff.next):
+                    product = [stuff.next(stuff)]
+                else:
+                    product = stuff.next(stuff)
+
+                for _ in product:
+                    pass
+
+    def use(self, context: Flow, timeout=None):
+
+        return self.dispatcher.submit_task(
+            task=dispatch.Task(
+                func=self.on_consume,
+                args=[context]
+            ),
+            timeout=timeout
+        )
 
 
 if __name__ == '__main__':
