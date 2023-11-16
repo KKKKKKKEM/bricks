@@ -2,14 +2,18 @@
 # @Time    : 2023-11-15 18:17
 # @Author  : Kem
 # @Desc    :
-import time
 
-from bricks import Request
+from bricks import Request, const
 from bricks.spider import air
 from bricks.spider.air import Context
 
 
 class MySpider(air.Spider):
+
+    def before_start(self):
+        # self.use(const.BEFORE_REQUEST, {"func": lambda context: print(context.request)})
+        self.use(const.AFTER_REQUEST, {"func": lambda context: context.seeds['id'] == 5 and context.success() and context.stop()})
+        super().before_start()
 
     def make_seeds(self, context: Context, **kwargs):
         for i in range(10):
@@ -21,16 +25,20 @@ class MySpider(air.Spider):
         )
 
     def parse(self, context: Context):
-        print(context.response)
+        # print(context.response)
         # time.sleep(5)
         yield context.seeds
 
     def item_pipline(self, context: Context):
         super().item_pipline(context)
-        context.background({
-            "next": lambda name: (time.sleep(1), print(name)),
-            "kwargs": context.seeds
-        })
+        # context2 = context.background(
+        #     {
+        #         "next": lambda name: (time.sleep(1), print(name)),
+        #         "kwargs": context.seeds
+        #     },
+        # )
+        # ret = context2.future.result()
+        # print(ret)
         context.success()
         # if context.seeds['id'] < 10:
         #     # 提交新请求
@@ -41,6 +49,6 @@ class MySpider(air.Spider):
 
 
 if __name__ == '__main__':
-    spider = MySpider(concurrency=2)
+    spider = MySpider(concurrency=1)
     spider.run_init()
-    spider.run_spider()
+    spider.run_task("spider")
