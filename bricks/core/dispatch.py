@@ -148,9 +148,8 @@ class Dispatcher(threading.Thread):
         self.workers: Dict[str, Worker] = {}
         self.loop = asyncio.get_event_loop()
 
-        self._current_workers = asyncio.Semaphore(self.max_workers)
+        self._remain_workers = threading.Semaphore(self.max_workers)
         self._semaphore = threading.Semaphore(self.max_workers)
-        self._awake = asyncio.Event()
         self._shutdown = asyncio.Event()
         self._running = threading.Event()
         self._counter = itertools.count()
@@ -168,6 +167,7 @@ class Dispatcher(threading.Thread):
             worker = Worker(self, name=f"worker-{next(self._counter)}", trace=self.trace)
             self.workers[worker.name] = worker
             worker.start()
+            self._remain_workers.acquire()
 
     def stop_worker(self, *idents: str):
         """
@@ -178,7 +178,7 @@ class Dispatcher(threading.Thread):
         """
         for ident in idents:
             worker = self.workers.pop(ident, None)
-            worker and self.loop.call_soon_threadsafe(self._current_workers.release)
+            worker and self._remain_workers.release()
             worker and worker.stop()
 
     def pause_worker(self, *idents: str):
@@ -207,15 +207,21 @@ class Dispatcher(threading.Thread):
         assert self.is_running(), "dispatcher is not running"
 
         task.dispatcher = self
-        if timeout != -1:
+        if timeout == -1:
             self.tasks.put(task)
         else:
             self._semaphore.acquire()
             self.tasks.put(task)
-            task.add_done_callback(lambda: self._semaphore.release())
+            task.add_done_callback(lambda x: self._semaphore.release())
 
-        self.loop.call_soon_threadsafe(self._awake.set)
+        self.adjust_workers()
         return task
+
+    def adjust_workers(self):
+        remain_workers = self._remain_workers._value  # noqa
+        remain_tasks = self.tasks.qsize()
+        if remain_workers > 0 and remain_tasks > 0:
+            self.create_worker(min(remain_workers, remain_tasks))
 
     def cancel_task(self, task: Task):
         """
@@ -232,8 +238,6 @@ class Dispatcher(threading.Thread):
             else:
                 # If there is a worker and the task is running, shut down the worker
                 task.worker and not task.done() and self.stop_worker(task.worker.name)
-                # notify the scheduler to reassign the worker
-                self.loop.call_soon_threadsafe(self._awake.set)
 
     def create_future(self, task: Task):
         """
@@ -283,24 +287,12 @@ class Dispatcher(threading.Thread):
 
     @property
     def running(self):
-        return self.max_workers - self._current_workers._value + self.tasks.qsize()  # noqa
+        return self.max_workers - self._remain_workers._value + self.tasks.qsize()  # noqa
 
     def run(self):
         async def main():
-            # logger.debug("dispatcher is running")
             self._running.set()
-            while not self._shutdown.is_set():
-                await self._awake.wait()
-
-                try:
-                    # The execution queue is not empty -> The task cannot be processed
-                    # The current number of workers is less than the maximum number of workers -> and there is still worker capacity remaining
-                    if not self.tasks.empty() and not self._current_workers.locked():
-                        await self._current_workers.acquire()
-                        self.create_worker()
-
-                finally:
-                    self._awake.clear()
+            await self._shutdown.wait()
 
         asyncio.set_event_loop(self.loop)
         self.loop.run_until_complete(main())
@@ -313,7 +305,6 @@ class Dispatcher(threading.Thread):
         self.stop_worker(*self.workers.keys())
         # note: It must be called this way, otherwise the thread is unsafe and the write over there cannot be closed
         self.loop.call_soon_threadsafe(self._shutdown.set)
-        self.loop.call_soon_threadsafe(self._awake.set)
 
         self._running.clear()
 
