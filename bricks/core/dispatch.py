@@ -13,7 +13,7 @@ import itertools
 import queue
 import sys
 import threading
-import time
+from asyncio import futures, ensure_future
 from concurrent.futures import Future
 from typing import Union, Dict, Optional
 
@@ -76,13 +76,8 @@ class Worker(threading.Thread):
                 return
 
             try:
-                if task.is_async:
-                    future = self.dispatcher.create_future(task)
-                    task.future = future
-                    future.result()
-                else:
-                    ret = task.func(*task.args, **task.kwargs)
-                    task.set_result(ret)
+                ret = task.func(*task.args, **task.kwargs)
+                task.set_result(ret)
 
             except (KeyboardInterrupt, SystemExit) as e:
                 raise e
@@ -149,7 +144,8 @@ class Dispatcher(threading.Thread):
         self.loop = asyncio.get_event_loop()
 
         self._remain_workers = threading.Semaphore(self.max_workers)
-        self._semaphore = threading.Semaphore(self.max_workers)
+        self._running_tasks = threading.Semaphore(self.max_workers)
+        self._active_tasks = threading.Semaphore(self.max_workers)
         self._shutdown = asyncio.Event()
         self._running = threading.Event()
         self._counter = itertools.count()
@@ -164,10 +160,10 @@ class Dispatcher(threading.Thread):
         :return:
         """
         for _ in range(size):
+            self._remain_workers.acquire()
             worker = Worker(self, name=f"worker-{next(self._counter)}", trace=self.trace)
             self.workers[worker.name] = worker
             worker.start()
-            self._remain_workers.acquire()
 
     def stop_worker(self, *idents: str):
         """
@@ -204,17 +200,79 @@ class Dispatcher(threading.Thread):
             worker and worker.awake()
 
     def submit_task(self, task: Task, timeout: int = None) -> Task:
+        """
+        submit a task to the workers pool to run
+
+        :param task:
+        :param timeout:
+        :return:
+        """
         assert self.is_running(), "dispatcher is not running"
 
-        task.dispatcher = self
-        if timeout == -1:
-            self.tasks.put(task)
-        else:
-            self._semaphore.acquire()
-            self.tasks.put(task)
-            task.add_done_callback(lambda x: self._semaphore.release())
+        def submit():
+            task.dispatcher = self
+            if task.is_async:
+                self.active_task(task)
+            else:
+                self.tasks.put(task)
+
+        timeout != -1 and self._running_tasks.acquire(timeout=timeout)
+        submit()
+        timeout != -1 and task.add_done_callback(lambda x: self._running_tasks.release())
 
         self.adjust_workers()
+        return task
+
+    def active_task(self, task: Task, timeout: int = None) -> Task:
+        """
+        activate a task to start running
+
+        :param timeout:
+        :param task:
+        :return:
+        """
+
+        def run_async_task():
+            def callback():
+                try:
+                    futures._chain_future(  # noqa
+                        ensure_future(task.func(*task.args, **task.kwargs), loop=self.loop), task
+                    )
+                except (SystemExit, KeyboardInterrupt):
+                    raise
+                except BaseException as exc:
+                    if task.set_running_or_notify_cancel():
+                        task.set_exception(exc)
+                    raise
+
+            self.loop.call_soon_threadsafe(callback)
+
+        def run_sync_task():
+
+            def callback():
+                try:
+                    ret = task.func(*task.args, **task.kwargs)
+                    task.set_result(ret)
+                except (SystemExit, KeyboardInterrupt):
+                    raise
+                except BaseException as exc:
+                    if task.set_running_or_notify_cancel():
+                        task.set_exception(exc)
+                    raise
+
+            threading.Thread(target=callback, daemon=True).start()
+
+        def active():
+            if task.is_async:
+                run_async_task()
+            else:
+                run_sync_task()
+
+        assert self.is_running(), "dispatcher is not running"
+
+        timeout != -1 and self._active_tasks.acquire(timeout=timeout)
+        active()
+        timeout != -1 and task.add_done_callback(lambda x: self._active_tasks.release())
         return task
 
     def adjust_workers(self):
@@ -238,17 +296,6 @@ class Dispatcher(threading.Thread):
             else:
                 # If there is a worker and the task is running, shut down the worker
                 task.worker and not task.done() and self.stop_worker(task.worker.name)
-
-    def create_future(self, task: Task):
-        """
-        create a async task future object
-
-        :param task:
-        :return:
-        """
-        assert self.is_running(), "dispatcher is not running"
-        assert task.is_async, "task must be async function"
-        return asyncio.run_coroutine_threadsafe(task.func(*task.args, **task.kwargs), self.loop)
 
     @staticmethod
     def make_task(task: Union[dict, Task]) -> Task:
@@ -311,12 +358,3 @@ class Dispatcher(threading.Thread):
     def start(self) -> None:
         super().start()
         self._running.wait(5)
-
-
-if __name__ == '__main__':
-    dis = Dispatcher()
-    dis.start()
-    time.sleep(1)
-    dis.stop()
-    time.sleep(1)
-    dis.start()
