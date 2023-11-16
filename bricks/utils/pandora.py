@@ -63,7 +63,7 @@ def load_objects(path_or_reference, reload=False):
         raise ImportError(f"无法导入指定路径或引用: {path_or_reference}")
 
 
-def invoke(func, args=None, kwargs: dict = None, annotations: dict = None):
+def invoke(func, args=None, kwargs: dict = None, annotations: dict = None, namespace: dict = None):
     """
     调用函数, 自动修正参数
 
@@ -71,13 +71,14 @@ def invoke(func, args=None, kwargs: dict = None, annotations: dict = None):
     :param args:
     :param kwargs:
     :param annotations:
+    :param namespace:
     :return:
     """
-    prepared = prepare(func, args, kwargs, annotations)
+    prepared = prepare(func, args, kwargs, annotations, namespace)
     return prepared.func(*prepared.args, **prepared.kwargs)
 
 
-def prepare(func, args=None, kwargs: dict = None, annotations: dict = None):
+def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, namespace: dict = None):
     assert callable(func), f"func must be callable, but got {type(func)}"
     prepared = collections.namedtuple("prepared", ["func", "args", "kwargs"])
 
@@ -87,6 +88,7 @@ def prepare(func, args=None, kwargs: dict = None, annotations: dict = None):
     new_args = []
     new_kwargs = {}
     annotations = annotations or {}
+    namespace = namespace or {}
 
     try:
         parameters = inspect.signature(func).parameters
@@ -108,6 +110,7 @@ def prepare(func, args=None, kwargs: dict = None, annotations: dict = None):
             continue
 
         # 参数在 kwargs 里面 -> 从 kwargs 里面取
+
         if name in kwargs or param.default != inspect.Parameter.empty:
             value = kwargs.get(name, param.default)
 
@@ -125,10 +128,12 @@ def prepare(func, args=None, kwargs: dict = None, annotations: dict = None):
             value = args[index]
             index += 1
 
+        elif param.name in namespace:
+            value = namespace[param.name]
+
         # 没有传这个参数, 并且也没有可以备选的 annotations  -> 报错
         else:
             raise TypeError(f"missing required argument: {name}")
-
         if param.kind in [inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD]:
             new_args.append(value)
 
