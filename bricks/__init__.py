@@ -15,5 +15,4 @@ logger.add(
     sys.stdout,
     format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level}</level>  | <level>{message}</level>",
     colorize=True,
-
 )

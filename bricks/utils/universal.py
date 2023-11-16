@@ -13,6 +13,8 @@ import re
 import sys
 from typing import Any, List, Union
 
+JSONP_REGEX = re.compile(r'\S+?\((?P<obj>[\s\S]*)\)')
+
 
 def load_objects(path_or_reference, reload=False):
     """
@@ -61,11 +63,10 @@ def load_objects(path_or_reference, reload=False):
         raise ImportError(f"无法导入指定路径或引用: {path_or_reference}")
 
 
-def invoke(func, args=None, kwargs: dict = None, annotations: dict = None, run=True):
+def invoke(func, args=None, kwargs: dict = None, annotations: dict = None):
     """
     调用函数, 自动修正参数
 
-    :param run:
     :param func:
     :param args:
     :param kwargs:
@@ -198,7 +199,7 @@ def json_or_eval(text, jsonp=False, errors="strict", _step=0, **kwargs) -> Union
         return json.loads(text)
 
     def use_jsonp():
-        real_text = re.search('\S+?\((?P<obj>[\s\S]*)\)', text).group('obj')
+        real_text = JSONP_REGEX.search(text).group('obj')
         return json_or_eval(real_text, jsonp=True, _step=_step + 1, **kwargs)
 
     if not isinstance(text, str):
@@ -224,4 +225,4 @@ if __name__ == '__main__':
         print(a, args, c, kwargs)
 
 
-    print(invoke(fun, args=[], annotations={int: 1}, kwargs={"c":999}))
+    print(invoke(fun, args=[], annotations={int: 1}, kwargs={"c": 999}))

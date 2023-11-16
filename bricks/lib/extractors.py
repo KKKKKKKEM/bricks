@@ -371,7 +371,7 @@ if __name__ == '__main__':
             "name": "name",
             "index": "@index",
             "ts": "@ts",
-            "hobbys": {
+            "hobbies": {
                 "hobby": "name"
             }
         }
@@ -381,7 +381,7 @@ if __name__ == '__main__':
             {
                 "name": "John",
                 "age": 30,
-                "hobbys": [
+                "hobbies": [
                     {
                         "name": "hobby1"
                     },
@@ -397,7 +397,7 @@ if __name__ == '__main__':
             {
                 "name": "Jane",
                 "age": 25,
-                "hobbys": [
+                "hobbies": [
                     {
                         "name": "hobby4"
                     },

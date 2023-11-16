@@ -27,7 +27,7 @@ class MySpider(air.Spider):
 
     def item_pipline(self, context: Context):
         super().item_pipline(context)
-        context.backgound({
+        context.background({
             "next": lambda name: (time.sleep(1), print(name)),
             "kwargs": context.seeds
         })

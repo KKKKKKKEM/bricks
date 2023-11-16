@@ -102,7 +102,7 @@ class Context(Flow):
         submit and self.pending.append(new)
         return new
 
-    def backgound(self, attrs: dict = None, rollback=False):
+    def background(self, attrs: dict = None, rollback=False):
         """
         后台执行, 会抢占 worker
 
@@ -174,7 +174,7 @@ class Spider(Pangu):
             **remote_init_record,
             "queue_name": queue_name,
             "task_queue": task_queue,
-            "identifier": const.MEACHINE_ID,
+            "identifier": const.MACHINE_ID,
         }
 
         # 设置一个启动时间, 防止被覆盖
@@ -185,7 +185,7 @@ class Spider(Pangu):
         # 获取已经初始化的去重数量
         success = int(init_record.setdefault('success', 0))
         # 获取机器的唯一标识
-        identifier = const.MEACHINE_ID
+        identifier = const.MACHINE_ID
 
         # 判断是否有初始化权限
         has_permission = task_queue.obtain(queue_name, {"action": "get-permission", "identifier": identifier})
