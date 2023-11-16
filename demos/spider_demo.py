@@ -2,9 +2,9 @@
 # @Time    : 2023-11-15 18:17
 # @Author  : Kem
 # @Desc    :
+import time
 
 from bricks import Request
-
 from bricks.spider import air
 from bricks.spider.air import Context
 
@@ -27,16 +27,20 @@ class MySpider(air.Spider):
 
     def item_pipline(self, context: Context):
         super().item_pipline(context)
+        context.backgound({
+            "next": lambda name: (time.sleep(1), print(name)),
+            "kwargs": context.seeds
+        })
         context.success()
-        if context.seeds['id'] < 10:
-            # 提交新请求
-            context.submit(
-                {**context.seeds, "id": context.seeds['id'] + 10},
-                # call_later=True
-            )
+        # if context.seeds['id'] < 10:
+        #     # 提交新请求
+        #     context.submit(
+        #         {**context.seeds, "id": context.seeds['id'] + 10},
+        #         # call_later=True
+        #     )
 
 
 if __name__ == '__main__':
-    spider = MySpider(concurrency=20)
+    spider = MySpider(concurrency=2)
     spider.run_init()
     spider.run_spider()

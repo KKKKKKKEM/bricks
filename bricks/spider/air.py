@@ -102,6 +102,18 @@ class Context(Flow):
         submit and self.pending.append(new)
         return new
 
+    def backgound(self, attrs: dict = None, rollback=False):
+        """
+        后台执行, 会抢占 worker
+
+        :param attrs:
+        :param rollback:
+        :return:
+        """
+        context = self.branch(attrs, rollback, False)
+        self.target.use(context, timeout=-1)
+        return context
+
     def submit(self, obj: Union[Request, Item, dict], call_later=False) -> "Context":
         assert obj.__class__ in [Request, Item, dict], f"不支持的类型: {obj.__class__}"
         if obj.__class__ in [Item, dict]:

@@ -58,7 +58,16 @@ class Flow(Context):
         fset=_set_next,
         fdel=lambda self: setattr(self, "_next", Node())
     )
-
+    args: list = property(
+        fget=lambda self: getattr(self, "_args", []),
+        fset=lambda self, value: setattr(self, "_args", value),
+        fdel=lambda self: setattr(self, "_args", [])
+    )
+    kwargs: dict = property(
+        fget=lambda self: getattr(self, "_kwargs", {}),
+        fset=lambda self, value: setattr(self, "_kwargs", value),
+        fdel=lambda self: setattr(self, "_kwargs", {})
+    )
     flows: dict = property(
         fget=lambda self: getattr(self, "_flow", {}),
         fset=lambda self, value: setattr(self, "_flow", value),
