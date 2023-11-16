@@ -4,9 +4,11 @@
 # @Desc    :
 class Signal(Exception):
     def __init__(self, **kwargs):
-        self.form = self.__class__
         for k, v in kwargs.items():
             setattr(self, k, v)
+
+    def __str__(self):
+        return f"<{self.__class__.__name__} {self.__dict__}>"
 
 
 # 中断信号, 中断后续流程
@@ -26,8 +28,11 @@ class Wait(Signal):
 class Empty(Signal):
     ...
 
+
 class Retry(Signal):
     ...
+
+
 class End(Signal):
     ...
 

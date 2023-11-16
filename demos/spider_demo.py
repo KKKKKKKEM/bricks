@@ -3,7 +3,6 @@
 # @Author  : Kem
 # @Desc    :
 from bricks import Request, Response
-from bricks.core import signals
 
 from bricks.spider import air
 from bricks.spider.air import Context
@@ -22,8 +21,6 @@ class MySpider(air.Spider):
 
     def parse(self, response: Response):
         yield [{"name": 1}]
-        raise signals.Break
-
         yield [{"name": 2}]
 
     def item_pipline(self, context: Context):
