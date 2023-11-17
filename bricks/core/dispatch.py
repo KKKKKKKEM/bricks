@@ -161,7 +161,7 @@ class Dispatcher:
         """
         for _ in range(size):
             self._remain_workers.acquire()
-            worker = Worker(self, name=f"worker-{next(self._counter)}", trace=self.trace)
+            worker = Worker(self, name=f"Worker-{next(self._counter)}", trace=self.trace)
             self.workers[worker.name] = worker
             worker.start()
 
