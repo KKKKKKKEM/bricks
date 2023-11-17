@@ -122,7 +122,7 @@ class Worker(threading.Thread):
         return self._localtrace
 
 
-class Dispatcher(threading.Thread):
+class Dispatcher:
     """
     Dispatcher: Responsible for task scheduling, assignment and execution
 
@@ -149,8 +149,8 @@ class Dispatcher(threading.Thread):
         self._shutdown = asyncio.Event()
         self._running = threading.Event()
         self._counter = itertools.count()
-
-        super().__init__(daemon=True, name="ForkConsumer")
+        self.thread = threading.Thread(target=self.run, name="DisPatch", daemon=True)
+        self._lock = threading.Lock()
 
     def create_worker(self, size: int = 1):
         """
@@ -356,5 +356,16 @@ class Dispatcher(threading.Thread):
         self._running.clear()
 
     def start(self) -> None:
-        super().start()
-        self._running.wait(5)
+        with self._lock:
+            if not self.thread.is_alive():
+                if self.thread._started.is_set():  # noqa
+                    self.thread = threading.Thread(target=self.run, name="DisPatch", daemon=True)
+                self.thread.start()
+
+            self._running.wait()
+
+
+if __name__ == '__main__':
+    dis = Dispatcher()
+    dis.start()
+    dis.start()
