@@ -151,14 +151,14 @@ class Spider(Pangu):
 
         task_queue: TaskQueue = self.get_attr("init.task_queue", self.task_queue)
         queue_name: str = self.get_attr("init.queue_name", self.queue_name)
-        task_queue.command(queue_name, {"action": "set-init-start"})
-        task_queue.command(queue_name, {"action": "set-init-status"})
+        task_queue.command(queue_name, {"action": task_queue.COMMANDS.SET_INIT_START})
+        task_queue.command(queue_name, {"action": task_queue.COMMANDS.SET_INIT_STATUS})
 
         try:
             # 本地的初始化记录 -> 启动传入的
             local_init_record: dict = self.get_attr('init.record') or {}
             # 云端的初始化记录 -> 初始化的时候会存储(如果支持的话)
-            remote_init_record = task_queue.command(queue_name, {"action": "get-init-record"}) or {}
+            remote_init_record = task_queue.command(queue_name, {"action": task_queue.COMMANDS.GET_INIT_RECORD}) or {}
 
             # 初始化记录信息
             init_record: dict = {
@@ -180,7 +180,8 @@ class Spider(Pangu):
             identifier = const.MACHINE_ID
 
             # 判断是否有初始化权限
-            has_permission = task_queue.command(queue_name, {"action": "get-permission", "identifier": identifier})
+            has_permission = task_queue.command(queue_name, {"action": task_queue.COMMANDS.GET_PERMISSION,
+                                                             "identifier": identifier})
             if not has_permission:
                 return
 
@@ -210,13 +211,13 @@ class Spider(Pangu):
 
             elif init_mode == 'reset':
                 # 重置模式, 清空初始化记录和队列种子
-                task_queue.command(queue_name, {"action": "reset-init-record"})
+                task_queue.command(queue_name, {"action": task_queue.COMMANDS.RESET_INIT_RECORD})
                 logger.debug("[开始投放] 重置模式, 清空初始化队列及记录")
 
             elif init_mode == 'continue':
                 # 继续模式, 从上次初始化的位置开始
                 logger.debug("[开始投放] 继续模式, 从上次初始化的位置开始")
-                task_queue.command(queue_name, {"action": "continue-init-record"})
+                task_queue.command(queue_name, {"action": task_queue.COMMANDS.CONTINUE_INIT_RECORD})
 
             else:
                 # 默认模式, 队列内种子数量小于等于阈值, 且 get-permission 成功才进行初始化
@@ -274,7 +275,7 @@ class Spider(Pangu):
                     "update": str(datetime.datetime.now()),
                 })
 
-                task_queue.command(queue_name, {"action": "set-init-record", "record": init_record})
+                task_queue.command(queue_name, {"action": task_queue.COMMANDS.SET_INIT_RECORD, "record": init_record})
                 logger.debug(output)
 
                 if (
@@ -288,11 +289,11 @@ class Spider(Pangu):
             context_.flow({"next": generator, "callback": consumer})
             self.on_consume(context_)
             init_record.update(finish=str(datetime.datetime.now()))
-            task_queue.command(queue_name, {"action": "backup-init-record", "record": init_record})
+            task_queue.command(queue_name, {"action": task_queue.COMMANDS.BACKUP_INIT_RECORD, "record": init_record})
             return init_record
 
         finally:
-            task_queue.command(queue_name, {"action": "release-init-status"})
+            task_queue.command(queue_name, {"action": task_queue.COMMANDS.RELEASE_INIT_STATUS})
 
     def put_seeds(self, context: Context = None, **kwargs):
         """
@@ -384,7 +385,7 @@ class Spider(Pangu):
                 # 判断是否应该停止爬虫
                 #  没有初始化 + 本地没有运行的任务 + 任务队列为空 -> 退出
                 if (
-                        not task_queue.command(queue_name, {"action": "is-init-status"}) and
+                        not task_queue.command(queue_name, {"action": task_queue.COMMANDS.IS_INIT_STATUS}) and
                         # not self.forever and
                         task_queue.is_empty(queue_name, threshold=self.get_attr("spider.threshold", default=0))
                 ):
@@ -422,8 +423,8 @@ class Spider(Pangu):
         self.active(init_task)
         task_queue: TaskQueue = self.get_attr("init.task_queue", self.task_queue)
         queue_name: str = self.get_attr("init.queue_name", self.queue_name)
-        task_queue.command(queue_name, {"action": "wait-for-init-start"})
-        task_queue.command(queue_name, {"action": "release-init-start"})
+        task_queue.command(queue_name, {"action": task_queue.COMMANDS.WAIT_FOR_INIT_START})
+        task_queue.command(queue_name, {"action": task_queue.COMMANDS.RELEASE_INIT_START})
         self.run_spider()
 
     @staticmethod

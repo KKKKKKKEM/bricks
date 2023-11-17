@@ -242,6 +242,20 @@ class SmartQueue(queue.Queue):
 
 
 class TaskQueue(metaclass=genesis.MetaClass):
+    class COMMANDS:
+        GET_PERMISSION = "get-permission"
+        GET_INIT_RECORD = "get-init-record"
+        RESET_INIT_RECORD = "reset-init-record"
+        CONTINUE_INIT_RECORD = "continue-init-record"
+        SET_INIT_RECORD = "set-init-record"
+        BACKUP_INIT_RECORD = "backup-init-record"
+        WAIT_FOR_INIT_START = "wait-for-init-start"
+        SET_INIT_START = "set-init-start"
+        RELEASE_INIT_START = "release-init-start"
+        SET_INIT_STATUS = "set-init-status"
+        IS_INIT_STATUS = "is-init-status"
+        RELEASE_INIT_STATUS = "release-init-status"
+
     reversible = property(
         fget=lambda self: getattr(self, "_reversible", True),
         fset=lambda self, value: setattr(self, "_reversible", value),
@@ -538,21 +552,18 @@ class LocalQueue(TaskQueue):
             os.environ[f'{name}-init-record-backup'] = json.dumps(record, default=str)
 
         actions = {
-            "get-permission": lambda: True,
-
-            "get-init-record": lambda: json.loads(os.environ.get(f'{name}-init-record') or "{}"),
-            "reset-init-record": reset_init_record,
-            "continue-init-record": lambda: self.reverse(name),
-            "set-init-record": set_init_record,
-            "backup-init-record": backup_init_record,
-
-            "wait-for-init-start": lambda: self._status[f'{name}-init-start'].wait(),
-            "set-init-start": lambda: self._status[f'{name}-init-start'].set(),
-            "release-init-start": lambda: self._status.pop(f'{name}-init-start', None),
-
-            "set-init-status": lambda: self._status[f'{name}-init-status'].set(),
-            "is-init-status": lambda: self._status[f'{name}-init-status'].is_set(),
-            "release-init-status": lambda: self._status[f'{name}-init-status'].clear(),
+            self.COMMANDS.GET_PERMISSION: lambda: True,
+            self.COMMANDS.GET_INIT_RECORD: lambda: json.loads(os.environ.get(f'{name}-init-record') or "{}"),
+            self.COMMANDS.RESET_INIT_RECORD: reset_init_record,
+            self.COMMANDS.CONTINUE_INIT_RECORD: lambda: self.reverse(name),
+            self.COMMANDS.SET_INIT_RECORD: set_init_record,
+            self.COMMANDS.BACKUP_INIT_RECORD: backup_init_record,
+            self.COMMANDS.WAIT_FOR_INIT_START: lambda: self._status[f'{name}-init-start'].wait(),
+            self.COMMANDS.SET_INIT_START: lambda: self._status[f'{name}-init-start'].set(),
+            self.COMMANDS.RELEASE_INIT_START: lambda: self._status.pop(f'{name}-init-start', None),
+            self.COMMANDS.SET_INIT_STATUS: lambda: self._status[f'{name}-init-status'].set(),
+            self.COMMANDS.IS_INIT_STATUS: lambda: self._status[f'{name}-init-status'].is_set(),
+            self.COMMANDS.RELEASE_INIT_STATUS: lambda: self._status[f'{name}-init-status'].clear(),
         }
         action = order['action']
         if action in actions:
