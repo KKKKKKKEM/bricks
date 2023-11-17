@@ -73,5 +73,9 @@ class MySpider(air.Spider):
 
 
 if __name__ == '__main__':
-    spider = MySpider(concurrency=10, task_queue=RedisQueue())
+    spider = MySpider(
+        concurrency=10,
+        task_queue=RedisQueue(),
+        proxy=""
+    )
     spider.run()

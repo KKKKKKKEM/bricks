@@ -1191,8 +1191,10 @@ end
             def main(message):
                 # 上报状态
                 if message['data'] == "collect-status":
-                    self.redis_db.hset(self.name2key(name, 'report'),
-                                       mapping={const.MACHINE_ID: target.dispatcher.running})
+                    self.redis_db.hset(
+                        self.name2key(name, 'report'),
+                        mapping={const.MACHINE_ID: target.dispatcher.running}
+                    )
 
             pubsub = self.redis_db.pubsub()
             pubsub.subscribe(**{channel: main})
@@ -1284,14 +1286,16 @@ end
             }
 
         def set_init_record():
-            self.redis_db.hset(self.name2key(name, 'record'), mapping=json.loads(json.dumps(order['record'], default=str)))
+            self.redis_db.hset(self.name2key(name, 'record'),
+                               mapping=json.loads(json.dumps(order['record'], default=str)))
 
         def backup_init_record():
             dst = self.name2key(name, 'history')
             src = self.name2key(name, 'record')
             record = order['record']
             self.redis_db.delete(dst, src)
-            self.redis_db.hset(dst, mapping=json.loads(json.dumps({**record, "finish": str(datetime.datetime.now())}, default=str)))
+            self.redis_db.hset(dst, mapping=json.loads(
+                json.dumps({**record, "finish": str(datetime.datetime.now())}, default=str)))
             history_ttl = order.get('ttl')
             history_ttl and self.redis_db.expire(dst, history_ttl)
 
