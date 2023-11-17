@@ -355,8 +355,8 @@ class Spider(Pangu):
             try:
                 fettle = prepared.func(*prepared.args, **prepared.kwargs)
 
-            except signals.Wait:
-                time.sleep(1)
+            except signals.Wait as sig:
+                time.sleep(sig.duration)
 
             except signals.Success:
 
