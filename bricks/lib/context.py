@@ -21,9 +21,11 @@ class Node:
             self,
             root: Callable = None,
             prev: Optional['Node'] = None,
+            callback: Optional[Callable] = None
     ):
         self._prev = prev
         self.root = root
+        self.callback = callback
 
     @property
     def prev(self):
@@ -45,12 +47,15 @@ class Flow(Context):
     _next: Node
 
     def __init__(self, form: str, target=None, **kwargs) -> None:
+        self.callback = None
         super().__init__(form, target, **kwargs)
         self.doing: deque = deque([self])
         self.pending: deque = deque([])
         self.signpost = 0
 
     def _set_next(self, value):
+        if isinstance(value, Node):
+            value = value.root
         self._next = Node(value, self.next)
 
     next: Node = property(
@@ -88,12 +93,81 @@ class Flow(Context):
         for k, v in attrs.items():
             setattr(self, k, v)
 
-        if "next" not in attrs and self.next.root in self.flows:
-            self.next = self.flows[self.next.root]
+        if "next" not in attrs:
+
+            if self.next.root in self.flows:
+                node = self.flows[self.next.root]
+
+            elif self.next.root is None:
+                node = Node()
+
+            elif self.signpost == 0:
+                node = self.next.prev
+                while node and node.root not in self.flows:
+                    node = node.prev
+            else:
+                node = Node()
+
+            self.next = node
 
     def rollback(self):
         self._next = self.next.prev
         return self
+
+    def branch(self, attrs: dict = None, rollback=False, submit=True):
+        """
+        当前线程分支, 执行完当前 flow 之后就会执行这个分支
+
+        :param attrs:
+        :param rollback:
+        :param submit:
+        :return:
+        """
+        attrs = attrs or {}
+        context = self.copy()
+        for k, v in attrs.items(): setattr(context, k, v)
+        rollback and context.rollback()
+        submit and self.pending.append(context)
+        return context
+
+    def background(self, attrs: dict = None, rollback=False, action="active"):
+        """
+        后台分支
+
+        submit 会抢占 worker / active 不会, 但是主任务不会等待他执行完毕, 类似后台守护任务
+        这个 context 会被提交至调度器, 可能被其他线程获取到
+
+        :param action: submit / active
+        :param attrs:
+        :param rollback:
+        :return:
+        """
+        from bricks.core import dispatch, genesis
+        assert self.target and isinstance(self.target, genesis.Pangu), \
+            "The 'target' should be an instance of bricks.core.genesis.Pangu or an instance of its subclasses."
+        context = self.branch(attrs, rollback, False)
+        if action == "submit":
+            fun = self.target.submit
+        else:
+            fun = self.target.active
+
+        future = fun(dispatch.Task(context.next, [context]), timeout=-1)
+        context.future = future
+        return context
+
+    def retry(self):
+        raise NotImplementedError
+
+    def success(self, shutdown=False):
+        raise NotImplementedError
+
+    def failure(self, shutdown=False):
+        raise NotImplementedError
+
+    def __copy__(self):
+        return self.__class__(**self.__dict__)
+
+    copy = __copy__
 
 
 class Error(Context):
