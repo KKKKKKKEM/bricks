@@ -17,15 +17,16 @@ class MySpider(air.Spider):
         super().before_start()
 
     def before_request(self, context: Context):
-        print(context.seeds)
         if "done" not in context.seeds:
+            # 切换去做点别的事情
             context.flow({"next": self.do_someting})
             raise signals.Switch
 
     @staticmethod
     def do_someting(context: Context):
         context.seeds['done'] = 1
-        context.flow()
+        # 回滚回去
+        context.rollback()
 
     def make_seeds(self, context: Context, **kwargs):
         for i in range(10):
@@ -61,5 +62,5 @@ class MySpider(air.Spider):
 
 
 if __name__ == '__main__':
-    spider = MySpider(concurrency=1)
+    spider = MySpider(concurrency=10)
     spider.run(task_name="all")

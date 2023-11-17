@@ -51,7 +51,6 @@ class Flow(Context):
         super().__init__(form, target, **kwargs)
         self.doing: deque = deque([self])
         self.pending: deque = deque([])
-        self.signpost = 0
 
     def _set_next(self, value):
         if isinstance(value, Node):
@@ -98,20 +97,23 @@ class Flow(Context):
             if self.next.root in self.flows:
                 node = self.flows[self.next.root]
 
-            elif self.next.root is None:
-                node = Node()
-
-            elif self.signpost == 0:
-                node = self.next.prev
-                while node and node.root not in self.flows:
-                    node = node.prev
             else:
                 node = Node()
 
             self.next = node
 
-    def rollback(self):
-        self._next = self.next.prev
+    def rollback(self, recursion=True):
+        """
+        回滚节点
+
+        :param recursion: 为真的话, 会回滚至节点存在于 flows, 如果一直不存在, 就会置为 Node(None), 否则只返回上一级
+        :return:
+        :rtype:
+        """
+        node = self.next.prev
+        while recursion and node and node.root not in self.flows:
+            node = node.prev
+        self._next = node
         return self
 
     def branch(self, attrs: dict = None, rollback=False, submit=True):
