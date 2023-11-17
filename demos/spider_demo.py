@@ -27,14 +27,14 @@ class MySpider(air.Spider):
     def before_request(self, context: Context):
         if "done" not in context.seeds:
             # 切换去做点别的事情
-            context.flow({"next": self.do_someting})
+            context.flow({"next": self.do_something})
             raise signals.Switch
         if context.seeds['id'] == 5:
             time.sleep(10)
             raise signals.Failure
 
     @staticmethod
-    def do_someting(context: Context):
+    def do_something(context: Context):
         context.seeds['done'] = 1
         # 回滚回去
         context.rollback()
@@ -53,8 +53,8 @@ class MySpider(air.Spider):
         # time.sleep(5)
         yield context.seeds
 
-    def item_pipline(self, context: Context):
-        super().item_pipline(context)
+    def item_pipeline(self, context: Context):
+        super().item_pipeline(context)
         # context2 = context.background(
         #     {
         #         "next": lambda name: (time.sleep(1), print(name)),

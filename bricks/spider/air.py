@@ -192,7 +192,7 @@ class Spider(Pangu):
             success = int(init_record.setdefault('success', 0))
 
             # 初始化模式: ignore/reset/continue
-            init_mode = self.get_attr('init.mode')
+            # init_mode = self.get_attr('init.mode')
             # 初始化总数量阈值 -> 大于这个数量停止初始化
             init_total_size = self.get_attr('init.total.size', math.inf)
             # 当前初始化总量阈值 -> 大于这个数量停止初始化
@@ -335,8 +335,8 @@ class Spider(Pangu):
             self.on_consume: self.on_seeds,
             self.on_seeds: self.on_request,
             self.on_request: self.on_response,
-            self.on_response: self.on_pipline,
-            self.on_pipline: None
+            self.on_response: self.on_pipeline,
+            self.on_pipeline: None
         }
         context = Context(target=self, flows=flows, **kwargs)
         return context
@@ -694,7 +694,7 @@ class Spider(Pangu):
 
         return wrapper
 
-    def on_pipline(self, context: Context):
+    def on_pipeline(self, context: Context):
         """
         管道中
 
@@ -702,7 +702,7 @@ class Spider(Pangu):
         :return:
         """
         items: Items = context.items
-        callback: Callable = items.callback or self.item_pipline
+        callback: Callable = items.callback or self.item_pipeline
         prepared = pandora.prepare(
             func=callback,
             args=[items],
@@ -734,10 +734,10 @@ class Spider(Pangu):
         else:
             prepared.func(*prepared.args, **prepared.kwargs)
 
-    def _when_on_pipline(self, raw_method):  # noqa
+    def _when_on_pipeline(self, raw_method):  # noqa
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
-            context.form = const.BEFORE_PIPLINE
+            context.form = const.BEFORE_PIPELINE
             events.Event.invoke(context)
 
             prepared = pandora.prepare(
@@ -760,7 +760,7 @@ class Spider(Pangu):
                 }
             )
             prepared.func(*prepared.args, **prepared.kwargs)
-            context.form = const.AFTER_PIPLINE
+            context.form = const.AFTER_PIPELINE
             events.Event.invoke(context)
             context.flow()
 
@@ -775,5 +775,5 @@ class Spider(Pangu):
     def parse(self, context: Context):
         raise NotImplementedError
 
-    def item_pipline(self, context: Context):
+    def item_pipeline(self, context: Context):
         context.items and logger.debug(context.items)

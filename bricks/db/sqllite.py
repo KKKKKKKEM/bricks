@@ -7,7 +7,7 @@ import json
 import sqlite3
 
 
-class SqLlite:
+class SqlLite:
 
     def __init__(self, name, structure: dict):
         sqlite3.register_adapter(bool, int)
@@ -19,7 +19,7 @@ class SqLlite:
 
         self._db = sqlite3.connect(":memory:", detect_types=sqlite3.PARSE_DECLTYPES)
 
-        self._colums = []
+        self._columns = []
         self.name = name
         self.structure: dict = structure
         self.create_table(name, structure)
@@ -45,7 +45,7 @@ class SqLlite:
     def find(self, query: str = None, fields: list = None, skip=0, limit=1000):
         if not fields:
             fields = ["*"]
-            header = self.colums
+            header = self.columns
         else:
             header = fields
 
@@ -84,13 +84,13 @@ class SqLlite:
             cur.execute(sql)
 
     @property
-    def colums(self):
-        if not self._colums:
+    def columns(self):
+        if not self._columns:
             with self.cursor() as cur:
                 cur.execute(f'pragma table_info({self.name})')
-                self._colums = [i[1] for i in cur.fetchall()]
+                self._columns = [i[1] for i in cur.fetchall()]
 
-        return self._colums
+        return self._columns
 
     def run_sql(self, sql: str):
         with self.cursor() as cur:

@@ -108,7 +108,7 @@ return ret
         script = self.register_script(lua)
         return script(keys=keys, args=args)
 
-    def aquire_lock(self, name, timeout=3600 * 24, block=False, prefix='', value=None, db_num=None):
+    def acquire_lock(self, name, timeout=3600 * 24, block=False, prefix='', value=None, db_num=None):
         """
         获取redis全局锁
 

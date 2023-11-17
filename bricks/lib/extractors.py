@@ -27,7 +27,7 @@ class Rule:
             pre_script: Optional[Callable] = None,
             post_script: Optional[Callable] = None,
             is_array: Optional[bool] = None,
-            aquire: bool = True,
+            acquire: bool = True,
             options: Optional[dict] = None,
             const: Optional[Any] = ...,
             default: Optional[Any] = None,
@@ -38,7 +38,7 @@ class Rule:
         self.pre_script = pre_script
         self.post_script = post_script
         self.is_array = is_array
-        self.allow_nulls = aquire
+        self.allow_nulls = acquire
         self.options = options or {}
         self.const = const
         self.default = default

@@ -1320,12 +1320,12 @@ end
 
 
 if __name__ == '__main__':
-    def my_callbak(msg):
+    def my_callback(msg):
         print(msg)
         rds.redis_db.hset(rds.name2key("xxx", "report"), const.MACHINE_ID, "0")
 
 
     rds = RedisQueue()
-    # rds.command("xxx", {"action": rds.COMMANDS.RUN_SUBSCRIBE, "callback": my_callbak})
-    print(rds.command("xxx", {"action": rds.COMMANDS.GET_PERMISSION, "callback": my_callbak}))
+    # rds.command("xxx", {"action": rds.COMMANDS.RUN_SUBSCRIBE, "callback": my_callback})
+    print(rds.command("xxx", {"action": rds.COMMANDS.GET_PERMISSION, "callback": my_callback}))
     # time.sleep(5)
