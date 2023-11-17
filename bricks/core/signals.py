@@ -11,8 +11,18 @@ class Signal(Exception):
         return f"<{self.__class__.__name__} {self.__dict__}>"
 
 
-# 中断信号, 中断后续流程
+# 中断信号, 中断当前 flow 流程
+# 如当前 flow.next 为 函数 A, 在函数 A 内 raise Break, 则会中断函数 A 的执行, 并将 flow.next 设置为 None
+# 接下来不会再处理这个 flow
 class Break(Signal):
+    ...
+
+
+# 切换信号, 切换流程
+# 如当前 flow.next 为函数 A, 在函数 A 内使用 flow.flow("next": 函数 B), 然后 raise Switch
+# 那么接下来会调用 函数 B
+# 如果函数 B 内没有手动 flow 流转, 那么记下来就会执行函数 A
+class Switch(Signal):
     ...
 
 
@@ -22,7 +32,8 @@ class Exit(Signal):
 
 
 class Wait(Signal):
-    ...
+    def __init__(self, duration=1):
+        self.duration = duration
 
 
 class Empty(Signal):
@@ -30,10 +41,6 @@ class Empty(Signal):
 
 
 class Retry(Signal):
-    ...
-
-
-class End(Signal):
     ...
 
 
