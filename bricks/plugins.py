@@ -10,7 +10,25 @@ from typing import Callable
 from loguru import logger
 
 from bricks.core import signals
+from bricks.lib import proxies
 from bricks.spider.air import Context
+from bricks.utils import pandora
+
+
+def set_proxy(context: Context, timeout=None):
+    """
+    为请求设置代理
+
+    :param context:
+    :param timeout:
+    :return:
+    """
+    request = context.request
+    proxy = context.request.proxy or context.target.proxy
+    proxy_ = proxies.manager.get_proxy(*pandora.iterable(proxy), timeout=timeout)
+    request.proxies = proxy_.proxy
+    callable(proxy_.auth) and proxy_.auth(request)
+    proxies.manager.use_proxy(proxy_)
 
 
 def show_response(context: Context, handle: Callable = logger.debug, fmt: int = 0):
@@ -31,7 +49,7 @@ def show_response(context: Context, handle: Callable = logger.debug, fmt: int = 
             F"\033[34m[{request.method.upper()}]\033[0m",
             F"\033[33m[{request.retry}]\033[0m",
             F"\033[{response.ok and 32 or 31}m[{response.status_code or response.error}]\033[0m",
-            F"\033[37m[{request.proxy or threading.current_thread().name}]\033[0m",
+            F"\033[37m[{request.proxies or threading.current_thread().name}]\033[0m",
             F"\033[{response.ok and 35 or 31}m[{response.size}]\033[0m",
             F"{response.url or response.request.real_url}",
         ])

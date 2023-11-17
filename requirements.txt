@@ -4,3 +4,4 @@ lxml==4.9.3
 jsonpath==0.82.2
 w3lib==2.1.2
 curl_cffi==0.5.9
+redis==5.0.1

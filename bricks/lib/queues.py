@@ -17,6 +17,7 @@ from loguru import logger
 
 from bricks import const
 from bricks.core import genesis
+from bricks.db.redis_ import Redis
 from bricks.utils import pandora
 
 
@@ -590,8 +591,6 @@ class RedisQueue(TaskQueue):
     subscribe = True
 
     def __init__(self, host='127.0.0.1', password=None, port=6379, database=0, genre="set", **kwargs):
-
-        from bricks.db._redis import Redis  # noqa
 
         self.redis_db = Redis(
             host=host,

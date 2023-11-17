@@ -2,7 +2,9 @@
 # @Time    : 2023-11-13 19:41
 # @Author  : Kem
 # @Desc    :
+import collections
 import functools
+import itertools
 import threading
 from collections import defaultdict
 
@@ -35,6 +37,7 @@ class RegisteredEvents:
 
 
 class Event:
+    counter = collections.defaultdict(itertools.count)
 
     @classmethod
     def trigger(cls, context: Context):
@@ -104,16 +107,21 @@ class Event:
         for event in events:
 
             disposable = event.get("disposable", False)
-            index = event.get("index", None)
 
             if disposable:
                 container = REGISTERED_EVENTS.disposable
+                counter = cls.counter[f'{context.target}.{context.form}.disposable']
             else:
                 container = REGISTERED_EVENTS.permanent
-            if index:
-                container[context.target][context.form].insert(index, event)
-            else:
-                container[context.target][context.form].append(event)
+                counter = cls.counter[f'{context.target}.{context.form}.permanent']
+
+            if "index" not in event:
+                event["index"] = next(counter)
+
+            container[context.target][context.form].append(event)
+
+        REGISTERED_EVENTS.disposable[context.target][context.form].sort(key=lambda x: x["index"])
+        REGISTERED_EVENTS.permanent[context.target][context.form].sort(key=lambda x: x["index"])
 
 
 # 已注册事件

@@ -15,7 +15,7 @@ class MySpider(air.Spider):
 
     def before_start(self):
         # self.use(const.BEFORE_REQUEST, {"func": lambda context: print(context.request)})
-        # self.use(const.BEFORE_REQUEST, {"func": self.before_request})
+        self.use(const.BEFORE_REQUEST, {"func": plugins.set_proxy})
         self.use(
             const.AFTER_REQUEST,
             {"func": plugins.show_response},
@@ -74,8 +74,12 @@ class MySpider(air.Spider):
 
 if __name__ == '__main__':
     spider = MySpider(
-        concurrency=10,
+        concurrency=1,
         task_queue=RedisQueue(),
-        proxy=""
+        proxy={
+            "ref": "bricks.lib.proxies.CustomProxy",
+            "key": "127.0.0.1:7890",
+            "threshold": 5,
+        }
     )
     spider.run()

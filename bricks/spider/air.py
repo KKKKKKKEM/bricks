@@ -12,13 +12,14 @@ from typing import Optional, List, Union, Iterable, Callable
 
 from loguru import logger
 
-from bricks import const
+from bricks import const, plugins
 from bricks.core import dispatch, signals, events
 from bricks.core.genesis import Pangu
 from bricks.downloader import genesis, cffi
 from bricks.lib.context import Flow
 from bricks.lib.counter import FastWriteCounter
 from bricks.lib.items import Items
+from bricks.lib.proxies import manager
 from bricks.lib.queues import TaskQueue, LocalQueue, Item
 from bricks.lib.request import Request
 from bricks.lib.response import Response
@@ -28,35 +29,22 @@ IP_REGEX = re.compile(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+')
 
 
 class Context(Flow):
-    target: "Spider"
-    request: "Request"
-    response: "Response"
-    seeds: "Item"
-    items: "Items"
-    task_queue: "TaskQueue"
-    queue_name: "str"
-
     def __init__(
             self,
-            target,
+            target: "Spider",
             form: str = const.ON_CONSUME,
             **kwargs
 
     ) -> None:
+        self.request: Request = kwargs.pop("request", None)
+        self.response: Response = kwargs.pop("response", None)
+        self.seeds: Item = kwargs.pop("seeds", None)
+        self.items: Items = kwargs.pop("items", None)
+        self.task_queue: TaskQueue = kwargs.pop("task_queue", None)
+        self.queue_name: str = kwargs.pop("queue_name", None)
         super().__init__(form, target, **kwargs)
+        self.target: Spider = target
 
-    response: Response = property(
-        fget=lambda self: getattr(self, "_response", None),
-        fset=lambda self, value: setattr(self, "_response", pandora.ensure_type(value, Response)),
-        fdel=lambda self: setattr(self, "_response", None),
-        doc="rtype: Response"
-    )
-
-    request: Request = property(
-        fget=lambda self: getattr(self, "_request", None),
-        fset=lambda self, value: setattr(self, "_request", pandora.ensure_type(value, Request)),
-        fdel=lambda self: setattr(self, "_request", None)
-    )
     seeds: Item = property(
         fget=lambda self: getattr(self, "_seeds", None),
         fset=lambda self, value: setattr(self, "_seeds", pandora.ensure_type(value, Item)),
@@ -114,15 +102,12 @@ class Context(Flow):
         else:
             return self.branch({"request": obj, "next": self.target.on_request})
 
+    def clear_proxy(self):
+        manager.clear_proxy(self.request.proxy or self.target.proxy)
+        self.request.proxies = None
+
 
 class Spider(Pangu):
-    task_queue: TaskQueue
-    queue_name: str
-    downloader: genesis.Downloader
-    concurrency: int
-    survey: Union[dict, List[dict]]
-    forever: Optional[bool] = False
-    proxy: Optional[str] = ""
 
     def __init__(
             self,
@@ -131,21 +116,19 @@ class Spider(Pangu):
             downloader: Optional[Union[str, genesis.Downloader]] = None,
             task_queue: Optional[TaskQueue] = None,
             queue_name: Optional[str] = "",
-            proxy: Optional[str] = "",
+            proxy: Optional[dict] = None,
             forever: Optional[bool] = False,
             **kwargs
     ) -> None:
-        settings = {
-            "concurrency": concurrency,
-            "survey": survey,
-            "downloader": downloader or cffi.Downloader(),
-            "task_queue": LocalQueue() if not task_queue or survey else task_queue,
-            "proxy": proxy,
-            "queue_name": queue_name or self.__class__.__name__,
-            "forever": forever or False,
-        }
 
-        super().__init__(**settings, **kwargs)
+        self.concurrency = concurrency
+        self.survey = survey
+        self.downloader = downloader or cffi.Downloader()
+        self.task_queue = LocalQueue() if not task_queue or survey else task_queue
+        self.proxy = proxy
+        self.queue_name = queue_name or self.__class__.__name__
+        self.forever = forever
+        super().__init__(**kwargs)
         self._total_number_of_requests = FastWriteCounter()  # 发起请求总数量
         self._number_of_failure_requests = FastWriteCounter()  # 发起请求失败数量
 
@@ -516,8 +499,7 @@ class Spider(Pangu):
                 request.retry += 1
 
             if '$retry' not in options:
-                pass
-                # request.clear_proxies()
+                context.clear_proxy()
 
             else:
                 options.pop('$retry', None)
@@ -777,3 +759,8 @@ class Spider(Pangu):
 
     def item_pipeline(self, context: Context):
         context.items and logger.debug(context.items)
+
+    def before_start(self):
+        self.use(const.BEFORE_REQUEST, {"func": plugins.set_proxy, "index": math.inf})
+        self.use(const.AFTER_REQUEST, {"func": plugins.show_response}, {"func": plugins.is_success})
+        super().before_start()

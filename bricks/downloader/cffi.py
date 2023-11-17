@@ -39,7 +39,7 @@ class Downloader(genesis.Downloader):
 
         res = Response.make_response(request=request)
         options = {
-            'method': request.method,
+            'method': request.method.upper(),
             'headers': request.headers,
             'cookies': request.cookies,
             "data": self.parse_data(request)['data'],
@@ -47,7 +47,7 @@ class Downloader(genesis.Downloader):
             'auth': request.options.get('auth'),
             'timeout': 5 if request.timeout is ... else request.timeout,
             'allow_redirects': False,
-            'proxies': request.proxies,
+            'proxies': request.proxies and {"http": request.proxies, "https": request.proxies},  # noqa
             'verify': request.options.get("verify", False),
             'impersonate': request.options.get("impersonate") or self.impersonate,
         }

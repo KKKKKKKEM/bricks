@@ -10,12 +10,7 @@ import json
 import time
 from typing import Union, List
 
-try:
-    import redis
-
-except ImportError:
-    raise ImportError("如需体验 Bricks.Redis, 请先试用 bricks[redis] 进行安装")
-
+import redis
 from loguru import logger
 
 from bricks.utils import pandora

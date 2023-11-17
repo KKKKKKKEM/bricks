@@ -133,7 +133,7 @@ def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, name
 
         # 没有传这个参数, 并且也没有可以备选的 annotations  -> 报错
         else:
-            raise TypeError(f"missing required argument: {name}")
+            raise TypeError(f"missing required argument: {name}, signature: {dict(parameters)}")
         if param.kind in [inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD]:
             new_args.append(value)
 

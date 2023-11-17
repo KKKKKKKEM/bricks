@@ -28,7 +28,7 @@ class Request:
             timeout: int = ...,
             allow_redirects: bool = True,
             proxies: Optional[str] = None,
-            proxy: Optional[str] = "",
+            proxy: Optional[dict] = None,
             status_codes: Optional[dict] = ...,
             retry: int = 0,
             max_retry: int = 5,
