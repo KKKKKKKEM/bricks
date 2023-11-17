@@ -2,9 +2,11 @@
 # @Time    : 2023-11-15 18:17
 # @Author  : Kem
 # @Desc    :
+import time
 
-from bricks import Request, const
+from bricks import Request, const, plugins
 from bricks.core import signals
+from bricks.lib.queues import RedisQueue
 from bricks.spider import air
 from bricks.spider.air import Context
 
@@ -13,7 +15,13 @@ class MySpider(air.Spider):
 
     def before_start(self):
         # self.use(const.BEFORE_REQUEST, {"func": lambda context: print(context.request)})
-        self.use(const.BEFORE_REQUEST, {"func": self.before_request})
+        # self.use(const.BEFORE_REQUEST, {"func": self.before_request})
+        self.use(
+            const.AFTER_REQUEST,
+            {"func": plugins.show_response},
+            {"func": plugins.is_success},
+        )
+
         super().before_start()
 
     def before_request(self, context: Context):
@@ -21,6 +29,9 @@ class MySpider(air.Spider):
             # 切换去做点别的事情
             context.flow({"next": self.do_someting})
             raise signals.Switch
+        if context.seeds['id'] == 5:
+            time.sleep(10)
+            raise signals.Failure
 
     @staticmethod
     def do_someting(context: Context):
@@ -62,5 +73,5 @@ class MySpider(air.Spider):
 
 
 if __name__ == '__main__':
-    spider = MySpider(concurrency=10)
-    spider.run(task_name="all")
+    spider = MySpider(concurrency=10, task_queue=RedisQueue())
+    spider.run()
