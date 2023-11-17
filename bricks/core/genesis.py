@@ -4,6 +4,7 @@
 # @Desc    :
 import functools
 import inspect
+import time
 
 from loguru import logger
 
@@ -11,6 +12,7 @@ from bricks import const
 from bricks.core import signals, dispatch
 from bricks.core.events import Event
 from bricks.lib.context import Flow, Context
+from bricks.utils import pandora
 
 
 class MetaClass(type):
@@ -83,7 +85,7 @@ class Chaos(metaclass=MetaClass):
             try:
                 self.before_start()
 
-            except signals.Break:
+            except (signals.Failure, signals.Success):
                 logger.debug(f'[{const.BEFORE_START}] 任务被中断')
                 return
 
@@ -153,31 +155,64 @@ class Pangu(Chaos):
     def __init__(self, **kwargs) -> None:
         for k, v in kwargs.items():
             self.set_attr(k, v, nx=True)
-        else:
-            self.dispatcher = dispatch.Dispatcher(max_workers=self.get_attr("concurrency", 1))
-            self.dispatcher.start()
+
+        self.dispatcher = dispatch.Dispatcher(max_workers=self.get_attr("concurrency", 1))
 
     def on_consume(self, context: Flow):  # noqa
         context.next.root == self.on_consume and context.flow()
 
         while True:
-            stuff = context.produce()
+            stuff: Flow = context.produce()
             if stuff is None: return
 
             while stuff.next and callable(stuff.next):
-                # print(stuff.next)
-                prev = stuff.next
-                if not inspect.iscoroutinefunction(stuff.next):
-                    product = [stuff.next(stuff)]
-                else:
-                    product = stuff.next(stuff)
+                try:
+                    prepared = pandora.prepare(
+                        func=stuff.next.root,
+                        annotations={type(stuff): stuff},
+                        namespace={"context": stuff}
+                    )
 
-                for _ in product:
-                    print(stuff.next, _)
+                    product = prepared.func(*prepared.args, **prepared.kwargs)
+                    if not inspect.isgeneratorfunction(prepared.func):
+                        product = [product]
 
-                if prev == stuff.next and prev.root not in stuff.flows:
-                    stuff.flow({"next": None})
-                    break
+                    for output in product:
+                        callable(stuff.callback) and pandora.invoke(
+                            stuff.callback,
+                            args=[output],
+                            annotations={type(stuff): stuff},
+                            namespace={"context": stuff}
+                        )
+
+                # 中断信号
+                except signals.Break:
+                    stuff.next = None
+
+                # 退出信号
+                except signals.Exit:
+                    return
+
+                # 等待信号
+                except signals.Wait as sig:
+                    time.sleep(sig.duration)
+                    return
+
+                except signals.Switch:
+                    pass
+
+                except signals.Retry:
+                    stuff.retry()
+
+                except signals.Success:
+                    stuff.success(shutdown=True)
+
+                except signals.Failure:
+                    stuff.failure(shutdown=True)
+
+                except signals.Signal as e:
+                    logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
+                    raise e
 
     def submit(self, task: dispatch.Task, timeout=None) -> dispatch.Task:
         return self.dispatcher.submit_task(task=task, timeout=timeout)
@@ -185,7 +220,7 @@ class Pangu(Chaos):
     def active(self, task: dispatch.Task, timeout=-1) -> dispatch.Task:
         return self.dispatcher.active_task(task=task, timeout=timeout)
 
-    def use(self, form, *events):
+    def use(self, form: str, *events):
         context = Context(form=form, target=self)
         Event.register(context, *events)
 
