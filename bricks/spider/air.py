@@ -2,7 +2,6 @@
 # @Time    : 2023-11-15 14:09
 # @Author  : Kem
 # @Desc    :
-import copy
 import datetime
 import functools
 import inspect
@@ -82,58 +81,18 @@ class Context(Flow):
         fdel=lambda self: setattr(self, "_queue_name", None)
     )
 
-    def success(self):
-        return self.task_queue.remove(self.queue_name, self.seeds)
+    def success(self, shutdown=False):
+        ret = self.task_queue.remove(self.queue_name, self.seeds)
+        shutdown and self.flow({"next": None})
+        return ret
 
     def retry(self):
         self.flow({"next": self.target.on_retry})
 
-    def failure(self):
-        return self.task_queue.remove(self.queue_name, self.seeds, backup='failure')
-
-    def stop(self):
-        self.flow({"next": None})
-
-    def __copy__(self):
-        return self.__class__(**self.__dict__)
-
-    def branch(self, attrs: dict = None, rollback=False, submit=True):
-        """
-        当前线程分支, 执行完当前 context 之后就会执行这个分支
-
-        :param attrs:
-        :param rollback:
-        :param submit:
-        :return:
-        """
-        attrs = attrs or {}
-        context = copy.copy(self)
-        for k, v in attrs.items(): setattr(context, k, v)
-        rollback and context.rollback()
-        submit and self.pending.append(context)
-        return context
-
-    def background(self, attrs: dict = None, rollback=False, action="active"):
-        """
-        后台分支
-
-        submit 会抢占 worker / active 不会, 但是主任务不会等待他执行完毕, 类似后台守护任务
-        这个 context 会被提交至调度器, 可能被其他线程获取到
-
-        :param action: submit / active
-        :param attrs:
-        :param rollback:
-        :return:
-        """
-        context = self.branch(attrs, rollback, False)
-        if action == "submit":
-            fun = self.target.submit
-        else:
-            fun = self.target.active
-
-        future = fun(dispatch.Task(context.next, [context]), timeout=-1)
-        context.future = future
-        return context
+    def failure(self, shutdown=False):
+        ret = self.task_queue.remove(self.queue_name, self.seeds, backup='failure')
+        shutdown and self.flow({"next": None})
+        return ret
 
     def submit(self, obj: Union[Request, Item, dict], call_later=False) -> "Context":
         """
@@ -238,6 +197,11 @@ class Spider(Pangu):
 
             # 当前已经初始化的数量, 从 0 开始
             count = 0
+            counter = {
+                "total": total,
+                "success": success,
+                "count": count,
+            }
 
             if init_mode == 'ignore':
                 # 忽略模式, 什么都不做
@@ -257,32 +221,33 @@ class Spider(Pangu):
             else:
                 # 默认模式, 队列内种子数量小于等于阈值, 且 get-permission 成功才进行初始化
                 init_threshold = self.get_attr('init.threshold', 0)
-                if task_queue.size(queue_name) < init_threshold:
+                if task_queue.size(queue_name) <= init_threshold:
                     logger.debug("[开始投放] 默认模式, 开始投放")
                 else:
-                    logger.debug("[停止投放] 默认模式, 队列内种子大于阈值: {}")
+                    logger.debug(f"[停止投放] 默认模式, 队列内种子大于阈值: {init_threshold}")
 
-            context = self.get_context(task_queue=task_queue, queue_name=queue_name)
+            def generator(context: Context):
+                for seeds in pandora.invoke(
+                        func=self.make_seeds,
+                        kwargs={"record": init_record},
+                        annotations={Context: context},
+                        namespace={'context': context},
+                ):
+                    seeds = pandora.iterable(seeds)
 
-            for seeds in pandora.invoke(
-                    func=self.make_seeds,
-                    kwargs={
-                        "record": init_record,
-                    },
-                    annotations={Context: context},
-                    namespace={'context': context},
-            ):
-                seeds = pandora.iterable(seeds)
+                    seeds = seeds[0:min([
+                        init_count_size - count,
+                        init_total_size - total,
+                        init_success_size - success,
+                        len(seeds)
+                    ])]
 
-                seeds = seeds[0:min([
-                    init_count_size - count,
-                    init_total_size - total,
-                    init_success_size - success,
-                    len(seeds)
-                ])]
+                    context.seeds = seeds
+                    yield seeds
+                else:
+                    context.flow({"next": None})
 
-                context.seeds = seeds
-
+            def consumer(seeds, context: Context = None):
                 fettle = pandora.invoke(
                     func=self.put_seeds,
                     kwargs={
@@ -298,13 +263,13 @@ class Spider(Pangu):
                 )
 
                 size = len(pandora.iterable(seeds))
-                total += size
-                success += fettle
-                count += fettle
-                output = f"[投放成功] 总量: {success}/{total}; 当前: {fettle}/{size}; 目标: {queue_name}"
+                counter['total'] += size
+                counter['success'] += fettle
+                counter['count'] += fettle
+                output = f"[投放成功] 总量: {counter['success']}/{counter['total']}; 当前: {fettle}/{size}; 目标: {queue_name}"
                 init_record.update({
-                    "total": total,
-                    "success": success,
+                    "total": counter['total'],
+                    "success": counter['success'],
                     "output": output,
                     "update": str(datetime.datetime.now()),
                 })
@@ -312,14 +277,20 @@ class Spider(Pangu):
                 task_queue.command(queue_name, {"action": "set-init-record", "record": init_record})
                 logger.debug(output)
 
-                if total >= init_total_size or count >= init_count_size or success >= init_success_size:
-                    init_record.update(finish=str(datetime.datetime.now()))
-                    return init_record
+                if (
+                        counter['total'] >= init_total_size or
+                        counter['count'] >= init_count_size or
+                        counter['success'] >= init_success_size
+                ):
+                    raise signals.Exit
 
-            else:
-                init_record.update(finish=str(datetime.datetime.now()))
-                task_queue.command(queue_name, {"action": "backup-init-record", "record": init_record})
-                return init_record
+            context_ = self.get_context(task_queue=task_queue, queue_name=queue_name)
+            context_.flow({"next": generator, "callback": consumer})
+            self.on_consume(context_)
+            init_record.update(finish=str(datetime.datetime.now()))
+            task_queue.command(queue_name, {"action": "backup-init-record", "record": init_record})
+            return init_record
+
         finally:
             task_queue.command(queue_name, {"action": "release-init-status"})
 
@@ -366,6 +337,7 @@ class Spider(Pangu):
         :return:
         """
         count = 0
+        self.dispatcher.start()
         task_queue: TaskQueue = self.get_attr("spider.task_queue", self.task_queue)
         queue_name: str = self.get_attr("spider.queue_name", self.queue_name)
         output = time.time()
@@ -385,6 +357,28 @@ class Spider(Pangu):
 
             except signals.Wait:
                 time.sleep(1)
+
+            except signals.Success:
+
+                if context.form == const.BEFORE_GET_SEEDS:
+                    time.sleep(1)
+
+                elif context.form == const.AFTER_GET_SEEDS:
+                    context.success()
+
+                else:
+                    raise
+
+            except signals.Failure:
+
+                if context.form == const.BEFORE_GET_SEEDS:
+                    time.sleep(1)
+
+                elif context.form == const.AFTER_GET_SEEDS:
+                    pass
+
+                else:
+                    raise
 
             except signals.Empty:
                 # 判断是否应该停止爬虫
@@ -423,6 +417,7 @@ class Spider(Pangu):
                     count += 1
 
     def run_all(self):
+        self.dispatcher.start()
         init_task = dispatch.Task(func=self.run_init)
         self.active(init_task)
         task_queue: TaskQueue = self.get_attr("init.task_queue", self.task_queue)
@@ -447,16 +442,7 @@ class Spider(Pangu):
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = const.BEFORE_GET_SEEDS
-            try:
-                events.Event.invoke(context)
-            except (signals.Success, signals.Failure, signals.Break):
-                # 获取种子前收到 Success 信号 -> 告诉外面叫他等
-                raise signals.Wait
-
-            except signals.Signal as e:
-                logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
-                raise e
-
+            events.Event.invoke(context)
             count = self.dispatcher.max_workers - self.dispatcher.running
             kwargs.setdefault('count', 1 if count <= 0 else count)
             prepared = pandora.prepare(
@@ -472,22 +458,7 @@ class Spider(Pangu):
             if ret is None: raise signals.Empty
 
             context.form = const.AFTER_GET_SEEDS
-
-            try:
-                events.Event.invoke(context)
-            except signals.Success:
-                # 获取种子后收到 Success 信号 -> 删除种子, 代表不爬取, 重新拿一个新的
-                context.success()
-                raise signals.Retry
-
-            except signals.Failure:
-                # 获取种子后收到 Failure 信号 -> 删除种子, 代表暂时不爬取, 重新拿一个新的
-                context.failure()
-                raise signals.Retry
-
-            except signals.Signal as e:
-                logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
-                raise e
+            events.Event.invoke(context)
 
             return ret
 
@@ -548,24 +519,6 @@ class Spider(Pangu):
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = const.BEFORE_RETRY
-            try:
-                events.Event.invoke(context)
-            except signals.Success:
-                # 重试前收到 Success 信号 -> 不重试了
-                context.success()
-                context.flow({"next": None})
-                return
-
-            except signals.Failure:
-                # 重试前收到 Failure 信号 -> 暂时不重试了
-                context.failure()
-                context.flow({"next": None})
-                return
-
-            except signals.Signal as e:
-                logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
-                raise e
-
             prepared = pandora.prepare(
                 func=raw_method,
                 args=args,
@@ -581,25 +534,7 @@ class Spider(Pangu):
                     "seeds": context.seeds,
                 }
             )
-
-            try:
-                ret = prepared.func(*prepared.args, **prepared.kwargs)
-            except signals.Success:
-                # 重试前收到 Success 信号 -> 不重试了
-                context.success()
-                context.flow({"next": None})
-                return
-
-            except signals.Failure:
-                # 重试前收到 Failure 信号 -> 暂时不重试了
-                context.failure()
-                context.flow({"next": None})
-                return
-
-            except signals.Signal as e:
-                logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
-                raise e
-
+            ret = prepared.func(*prepared.args, **prepared.kwargs)
             context.flow({"next": self.on_request})
             return ret
 
@@ -629,23 +564,7 @@ class Spider(Pangu):
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = const.BEFORE_REQUEST
-            try:
-                events.Event.invoke(context)
-            except signals.Success:
-                # 请求前收到 Success 信号 -> 不请求了
-                context.success()
-                context.flow({"next": None})
-                return
-
-            except signals.Failure:
-                # 请求前收到 Failure 信号 -> 暂时不请求了
-                context.failure()
-                context.flow({"next": None})
-                return
-
-            except signals.Signal as e:
-                logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
-                raise e
+            events.Event.invoke(context)
 
             prepared = pandora.prepare(
                 func=raw_method,
@@ -665,29 +584,7 @@ class Spider(Pangu):
             response: Response = prepared.func(*prepared.args, **prepared.kwargs)
 
             context.form = const.AFTER_REQUEST
-            try:
-                events.Event.invoke(context)
-            except signals.Success:
-                # 请求前收到 Success 信号 -> 不请求了
-                context.success()
-                context.flow({"next": None})
-                return
-
-            except signals.Failure:
-                # 请求前收到 Failure 信号 -> 暂时不请求了
-                context.failure()
-                context.flow({"next": None})
-                return
-
-            except signals.Retry:
-                # 请求前收到 Failure 信号 -> 重试
-                context.retry()
-                return
-
-            except signals.Signal as e:
-                logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
-                raise e
-
+            events.Event.invoke(context)
             context.flow({"response": response})
 
         return wrapper
@@ -753,35 +650,17 @@ class Spider(Pangu):
                     "seeds": context.seeds,
                 }
             )
-            try:
-                products = prepared.func(*prepared.args, **prepared.kwargs)
-                if not inspect.isgenerator(products):
-                    products = [products]
+            products = prepared.func(*prepared.args, **prepared.kwargs)
+            if not inspect.isgenerator(products):
+                products = [products]
 
-                for index, product in enumerate(products):
+            for index, product in enumerate(products):
 
-                    if index == 0:
-                        context.flow({"items": product})
-                    else:
-                        # 有多个 items, 直接开一个新 branch
-                        context.branch({"items": product})
-
-            except signals.Success:
-                context.success()
-                context.flow({"next": None})
-                return
-
-            except signals.Failure:
-                context.failure()
-                context.flow({"next": None})
-                return
-
-            except signals.Retry:
-                context.retry()
-                return
-
-            except signals.Signal as e:
-                logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
+                if index == 0:
+                    context.flow({"items": product})
+                else:
+                    # 有多个 items, 直接开一个新 branch
+                    context.branch({"items": product})
 
         return wrapper
 
@@ -829,26 +708,7 @@ class Spider(Pangu):
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = const.BEFORE_PIPLINE
-            try:
-                events.Event.invoke(context)
-            except signals.Success:
-                # 请求前收到 Success 信号 -> 不请求了
-                context.success()
-                context.flow({"next": None})
-                return
-
-            except signals.Failure:
-                # 请求前收到 Failure 信号 -> 暂时不请求了
-                context.failure()
-                context.flow({"next": None})
-                return
-            except signals.Retry:
-                context.retry()
-                return
-
-            except signals.Signal as e:
-                logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
-                raise e
+            events.Event.invoke(context)
 
             prepared = pandora.prepare(
                 func=raw_method,
@@ -872,29 +732,7 @@ class Spider(Pangu):
             response: Response = prepared.func(*prepared.args, **prepared.kwargs)
             context.response = response
             context.form = const.AFTER_PIPLINE
-            try:
-                events.Event.invoke(context)
-            except signals.Success:
-                # 请求前收到 Success 信号 -> 不请求了
-                context.success()
-                context.flow({"next": None})
-                return
-
-            except signals.Failure:
-                # 请求前收到 Failure 信号 -> 暂时不请求了
-                context.failure()
-                context.flow({"next": None})
-                return
-
-            except signals.Retry:
-                # 请求前收到 Failure 信号 -> 重试
-                context.retry()
-                return
-
-            except signals.Signal as e:
-                logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
-                raise e
-
+            events.Event.invoke(context)
             context.flow()
 
         return wrapper
