@@ -68,10 +68,11 @@ class Chaos(metaclass=MetaClass):
         """
         args = args or []
         kwargs = kwargs or {}
-        task_name = task_name or self.get_attr("task_name")
+
         if not task_name:
             return
 
+        self.set_attr("task_name", task_name)
         method = getattr(self, f'run_{task_name}', None)
         if method:
             return method(*args, **kwargs)
