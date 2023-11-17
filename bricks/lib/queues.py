@@ -603,25 +603,8 @@ class RedisQueue(TaskQueue):
         self.host = host
         self.database = database
         self.genre = genre
-        self._locks = set()
-        self._status = {}
-
-    def get(self, name, **kwargs):
-        """
-        从 `name` 中获取种子
-
-        :param name:
-        :param kwargs:
-        :return:
-        """
-
-        pop_key = self.name2key(name, 'current')
-        add_key = self.name2key(name, 'temp')
-        action = kwargs.pop('action', 'zpopmin')
-        db_num = kwargs.get('db_num', self.database)
-        keys = [pop_key, add_key]
-        args = [db_num, kwargs.get('count', 1), action, self.genre]
-        lua = """
+        self.scripts = {
+            "get": self.redis_db.register_script("""
 local function pop_item(ktype, key)
     if ktype == "zset" then
         return redis.call(ARGV[3], key, ARGV[2])
@@ -690,41 +673,8 @@ return add_item(add_key_type, add_key, temp)
 
 
 
-"""
-        script = self.redis_db.register_script(lua)
-        items = script(keys=keys, args=args)
-        return items
-
-    def put(self, name, *values, **kwargs):
-        """
-        投放种子至 `name`
-
-        :param name:
-        :param values:
-        :param kwargs:
-        :return:
-        """
-        db_num = kwargs.get('db_num', self.database)
-        genre = kwargs.get('genre', self.genre)
-        priority = kwargs.get('priority', False)
-        if type(priority) is not int:
-            score = "max" if not priority else "min"
-        else:
-            score = priority
-
-        name = self.name2key(name, kwargs.pop('qtypes', "current"))
-        if not name or not values:
-            return 0
-
-        name = name['current'] if isinstance(name, dict) else name
-        values = self._to_str(*values)
-
-        if db_num is None:
-            return self.redis_db.sadd(name, *values)
-        else:
-            keys = [db_num, name, genre, score]
-            args = [*values]
-            lua = """
+"""),
+            "put": self.redis_db.register_script("""
 redis.replicate_commands()
 redis.call("select", KEYS[1])
 
@@ -760,31 +710,8 @@ else
 end
 return success
 
-            """
-            script = self.redis_db.register_script(lua)
-            count = script(keys=keys, args=args)
-            return count
-
-    def replace(self, name, old, new, **kwargs):
-        """
-        从 `name` 中 pop 出 `count` 个值出来
-
-        :param new: 新
-        :param old: 旧
-        :param name: 队列名称
-
-        :return:
-        """
-        if not name:
-            return
-
-        db_num = kwargs.get('db_num', self.database)
-        name = self.name2key(name, kwargs.pop('qtypes', "current"))
-
-        db_num = self.database if db_num is None else db_num
-        keys = [name]
-        args = [db_num, *[j for i in zip(pandora.iterable(old), pandora.iterable(new)) for j in self._to_str(*i)]]
-        lua = '''
+            """),
+            "replace": self.redis_db.register_script('''
 redis.replicate_commands()
 redis.call("select", ARGV[1])
 local ret = 0
@@ -846,25 +773,8 @@ end
 return ret
 
 
-'''
-        script = self.redis_db.register_script(lua)
-        return script(keys=keys, args=args)
-
-    def remove(self, name, *values, **kwargs):
-        """
-        从 `name` 中移除 `values`
-
-        :param name:
-        :param values:
-        :return:
-        """
-        backup = kwargs.pop('backup', "") or ""
-        if backup: backup = self.name2key(name, backup)
-
-        name = self.name2key(name, kwargs.pop('qtypes', "temp"))
-        keys = [kwargs.pop('db_num', self.database), name, backup]
-        args = self._to_str(*values)
-        lua = """
+'''),
+            "remove": self.redis_db.register_script("""
 redis.replicate_commands()
 redis.call("select", KEYS[1])
 
@@ -898,18 +808,8 @@ else
 end
 
 
-        """
-        script = self.redis_db.register_script(lua)
-        return script(keys=keys, args=args)
-
-    def clear(self, *names, qtypes=('current', 'temp', "lock", "record", "failure"), **kwargs):
-        db_num = kwargs.pop('db_num', self.database)
-        keys = [db_num]
-        args = [self.name2key(name, qtype) for name in names for qtype in qtypes]
-        if db_num is None:
-            return self.redis_db.delete(*args)
-
-        lua = """
+        """),
+            "clear": self.redis_db.register_script("""
         redis.replicate_commands()
         redis.call("select", KEYS[1])
 
@@ -919,27 +819,8 @@ end
             success= success + redis.call("DEL",ARGV[i])
         end
         return success
-                """
-        script = self.redis_db.register_script(lua)
-        return script(keys=keys, args=args)
-
-    def size(self, *names, qtypes=('current', 'temp', "failure"), **kwargs):
-        """
-        获取 `names` 的队列大小
-
-        :param qtypes:
-        :param names:
-        :return:
-        """
-        db_num = kwargs.pop('db_num', self.database)
-        if not names:
-            return 0
-        else:
-            names = [self.name2key(name, _) for name in names for _ in qtypes]
-        db_num = self.database if db_num is None else db_num
-        keys = [*names]
-        args = [db_num]
-        lua = """
+                """),
+            "size": self.redis_db.register_script("""
 redis.replicate_commands()
 redis.call("select", ARGV[1])
 local count = 0
@@ -956,27 +837,8 @@ for flag = 1, #KEYS do
 end
 return count
 
-        """
-        script = self.redis_db.register_script(lua)
-        ret = script(keys=keys, args=args)
-        return ret
-
-    def reverse(self, name, **kwargs):
-        """
-        队列翻转
-
-        :param name:
-        :return:
-        """
-        db_num = kwargs.pop('db_num', self.database)
-        qtypes = kwargs.pop('qtypes', None) or ["temp", "failure"]
-        dest = self.name2key(name, 'current')
-
-        db_num = self.database if db_num is None else db_num
-        keys = [dest, db_num]
-        args = [self.name2key(name, qtype) for qtype in pandora.iterable(qtypes)]
-
-        lua = f"""
+        """),
+            "reverse": self.redis_db.register_script(f"""
 redis.replicate_commands()
 redis.call("select", KEYS[2])
 
@@ -992,25 +854,8 @@ for flag = 1, #ARGV do
 end
 return true
 
-"""
-        script = self.redis_db.register_script(lua)
-
-        return script(keys=keys, args=args) or False
-
-    def merge(self, dest, *queues, **kwargs):
-        """
-        队列合并
-
-        :param dest:
-        :param queues:
-        :return:
-        """
-        db_num = kwargs.pop('db_num', self.database)
-        db_num = self.database if db_num is None else db_num
-        keys = [dest, db_num]
-        args = queues
-
-        lua = f"""
+"""),
+            "merge": self.redis_db.register_script(f"""
 redis.replicate_commands()
 redis.call("select", KEYS[2])
 
@@ -1026,36 +871,8 @@ for flag = 1, #ARGV do
 end
 return true
 
-"""
-        script = self.redis_db.register_script(lua)
-
-        return script(keys=keys, args=args) or False
-
-    def smart_reverse(self, name, timeout=1, **kwargs):
-        """
-        智能翻转队列
-        翻转队列的条件是:
-        1. failure 有值 -> 将 failure 放入 current
-        2. failure 无值, temp 有值, running == 0 -> 将 temp 放入 current
-
-        :param name:
-        :param timeout:
-        :return:
-        """
-
-        # 告诉其他机器开始上报状态
-        self.redis_db.publish(f'{name}-subscribe', "collect-status")
-        # 等在上报完成
-        time.sleep(timeout)
-
-        db_num = kwargs.pop('db_num', self.database)
-        keys = [self.name2key(name, i) for i in ('current', 'temp', 'failure', 'status', 'report')]
-        args = [
-            db_num or self.database,
-            str(datetime.datetime.now())
-        ]
-
-        lua = """
+"""),
+            "smart_reverse": self.redis_db.register_script("""
 
 redis.replicate_commands()
 
@@ -1142,10 +959,240 @@ else
 end
 
 
-"""
+"""),
+            "get_permision": self.redis_db.register_script("""
+            redis.replicate_commands()
+            local current_key = KEYS[1]
+            local temp_key = KEYS[2]
+            local failure_key = KEYS[3]
+            local record_key = KEYS[4]
+            local machine_id = ARGV[1]
+            
+            local function get_queue_info(queue_name)
+                local ret = {}
+                local queue_type = redis.call("TYPE", queue_name).ok
+                local queue_size
+                if queue_type == "zset" then
+                    queue_size = redis.call("zcard", queue_name)
+                else
+                    queue_size = redis.call("scard", queue_name)
+                end 
+                
+                ret['type'] = queue_type
+                ret['size'] = queue_size
+                ret['name'] = queue_name
+                return ret
+            end
+            
+            local queue_size = get_queue_info(current_key).size + get_queue_info(failure_key).size + get_queue_info(temp_key).size
+            if queue_size > 0 then
+                -- 1. 存在种子 
+                local is_record_key_exists = redis.call("EXISTS", record_key)
+                if is_record_key_exists == 1 then
+                    -- 1.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 -> true
+                    local identifier = redis.call("HGET", record_key, "identifier")
+                    if machine_id == identifier then
+                        return true
+                    else
+                        return "非初始化机器"
+                    end
+                else
+                    -- 1.2 不存在 record -> false
+                    return "存在未消耗完毕的种子"
+                end
+            
+            else
+                -- 2. 不存在种子
+                -- 2.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 -> true
+                local is_record_key_exists = redis.call("EXISTS", record_key)
+                if is_record_key_exists == 1 then
+                    -- 1.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 -> true
+                    local identifier = redis.call("HGET", record_key, "identifier")
+                    if machine_id == identifier then
+                        return true
+                    else
+                        return "非初始化机器"
+                    end
+                else
+                    -- 不存在 record -> true
+                    return true
+                end
+            
+            
+            end
+            
+            """),
+        }
 
-        script = self.redis_db.register_script(lua)
-        ret = script(keys=keys, args=args)
+    def get(self, name, **kwargs):
+        """
+        从 `name` 中获取种子
+
+        :param name:
+        :param kwargs:
+        :return:
+        """
+
+        pop_key = self.name2key(name, 'current')
+        add_key = self.name2key(name, 'temp')
+        action = kwargs.pop('action', 'zpopmin')
+        db_num = kwargs.get('db_num', self.database)
+        keys = [pop_key, add_key]
+        args = [db_num, kwargs.get('count', 1), action, self.genre]
+        items = self.scripts["get"](keys=keys, args=args)
+        return items
+
+    def put(self, name, *values, **kwargs):
+        """
+        投放种子至 `name`
+
+        :param name:
+        :param values:
+        :param kwargs:
+        :return:
+        """
+        db_num = kwargs.get('db_num', self.database)
+        genre = kwargs.get('genre', self.genre)
+        priority = kwargs.get('priority', False)
+        if type(priority) is not int:
+            score = "max" if not priority else "min"
+        else:
+            score = priority
+
+        name = self.name2key(name, kwargs.pop('qtypes', "current"))
+        if not name or not values:
+            return 0
+
+        name = name['current'] if isinstance(name, dict) else name
+        values = self._to_str(*values)
+
+        if db_num is None:
+            return self.redis_db.sadd(name, *values)
+        else:
+            keys = [db_num, name, genre, score]
+            args = [*values]
+            count = self.scripts["put"](keys=keys, args=args)
+            return count
+
+    def replace(self, name, old, new, **kwargs):
+        """
+        从 `name` 中 pop 出 `count` 个值出来
+
+        :param new: 新
+        :param old: 旧
+        :param name: 队列名称
+
+        :return:
+        """
+        if not name:
+            return
+
+        db_num = kwargs.get('db_num', self.database)
+        name = self.name2key(name, kwargs.pop('qtypes', "current"))
+
+        db_num = self.database if db_num is None else db_num
+        keys = [name]
+        args = [db_num, *[j for i in zip(pandora.iterable(old), pandora.iterable(new)) for j in self._to_str(*i)]]
+        return self.scripts["replace"](keys=keys, args=args)
+
+    def remove(self, name, *values, **kwargs):
+        """
+        从 `name` 中移除 `values`
+
+        :param name:
+        :param values:
+        :return:
+        """
+        backup = kwargs.pop('backup', "") or ""
+        if backup: backup = self.name2key(name, backup)
+
+        name = self.name2key(name, kwargs.pop('qtypes', "temp"))
+        keys = [kwargs.pop('db_num', self.database), name, backup]
+        args = self._to_str(*values)
+        return self.scripts["remove"](keys=keys, args=args)
+
+    def clear(self, *names, qtypes=('current', 'temp', "lock", "record", "failure"), **kwargs):
+        db_num = kwargs.pop('db_num', self.database)
+        keys = [db_num]
+        args = [self.name2key(name, qtype) for name in names for qtype in qtypes]
+        if db_num is None:
+            return self.redis_db.delete(*args)
+
+        return self.scripts["clear"](keys=keys, args=args)
+
+    def size(self, *names, qtypes=('current', 'temp', "failure"), **kwargs):
+        """
+        获取 `names` 的队列大小
+
+        :param qtypes:
+        :param names:
+        :return:
+        """
+        db_num = kwargs.pop('db_num', self.database)
+        if not names:
+            return 0
+        else:
+            names = [self.name2key(name, _) for name in names for _ in qtypes]
+        db_num = self.database if db_num is None else db_num
+        keys = [*names]
+        args = [db_num]
+        return self.scripts["size"](keys=keys, args=args)
+
+    def reverse(self, name, **kwargs):
+        """
+        队列翻转
+
+        :param name:
+        :return:
+        """
+        db_num = kwargs.pop('db_num', self.database)
+        qtypes = kwargs.pop('qtypes', None) or ["temp", "failure"]
+        dest = self.name2key(name, 'current')
+
+        db_num = self.database if db_num is None else db_num
+        keys = [dest, db_num]
+        args = [self.name2key(name, qtype) for qtype in pandora.iterable(qtypes)]
+        return self.scripts["reverse"](keys=keys, args=args) or False
+
+    def merge(self, dest, *queues, **kwargs):
+        """
+        队列合并
+
+        :param dest:
+        :param queues:
+        :return:
+        """
+        db_num = kwargs.pop('db_num', self.database)
+        db_num = self.database if db_num is None else db_num
+        keys = [dest, db_num]
+        args = queues
+        return self.scripts["merge"](keys=keys, args=args) or False
+
+    def smart_reverse(self, name, timeout=1, **kwargs):
+        """
+        智能翻转队列
+        翻转队列的条件是:
+        1. failure 有值 -> 将 failure 放入 current
+        2. failure 无值, temp 有值, running == 0 -> 将 temp 放入 current
+
+        :param name:
+        :param timeout:
+        :return:
+        """
+
+        # 告诉其他机器开始上报状态
+        self.redis_db.publish(f'{name}-subscribe', "collect-status")
+        # 等在上报完成
+        time.sleep(timeout)
+
+        db_num = kwargs.pop('db_num', self.database)
+        keys = [self.name2key(name, i) for i in ('current', 'temp', 'failure', 'status', 'report')]
+        args = [
+            db_num or self.database,
+            str(datetime.datetime.now())
+        ]
+
+        ret = self.scripts["smart_reverse"](keys=keys, args=args)
         return ret == 1
 
     def is_empty(self, name, timeout=5, threshold=0, **kwargs):
@@ -1216,78 +1263,17 @@ end
             """
             keys = [self.name2key(name, i) for i in ['current', 'temp', 'failure', 'record']]
             args = [const.MACHINE_ID]
-            lua = """
-            redis.replicate_commands()
-            local current_key = KEYS[1]
-            local temp_key = KEYS[2]
-            local failure_key = KEYS[3]
-            local record_key = KEYS[4]
-            local machine_id = ARGV[1]
-            
-            local function get_queue_info(queue_name)
-                local ret = {}
-                local queue_type = redis.call("TYPE", queue_name).ok
-                local queue_size
-                if queue_type == "zset" then
-                    queue_size = redis.call("zcard", queue_name)
-                else
-                    queue_size = redis.call("scard", queue_name)
-                end 
-                
-                ret['type'] = queue_type
-                ret['size'] = queue_size
-                ret['name'] = queue_name
-                return ret
-            end
-            
-            local queue_size = get_queue_info(current_key).size + get_queue_info(failure_key).size + get_queue_info(temp_key).size
-            if queue_size > 0 then
-                -- 1. 存在种子 
-                local is_record_key_exists = redis.call("EXISTS", record_key)
-                if is_record_key_exists == 1 then
-                    -- 1.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 -> true
-                    local identifier = redis.call("HGET", record_key, "identifier")
-                    if machine_id == identifier then
-                        return true
-                    else
-                        return "非初始化机器"
-                    end
-                else
-                    -- 1.2 不存在 record -> false
-                    return "存在未消耗完毕的种子"
-                end
-            
-            else
-                -- 2. 不存在种子
-                -- 2.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 -> true
-                local is_record_key_exists = redis.call("EXISTS", record_key)
-                if is_record_key_exists == 1 then
-                    -- 1.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 -> true
-                    local identifier = redis.call("HGET", record_key, "identifier")
-                    if machine_id == identifier then
-                        return true
-                    else
-                        return "非初始化机器"
-                    end
-                else
-                    -- 不存在 record -> true
-                    return true
-                end
-            
-            
-            end
-            
-            """
-            script = self.redis_db.register_script(lua)
-            ret = script(keys=keys, args=args)
+            ret = self.scripts["get_permision"](keys=keys, args=args)
             return {
                 "state": ret == 1,
                 "msg": ret
             }
 
         def set_init_record():
-            self.redis_db.hset(self.name2key(name, 'record'),
-                               mapping=json.loads(json.dumps(order['record'], default=str)))
+            self.redis_db.hset(
+                self.name2key(name, 'record'),
+                mapping=json.loads(json.dumps(order['record'], default=str))
+            )
 
         def backup_init_record():
             dst = self.name2key(name, 'history')
