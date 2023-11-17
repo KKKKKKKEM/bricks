@@ -464,6 +464,9 @@ class LocalQueue(TaskQueue):
         self._locks = defaultdict(threading.Lock)
         self._status = defaultdict(threading.Event)
 
+    def __str__(self):
+        return f'<LocalQueue>'
+
     def size(self, *names: str, qtypes: tuple = ('current', 'temp', 'failure'), **kwargs) -> int:
         if not names:
             return 0
@@ -1315,7 +1318,7 @@ end
             return actions[action]()
 
     def __str__(self):
-        return f'<bricks.lib.queues.RedisQueue [ HOST: {self.host} | DB: {self.database} ]>'
+        return f'<RedisQueue [ HOST: {self.host} | DB: {self.database} ]>'
 
 
 if __name__ == '__main__':

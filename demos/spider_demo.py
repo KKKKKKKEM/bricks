@@ -6,6 +6,7 @@ import time
 
 from bricks import Request, const, plugins
 from bricks.core import signals
+from bricks.db.redis_ import Redis
 from bricks.lib.queues import RedisQueue
 from bricks.spider import air
 from bricks.spider.air import Context
@@ -73,13 +74,21 @@ class MySpider(air.Spider):
 
 
 if __name__ == '__main__':
+    redis = Redis()
+    redis.add("proxy", "127.0.0.1:7890")
     spider = MySpider(
         concurrency=1,
         task_queue=RedisQueue(),
+        # proxy={
+        #     "ref": "bricks.lib.proxies.CustomProxy",
+        #     "key": "127.0.0.1:7890",
+        #     "threshold": 5,
+        # },
         proxy={
-            "ref": "bricks.lib.proxies.CustomProxy",
-            "key": "127.0.0.1:7890",
-            "threshold": 5,
-        }
+            "ref": "bricks.lib.proxies.RedisProxy",
+            "key": "proxy",
+            "threshold": 5,  # 代理使用阈值, 用五次就归还
+            # "recover": False  # 回收函数
+        },
     )
     spider.run()

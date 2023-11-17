@@ -56,7 +56,7 @@ class Proxy:
             self,
             proxy: Optional[str] = None,
             auth: Optional[Callable] = None,
-            recover: Optional[Callable] = None,
+            recover: Optional[Callable] = ...,
             threshold: int = math.inf,
             derive: "BaseProxy" = None,
             rkey: str = None
@@ -108,7 +108,7 @@ class BaseProxy(metaclass=MyMeta):
             username: str = None,
             password: str = None,
             auth: Optional[Callable] = None,
-            recover: Optional[Callable] = None,
+            recover: Optional[Callable] = ...,
             threshold: int = math.inf
     ):
         self.scheme = scheme
@@ -159,7 +159,7 @@ class ApiProxy(BaseProxy):
             threshold: int = math.inf,
             options: Optional[dict] = None,
             handle_response: Optional[Callable] = None,
-            recover: Optional[Callable] = None
+            recover: Optional[Callable] = ...
     ):
         """
         直接从 API 获取代理的代理类型
@@ -174,7 +174,7 @@ class ApiProxy(BaseProxy):
         :param handle_response: 处理响应的回调, 默认使用匹配
         :param recover: 处理响应的回调, 默认使用匹配
         """
-        self.api = key
+        self.key = key
         self.options = options
         self.downloader = cffi.Downloader()
         self.handle_response = handle_response or (lambda res: IP_EXTRACT_RULE.findall(res.text))
@@ -186,17 +186,18 @@ class ApiProxy(BaseProxy):
             password=password,
             auth=auth,
             threshold=threshold,
-            recover=recover or (lambda proxy: self.container.put(proxy.proxy))
+            recover=(lambda proxy: self.container.put(proxy.proxy)) if recover is ... else recover
         )
 
     def get(self, timeout=None) -> Proxy:
         # 这个要加锁, 不然多线程会都去提取代理
         with self.lock:
-            if self.container.empty():
+            try:
+                proxy = self.container.get(timeout=1)
+            except queue.Empty:
                 self.fetch(timeout)
-
-            proxy = self.container.get(timeout=timeout)
-            return Proxy(proxy)
+            else:
+                return Proxy(proxy)
 
     def fetch(self, timeout=None):
         if timeout is None:
@@ -206,9 +207,9 @@ class ApiProxy(BaseProxy):
         options.setdefault("method", "GET")
         start = time.time()
         while True:
-            res = self.downloader.fetch({"url": self.api, **options})
+            res = self.downloader.fetch({"url": self.key, **options})
             if not res:
-                logger.warning("请求 API 代理失败, 等待重试中...")
+                logger.warning(f"[获取代理失败]  ref: {self}")
                 if time.time() - start > timeout: raise TimeoutError
                 time.sleep(1)
 
@@ -217,19 +218,22 @@ class ApiProxy(BaseProxy):
                 for proxy in proxies: self.container.put(proxy)
                 return
 
+    def __str__(self):
+        return f'<ApiProxy key={self.key}| options={self.options}>'
+
 
 class RedisProxy(BaseProxy):
 
     def __init__(
             self,
             key: str,
-            options: dict,
+            options: dict = None,
             scheme: str = "http",
             username: str = None,
             password: str = None,
             auth: Optional[Callable] = None,
             threshold: int = math.inf,
-            recover: Optional[Callable] = None
+            recover: Optional[Callable] = ...
     ):
         """
         从 redis 的 key 里面提取代理
@@ -242,15 +246,16 @@ class RedisProxy(BaseProxy):
         :param auth: 鉴权回调
         :param threshold: 代理使用阈值, 到达阈值会回收
         """
+        self.options = options or {}
         self.key = key
-        self.container = Redis(**options)
+        self.container = Redis(**self.options)
         super().__init__(
             scheme=scheme,
             username=username,
             password=password,
             auth=auth,
             threshold=threshold,
-            recover=recover or (lambda proxy: self.container.add(self.key, proxy.proxy))
+            recover=(lambda proxy: self.container.add(self.key, proxy.proxy)) if recover is ... else recover
         )
 
     def get(self, timeout=None) -> Proxy:
@@ -262,9 +267,13 @@ class RedisProxy(BaseProxy):
             proxy = self.container.pop(self.key)
             if not proxy:
                 if time.time() - start > timeout: raise TimeoutError
+                logger.warning(f'[获取代理失败] ref: {self}')
                 time.sleep(1)
             else:
                 return Proxy(proxy)
+
+    def __str__(self):
+        return f'<RedisProxy [key: {self.key} | options:{self.options}]>'
 
 
 class CustomProxy(BaseProxy):
