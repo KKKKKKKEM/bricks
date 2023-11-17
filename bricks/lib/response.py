@@ -106,8 +106,6 @@ class Response:
 
     def json(self, **kwargs):
         """
-        .. versionadded:: 2.2
-
         Deserialize a JSON document to a Python object.
         """
         return pandora.json_or_eval(self.text, **kwargs) if isinstance(self.text, str) else self.text

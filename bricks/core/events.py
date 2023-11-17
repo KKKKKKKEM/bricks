@@ -43,7 +43,7 @@ class Event:
 
         """
 
-        for event in cls.aquire(context):
+        for event in cls.acquire(context):
             yield cls._call(event, context)
 
     @classmethod
@@ -58,7 +58,7 @@ class Event:
             pass
 
     @classmethod
-    def aquire(cls, context: Context):
+    def acquire(cls, context: Context):
         disposable = []
         for event in REGISTERED_EVENTS.disposable[context.target][context.form]:
             match = event.get("match", None)
