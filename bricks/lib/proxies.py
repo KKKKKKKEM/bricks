@@ -35,6 +35,7 @@ class MetaClass(type):
     def __new__(cls, name, bases, dct):  # noqa
         def wrapper(raw_method):
             def inner(self, *args, **kwargs):
+                self: BaseProxy
                 proxy = raw_method(self, *args, **kwargs)
                 proxy.proxy = self.fmt(proxy=proxy.proxy)
                 proxy.auth = self.auth

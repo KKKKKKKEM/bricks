@@ -116,6 +116,10 @@ def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, name
         if name in kwargs:
             value = kwargs[name]
 
+        # 参数在 namespace 里面 -> 从 namespace 里面取
+        elif param.name in namespace:
+            value = namespace[param.name]
+
         # 参数类型存在于 annotations, 并且还可以从 args 里面取值, 并且刚好取到的对应的值也是当前类型 -> 直接从 args 里面取
         elif param.annotation in annotations and index < len(args) and type(args[index]) == param.annotation:
             value = args[index]
@@ -130,20 +134,16 @@ def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, name
             value = args[index]
             index += 1
 
-        elif param.name in namespace:
-
-            value = namespace[param.name]
-
         elif param.default != inspect.Parameter.empty:
             continue
 
         # 没有传这个参数, 并且也没有可以备选的 annotations  -> 报错
         else:
             raise TypeError(f"missing required argument: {name}, signature: {dict(parameters)}")
-        if param.kind in [inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD]:
+        if param.kind in [inspect.Parameter.POSITIONAL_ONLY]:
             new_args.append(value)
 
-        if param.kind == inspect.Parameter.KEYWORD_ONLY:
+        if param.kind in [inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD]:
             new_kwargs[name] = value
 
     return prepared(func=func, args=new_args, kwargs=new_kwargs)

@@ -16,7 +16,7 @@ Bricks 拥有以下特性
 安装
 
 ```
-pip install bricks-py==0.0.1
+pip install bricks-py
 ```
 
 # 简单上手
