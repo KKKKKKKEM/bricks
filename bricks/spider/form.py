@@ -234,6 +234,7 @@ class Init(Node):
 class Config:
     spider: List[Union[Download, Parse, Task, Pipeline]] = None
     init: Optional[List[Init]] = None
+    events: Optional[Dict[str, List[Task]]] = None
 
 
 class Spider(air.Spider):
@@ -447,3 +448,8 @@ class Spider(air.Spider):
             )
 
         node.success and context.success()
+
+    def before_start(self):
+        super().before_start()
+        for form, events in (self.config.events or {}).items():
+            self.use(form, *events)

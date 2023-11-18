@@ -2,8 +2,7 @@
 # @Time    : 2023-11-18 14:16
 # @Author  : Kem
 # @Desc    :
-
-
+from bricks import const
 from bricks.spider import form
 
 
@@ -13,7 +12,7 @@ class MySpider(form.Spider):
     def config(self) -> form.Config:
         return form.Config(
             init=[
-                form.Init(func=lambda: {"id": 1})
+                form.Init(func=lambda: [{"id": i} for i in range(10)])
             ],
             spider=[
                 form.Download(
@@ -30,7 +29,12 @@ class MySpider(form.Spider):
                     func=lambda context: print(context.items),
                     success=True
                 )
-            ]
+            ],
+            events={
+                const.BEFORE_REQUEST: [
+                    form.Task(func=lambda: print('要开始请求啦!'))
+                ]
+            }
         )
 
 
