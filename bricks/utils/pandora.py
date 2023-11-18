@@ -134,6 +134,9 @@ def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, name
 
             value = namespace[param.name]
 
+        elif param.default != inspect.Parameter.empty:
+            continue
+
         # 没有传这个参数, 并且也没有可以备选的 annotations  -> 报错
         else:
             raise TypeError(f"missing required argument: {name}, signature: {dict(parameters)}")

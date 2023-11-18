@@ -5,6 +5,8 @@
 from collections import deque
 from typing import Callable, Optional
 
+from bricks.core import signals
+
 
 class Context:
 
@@ -170,6 +172,10 @@ class Flow(Context):
         future = fun(dispatch.Task(context.next, [context]), timeout=-1)
         context.future = future
         return context
+
+    def switch(self, attrs: dict = None):
+        self.flow(attrs)
+        raise signals.Switch
 
     def retry(self):
         raise NotImplementedError

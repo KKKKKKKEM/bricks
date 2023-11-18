@@ -7,6 +7,8 @@ import functools
 import itertools
 import threading
 from collections import defaultdict
+from dataclasses import dataclass
+from typing import Optional, Union, Callable
 
 from loguru import logger
 
@@ -36,7 +38,17 @@ class RegisteredEvents:
         self.lock.release()
 
 
-class Event:
+@dataclass
+class Task:
+    func: callable
+    args: Optional[list] = None
+    kwargs: Optional[dict] = None
+    match: Union[Callable, str] = None
+    index: Optional[int] = None
+    disposable: Optional[bool] = False
+
+
+class EventManger:
     counter = collections.defaultdict(itertools.count)
 
     @classmethod
@@ -64,7 +76,7 @@ class Event:
     def acquire(cls, context: Context):
         disposable = []
         for event in REGISTERED_EVENTS.disposable[context.target][context.form]:
-            match = event.get("match", None)
+            match = event.match
             if callable(match) and match(context):
                 disposable.append(event)
                 yield event
@@ -79,7 +91,7 @@ class Event:
             REGISTERED_EVENTS.disposable[context.target][context.form].remove(event)
 
         for event in REGISTERED_EVENTS.permanent[context.target][context.form]:
-            match = event.get("match", None)
+            match = event.match
             if callable(match) and match(context):
                 yield event
             elif isinstance(match, str) and eval(match, globals(), {"context": context}):
@@ -88,11 +100,11 @@ class Event:
                 yield event
 
     @classmethod
-    def _call(cls, event, context: Context):
+    def _call(cls, event: Task, context: Context):
 
-        func = event['func']
-        args = event.get('args') or []
-        kwargs = event.get('kwargs') or {}
+        func = event.func
+        args = event.args or []
+        kwargs = event.kwargs or {}
         return pandora.invoke(
             func,
             args=args,
@@ -102,11 +114,13 @@ class Event:
         )
 
     @classmethod
-    def register(cls, context: Context, *events: dict):
+    def register(cls, context: Context, *events: Task):
 
         for event in events:
+            if isinstance(event, dict):
+                event = Task(**event)
 
-            disposable = event.get("disposable", False)
+            disposable = event.disposable
 
             if disposable:
                 container = REGISTERED_EVENTS.disposable
@@ -115,13 +129,12 @@ class Event:
                 container = REGISTERED_EVENTS.permanent
                 counter = cls.counter[f'{context.target}.{context.form}.permanent']
 
-            if "index" not in event:
-                event["index"] = next(counter)
+            event.index = next(counter) if event.index is None else event.index
 
             container[context.target][context.form].append(event)
 
-        REGISTERED_EVENTS.disposable[context.target][context.form].sort(key=lambda x: x["index"])
-        REGISTERED_EVENTS.permanent[context.target][context.form].sort(key=lambda x: x["index"])
+        REGISTERED_EVENTS.disposable[context.target][context.form].sort(key=lambda x: x.index)
+        REGISTERED_EVENTS.permanent[context.target][context.form].sort(key=lambda x: x.index)
 
 
 # 已注册事件

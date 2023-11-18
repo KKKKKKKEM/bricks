@@ -3,14 +3,14 @@
 # @Author  : Kem
 # @Desc    :
 import functools
-import inspect
 import time
+from typing import Union
 
 from loguru import logger
 
 from bricks import const
 from bricks.core import signals, dispatch
-from bricks.core.events import Event
+from bricks.core.events import EventManger, Task
 from bricks.lib.context import Flow, Context
 from bricks.utils import pandora
 
@@ -121,7 +121,7 @@ class Chaos(metaclass=MetaClass):
                 kwargs=kwargs
             )
 
-            Event.invoke(context)
+            EventManger.invoke(context)
 
             ret = raw_method(*args, **kwargs)
             return ret
@@ -144,7 +144,7 @@ class Chaos(metaclass=MetaClass):
                 args=args,
                 kwargs=kwargs
             )
-            Event.invoke(context)
+            EventManger.invoke(context)
             ret = raw_method(*args, **kwargs)
             return ret
 
@@ -224,9 +224,9 @@ class Pangu(Chaos):
     def active(self, task: dispatch.Task, timeout=-1) -> dispatch.Task:
         return self.dispatcher.active_task(task=task, timeout=timeout)
 
-    def use(self, form: str, *events):
+    def use(self, form: str, *events: Union[Task, dict]):
         context = Context(form=form, target=self)
-        Event.register(context, *events)
+        EventManger.register(context, *events)
 
 
 if __name__ == '__main__':

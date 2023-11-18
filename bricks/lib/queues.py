@@ -568,7 +568,7 @@ class LocalQueue(TaskQueue):
 
         def wait_for_init_start():
 
-            while not self._status[f'{name}-init-start'].is_set() and self.is_empty(name):
+            while not self._status[f'{name}-init-status'].is_set() and self.is_empty(name):
                 time.sleep(1)
                 logger.debug('等待初始化开始')
 

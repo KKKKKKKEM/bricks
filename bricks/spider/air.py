@@ -12,7 +12,7 @@ from typing import Optional, List, Union, Iterable, Callable
 
 from loguru import logger
 
-from bricks import const, plugins
+from bricks import const
 from bricks.core import dispatch, signals, events
 from bricks.core.genesis import Pangu
 from bricks.downloader import genesis, cffi
@@ -131,6 +131,16 @@ class Spider(Pangu):
         super().__init__(**kwargs)
         self._total_number_of_requests = FastWriteCounter()  # 发起请求总数量
         self._number_of_failure_requests = FastWriteCounter()  # 发起请求失败数量
+
+    @property
+    def flows(self):
+        return {
+            self.on_consume: self.on_seeds,
+            self.on_seeds: self.on_request,
+            self.on_request: self.on_response,
+            self.on_response: self.on_pipeline,
+            self.on_pipeline: None
+        }
 
     def run_init(self):
         """
@@ -295,7 +305,9 @@ class Spider(Pangu):
         task_queue.continue_(queue_name, maxsize=maxsize, interval=1)
         return task_queue.put(queue_name, *pandora.iterable(seeds), priority=priority, **kwargs)
 
-    def get_context(self, flows: dict, **kwargs) -> Context:
+    def get_context(self, flows: dict = None, **kwargs) -> Context:
+        flows = self.flows if flows is None else flows
+
         context = Context(target=self, flows=flows, **kwargs)
         return context
 
@@ -313,13 +325,6 @@ class Spider(Pangu):
 
         while True:
             context = self.get_context(
-                {
-                    self.on_consume: self.on_seeds,
-                    self.on_seeds: self.on_request,
-                    self.on_request: self.on_response,
-                    self.on_response: self.on_pipeline,
-                    self.on_pipeline: None
-                },
                 task_queue=task_queue,
                 queue_name=queue_name
             )
@@ -433,7 +438,7 @@ class Spider(Pangu):
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = const.BEFORE_GET_SEEDS
-            events.Event.invoke(context)
+            events.EventManger.invoke(context)
             count = self.dispatcher.max_workers - self.dispatcher.running
             kwargs.setdefault('count', 1 if count <= 0 else count)
             prepared = pandora.prepare(
@@ -449,7 +454,7 @@ class Spider(Pangu):
             if ret is None: raise signals.Empty
 
             context.form = const.AFTER_GET_SEEDS
-            events.Event.invoke(context)
+            events.EventManger.invoke(context)
 
             return ret
 
@@ -554,7 +559,7 @@ class Spider(Pangu):
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = const.BEFORE_REQUEST
-            events.Event.invoke(context)
+            events.EventManger.invoke(context)
             context.form = const.ON_REQUEST
             prepared = pandora.prepare(
                 func=raw_method,
@@ -576,7 +581,7 @@ class Spider(Pangu):
             context.form = const.AFTER_REQUEST
             context.response = response
 
-            events.Event.invoke(context)
+            events.EventManger.invoke(context)
             context.flow()
 
         return wrapper
@@ -700,7 +705,7 @@ class Spider(Pangu):
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = const.BEFORE_PIPELINE
-            events.Event.invoke(context)
+            events.EventManger.invoke(context)
             context.form = const.ON_PIPELINE
             prepared = pandora.prepare(
                 func=raw_method,
@@ -723,7 +728,7 @@ class Spider(Pangu):
             )
             prepared.func(*prepared.args, **prepared.kwargs)
             context.form = const.AFTER_PIPELINE
-            events.Event.invoke(context)
+            events.EventManger.invoke(context)
             context.flow()
 
         return wrapper
@@ -741,6 +746,10 @@ class Spider(Pangu):
         context.items and logger.debug(context.items)
 
     def before_start(self):
+
         self.use(const.BEFORE_REQUEST, {"func": plugins.set_proxy, "index": math.inf})
         self.use(const.AFTER_REQUEST, {"func": plugins.show_response}, {"func": plugins.is_success})
         super().before_start()
+
+
+from bricks import plugins
