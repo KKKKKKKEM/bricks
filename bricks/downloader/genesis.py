@@ -108,11 +108,16 @@ class Downloader(metaclass=genesis.MetaClass):
         # 获取请求头中的Content-Type
         content_type = request.headers.get('Content-Type', '').lower()
 
-        if not content_type or not isinstance(request.body, str):
+        # 如果 body 本来就是字符串 / bytes -> 直接使用, 不需要转换
+        if isinstance(request.body, (str, bytes)):
             return {
                 "data": request.body,
-                "type": "unknown"
+                "type": "raw"
             }
+
+        # 没有传 content-type, 并且 body 不为字符串, 默认设置为 application/json
+        if not content_type:
+            content_type = 'application/json'
 
         # 根据Content-Type判断并处理请求体
         if 'application/json' in content_type:
@@ -143,4 +148,4 @@ class Downloader(metaclass=genesis.MetaClass):
             }
 
         else:
-            raise ValueError(f"Invalid JSON format, raw: {request.body}")
+            raise ValueError(f"Unsupported Content-Type: {content_type}")
