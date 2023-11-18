@@ -14,6 +14,20 @@ class Context:
         for k, v in kwargs.items():
             setattr(self, k, v)
 
+    def obtain(self, name, default=None):
+        return getattr(self, name, default)
+
+    def install(self, name, value, nx=False):
+        if nx:
+            if hasattr(self, name):
+                return getattr(self, name)
+            else:
+                setattr(self, name, value)
+                return value
+        else:
+            setattr(self, name, value)
+            return value
+
 
 class Node:
 
@@ -173,6 +187,6 @@ class Flow(Context):
 
 
 class Error(Context):
-    def __init__(self, form: str, error: Exception, target=None) -> None:
-        super().__init__(form, target)
+    def __init__(self, form: str, error: Exception, target=None, **kwargs) -> None:
+        super().__init__(form, target, **kwargs)
         self.error = error

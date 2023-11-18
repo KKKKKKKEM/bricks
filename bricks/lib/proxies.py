@@ -31,8 +31,8 @@ URL_MATCH_RULE = re.compile(
 )
 
 
-class MyMeta(type):
-    def __new__(cls, name, bases, dct):
+class MetaClass(type):
+    def __new__(cls, name, bases, dct):  # noqa
         def wrapper(raw_method):
             def inner(self, *args, **kwargs):
                 proxy = raw_method(self, *args, **kwargs)
@@ -48,7 +48,7 @@ class MyMeta(type):
         # 在这里可以修改类的定义
         dct['get'] = wrapper(dct['get'])
         # 创建并返回新的类
-        return super(MyMeta, cls).__new__(cls, name, bases, dct)
+        return super(MetaClass, cls).__new__(cls, name, bases, dct)
 
 
 class Proxy:
@@ -100,7 +100,7 @@ class Proxy:
         return self.proxy
 
 
-class BaseProxy(metaclass=MyMeta):
+class BaseProxy(metaclass=MetaClass):
 
     def __init__(
             self,

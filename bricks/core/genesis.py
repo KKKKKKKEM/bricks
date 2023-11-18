@@ -37,7 +37,7 @@ class MetaClass(type):
 
 class Chaos(metaclass=MetaClass):
 
-    def get_attr(self, name, default=None):
+    def obtain(self, name, default=None):
         """
         获取属性
         :param name:
@@ -46,7 +46,7 @@ class Chaos(metaclass=MetaClass):
         """
         return getattr(self, name, default)
 
-    def set_attr(self, name, value, nx=False):
+    def install(self, name, value, nx=False):
         if nx:
             if hasattr(self, name):
                 return getattr(self, name)
@@ -72,7 +72,7 @@ class Chaos(metaclass=MetaClass):
         if not task_name:
             return
 
-        self.set_attr("task_name", task_name)
+        self.install("task_name", task_name)
         method = getattr(self, f'run_{task_name}', None)
         if method:
             return method(*args, **kwargs)
@@ -155,9 +155,9 @@ class Pangu(Chaos):
 
     def __init__(self, **kwargs) -> None:
         for k, v in kwargs.items():
-            self.set_attr(k, v, nx=True)
+            self.install(k, v, nx=True)
 
-        self.dispatcher = dispatch.Dispatcher(max_workers=self.get_attr("concurrency", 1))
+        self.dispatcher = dispatch.Dispatcher(max_workers=self.obtain("concurrency", 1))
 
     def on_consume(self, context: Flow):  # noqa
         context.next.root == self.on_consume and context.flow()
@@ -175,16 +175,12 @@ class Pangu(Chaos):
                     )
 
                     product = prepared.func(*prepared.args, **prepared.kwargs)
-                    if not inspect.isgeneratorfunction(prepared.func):
-                        product = [product]
-
-                    for output in product:
-                        callable(stuff.callback) and pandora.invoke(
-                            stuff.callback,
-                            args=[output],
-                            annotations={type(stuff): stuff},
-                            namespace={"context": stuff}
-                        )
+                    callable(stuff.callback) and pandora.invoke(
+                        stuff.callback,
+                        args=[product],
+                        annotations={type(stuff): stuff},
+                        namespace={"context": stuff}
+                    )
 
                 # 中断信号
                 except signals.Break:
@@ -214,6 +210,13 @@ class Pangu(Chaos):
                 except signals.Signal as e:
                     logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
                     raise e
+
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+
+                except Exception as e:
+                    logger.error(f"""\n{pandora.get_simple_stack(e)} [{context.form}] {e.__class__.__name__}({e})""")
+                    stuff.failure(shutdown=True)
 
     def submit(self, task: dispatch.Task, timeout=None) -> dispatch.Task:
         return self.dispatcher.submit_task(task=task, timeout=timeout)

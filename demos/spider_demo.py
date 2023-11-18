@@ -6,7 +6,6 @@ import time
 
 from bricks import Request, const, plugins
 from bricks.core import signals
-from bricks.db.redis_ import Redis
 from bricks.lib.queues import RedisQueue
 from bricks.spider import air
 from bricks.spider.air import Context
@@ -41,8 +40,9 @@ class MySpider(air.Spider):
         context.rollback()
 
     def make_seeds(self, context: Context, **kwargs):
-        for i in range(10):
-            yield {"id": i}
+        yield [{"id": i} for i in range(10)]
+        # for i in range(10):
+        #     yield {"id": i}
 
     def make_request(self, context: air.Context) -> Request:
         return Request(
@@ -74,8 +74,8 @@ class MySpider(air.Spider):
 
 
 if __name__ == '__main__':
-    redis = Redis()
-    redis.add("proxy", "127.0.0.1:7890")
+    # redis = Redis()
+    # redis.add("proxy", "127.0.0.1:7890")
     spider = MySpider(
         concurrency=1,
         task_queue=RedisQueue(),
@@ -84,11 +84,11 @@ if __name__ == '__main__':
         #     "key": "127.0.0.1:7890",
         #     "threshold": 5,
         # },
-        proxy={
-            "ref": "bricks.lib.proxies.RedisProxy",
-            "key": "proxy",
-            "threshold": 5,  # 代理使用阈值, 用五次就归还
-            # "recover": False  # 回收函数
-        },
+        # proxy={
+        #     "ref": "bricks.lib.proxies.RedisProxy",
+        #     "key": "proxy",
+        #     "threshold": 5,  # 代理使用阈值, 用五次就归还
+        #     # "recover": False  # 回收函数
+        # },
     )
-    spider.run()
+    spider.run(task_name="init")

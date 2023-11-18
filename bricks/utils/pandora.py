@@ -8,6 +8,7 @@ import importlib
 import importlib.util
 import inspect
 import json
+import linecache
 import os
 import re
 import sys
@@ -100,9 +101,10 @@ def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, name
     index = 0
 
     for name, param in parameters.items():
+
         if param.kind == inspect.Parameter.VAR_POSITIONAL:
             new_args.extend(args[index:])
-            index = len(args) - index
+            index += len(args[index:])
             continue
 
         if param.kind == inspect.Parameter.VAR_KEYWORD:
@@ -110,9 +112,9 @@ def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, name
             continue
 
         # 参数在 kwargs 里面 -> 从 kwargs 里面取
-
-        if name in kwargs or param.default != inspect.Parameter.empty:
-            value = kwargs.get(name, param.default)
+        # param.default != inspect.Parameter.empty
+        if name in kwargs:
+            value = kwargs['name']
 
         # 参数类型存在于 annotations, 并且还可以从 args 里面取值, 并且刚好取到的对应的值也是当前类型 -> 直接从 args 里面取
         elif param.annotation in annotations and index < len(args) and type(args[index]) == param.annotation:
@@ -129,6 +131,7 @@ def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, name
             index += 1
 
         elif param.name in namespace:
+
             value = namespace[param.name]
 
         # 没有传这个参数, 并且也没有可以备选的 annotations  -> 报错
@@ -225,9 +228,34 @@ def json_or_eval(text, jsonp=False, errors="strict", _step=0, **kwargs) -> Union
             return text
 
 
+def get_simple_stack(e):
+    # 获取当前时间
+
+    # 获取异常的堆栈跟踪
+    tb = e.__traceback__
+
+    # 开始格式化
+    formatted_trace = f""
+
+    while tb is not None:
+        # 获取当前堆栈帧的详细信息
+        frame = tb.tb_frame
+        lineno = tb.tb_lineno
+        code = frame.f_code
+        filename = code.co_filename
+
+        # 获取出错的代码行
+        line = linecache.getline(filename, lineno).strip()
+
+        formatted_trace += f"  File \"{filename}\", line {lineno}, in {code.co_name}\n"
+        formatted_trace += f"    {line}\n"
+        tb = tb.tb_next
+    return formatted_trace
+
+
 if __name__ == '__main__':
-    def fun(a: int, *args, c=1, **kwargs):
+    def fun(a: int, *args, c: int = 1, **kwargs):
         print(a, args, c, kwargs)
 
 
-    print(invoke(fun, args=[], annotations={int: 1}, kwargs={"c": 999}))
+    print(invoke(fun, args=[1], annotations={int: 999}))

@@ -138,10 +138,10 @@ class Spider(Pangu):
         :return:
         """
 
-        task_queue: TaskQueue = self.get_attr("init.task_queue", self.task_queue)
-        queue_name: str = self.get_attr("init.queue_name", self.queue_name)
+        task_queue: TaskQueue = self.obtain("init.task_queue", self.task_queue)
+        queue_name: str = self.obtain("init.queue_name", self.queue_name)
 
-        if self.get_attr('task_name') != "init":
+        if self.obtain('task_name') != "init":
             # 判断是否有初始化权限
             pinfo: dict = task_queue.command(queue_name, {"action": task_queue.COMMANDS.GET_PERMISSION})
             if not pinfo['state']:
@@ -153,12 +153,12 @@ class Spider(Pangu):
         try:
             logger.debug(f"[开始投放] 获取初始化权限成功, MACHINE_ID: {const.MACHINE_ID}")
             # 本地的初始化记录 -> 启动传入的
-            local_init_record: dict = self.get_attr('init.record') or {}
+            local_init_record: dict = self.obtain('init.record') or {}
             # 云端的初始化记录 -> 初始化的时候会存储(如果支持的话)
             remote_init_record = task_queue.command(queue_name, {"action": task_queue.COMMANDS.GET_INIT_RECORD}) or {}
 
             # 初始化记录信息
-            init_record: dict = {
+            record: dict = {
                 **local_init_record,
                 **remote_init_record,
                 "queue_name": queue_name,
@@ -167,160 +167,135 @@ class Spider(Pangu):
             }
 
             # 设置一个启动时间, 防止被覆盖
-            init_record.setdefault("start", str(datetime.datetime.now()))
+            record.setdefault("start", str(datetime.datetime.now()))
 
             # 获取已经初始化的总量
-            total = int(init_record.setdefault('total', 0))
+            total = int(record.setdefault('total', 0))
             # 获取已经初始化的去重数量
-            success = int(init_record.setdefault('success', 0))
+            success = int(record.setdefault('success', 0))
 
-            # 初始化模式: ignore/reset/continue
-            # init_mode = self.get_attr('init.mode')
             # 初始化总数量阈值 -> 大于这个数量停止初始化
-            init_total_size = self.get_attr('init.total.size', math.inf)
+            total_size = self.obtain('init.total.size', math.inf)
             # 当前初始化总量阈值 -> 大于这个数量停止初始化
-            init_count_size = self.get_attr('init.count.size', math.inf)
+            count_size = self.obtain('init.count.size', math.inf)
             # 初始化成功数量阈值 (去重) -> 大于这个数量停止初始化
-            init_success_size = self.get_attr('init.success.size', math.inf)
+            success_size = self.obtain('init.success.size', math.inf)
             # 初始化队列最大数量 -> 大于这个数量暂停初始化
-            init_queue_size: int = self.get_attr("init.queue.size", 100000)
+            queue_size: int = self.obtain("init.queue.size", 100000)
 
-            # 当前已经初始化的数量, 从 0 开始
-            count = 0
-            counter = {
+            settings = {
                 "total": total,
                 "success": success,
-                "count": count,
+                "count": 0,
+
+                "record": record,
+                "queue_size": queue_size,
+
+                "total_size": total_size,
+                "success_size": success_size,
+                "count_size": count_size,
             }
 
-            # 不需要模式了
-            # if init_mode == 'ignore':
-            #     # 忽略模式, 什么都不做
-            #     logger.debug("[停止投放] 忽略模式, 不进行种子初始化")
-            #     return init_record
-            #
-            # elif init_mode == 'reset':
-            #     # 重置模式, 清空初始化记录和队列种子
-            #     task_queue.command(queue_name, {"action": task_queue.COMMANDS.RESET_QUEUE})
-            #     logger.debug("[开始投放] 重置模式, 清空初始化队列及记录")
-            #
-            # elif init_mode == 'continue':
-            #     # 继续模式, 从上次初始化的位置开始
-            #     logger.debug("[开始投放] 继续模式, 从上次初始化的位置开始")
-            #     task_queue.command(queue_name, {"action": task_queue.COMMANDS.CONTINUE_INIT_RECORD})
-            #
-            # else:
-            #     # 默认模式, 队列内种子数量小于等于阈值, 且 get-permission 成功才进行初始化
-            #     init_threshold = self.get_attr('init.threshold', 0)
-            #     if task_queue.size(queue_name) <= init_threshold:
-            #         logger.debug("[开始投放] 默认模式, 开始投放")
-            #     else:
-            #         logger.debug(f"[停止投放] 默认模式, 队列内种子大于阈值: {init_threshold}")
-
-            def generator(context: Context):
-                for seeds in pandora.invoke(
-                        func=self.make_seeds,
-                        kwargs={"record": init_record},
-                        annotations={Context: context},
-                        namespace={'context': context},
-                ):
-                    seeds = pandora.iterable(seeds)
-
-                    seeds = seeds[0:min([
-                        init_count_size - count,
-                        init_total_size - total,
-                        init_success_size - success,
-                        len(seeds)
-                    ])]
-
-                    context.seeds = seeds
-                    yield seeds
-                else:
-                    context.flow({"next": None})
-
-            def consumer(seeds, context: Context = None):
-                fettle = pandora.invoke(
-                    func=self.put_seeds,
-                    kwargs={
-                        "seeds": seeds,
-                        "maxsize": init_queue_size,
-                        "where": "init",
-                        "task_queue": task_queue,
-                        "queue_name": queue_name,
-
-                    },
-                    annotations={Context: context},
-                    namespace={"context": context},
-                )
-
-                size = len(pandora.iterable(seeds))
-                counter['total'] += size
-                counter['success'] += fettle
-                counter['count'] += fettle
-                output = f"[投放成功] 总量: {counter['success']}/{counter['total']}; 当前: {fettle}/{size}; 目标: {queue_name}"
-                init_record.update({
-                    "total": counter['total'],
-                    "success": counter['success'],
-                    "output": output,
-                    "update": str(datetime.datetime.now()),
-                })
-
-                task_queue.command(queue_name, {"action": task_queue.COMMANDS.SET_INIT_RECORD, "record": init_record})
-                logger.debug(output)
-
-                if (
-                        counter['total'] >= init_total_size or
-                        counter['count'] >= init_count_size or
-                        counter['success'] >= init_success_size
-                ):
-                    raise signals.Exit
-
-            context_ = self.get_context(task_queue=task_queue, queue_name=queue_name)
-            context_.flow({"next": generator, "callback": consumer})
+            context_ = self.get_context(
+                {},
+                task_queue=task_queue,
+                queue_name=queue_name,
+                next=self.produce_seeds,
+                settings=settings
+            )
             self.on_consume(context_)
-            init_record.update(finish=str(datetime.datetime.now()))
+            record.update(finish=str(datetime.datetime.now()))
             task_queue.command(queue_name, {
                 "action": task_queue.COMMANDS.BACKUP_INIT_RECORD,
-                "record": init_record,
-                "ttl": self.get_attr("init.history.ttl")
+                "record": record,
+                "ttl": self.obtain("init.history.ttl")
             })
-            return init_record
+            return record
 
         finally:
             task_queue.command(queue_name, {"action": task_queue.COMMANDS.RELEASE_INIT_STATUS})
 
-    def put_seeds(self, context: Context = None, **kwargs):
+    def produce_seeds(self, context: Context):
+        """
+        生产种子
+
+        :param context:
+        :return:
+        """
+        settings: dict = context.obtain("settings", {})
+        record: dict = settings.get("record") or {}
+        for seeds in pandora.invoke(
+                func=self.make_seeds,
+                kwargs={"record": record},
+                annotations={Context: context},
+                namespace={'context': context},
+        ):
+            seeds = pandora.iterable(seeds)
+
+            seeds = seeds[0:min([
+                settings['count_size'] - settings['count'],
+                settings['total_size'] - settings['total'],
+                settings['success_size'] - settings['success'],
+                len(seeds)
+            ])]
+
+            fettle = pandora.invoke(
+                func=self.put_seeds,
+                kwargs={
+                    "seeds": seeds,
+                    "maxsize": settings['queue_size'],
+                    "where": "init",
+                    "task_queue": context.task_queue,
+                    "queue_name": context.queue_name,
+
+                },
+                annotations={Context: context},
+                namespace={"context": context},
+            )
+
+            size = len(pandora.iterable(seeds))
+            settings['total'] += size
+            settings['success'] += fettle
+            settings['count'] += fettle
+            output = f"[投放成功] 总量: {settings['success']}/{settings['total']}; 当前: {fettle}/{size}; 目标: {context.queue_name}"
+            settings["record"].update({
+                "total": settings['total'],
+                "success": settings['success'],
+                "output": output,
+                "update": str(datetime.datetime.now()),
+            })
+
+            context.task_queue.command(context.queue_name, {"action": context.task_queue.COMMANDS.SET_INIT_RECORD,
+                                                            "record": settings["record"]})
+            logger.debug(output)
+
+            if (
+                    settings['total'] >= settings['total_size'] or
+                    settings['count'] >= settings['count_size'] or
+                    settings['success'] >= settings['success_size']
+            ):
+                raise signals.Exit
+        else:
+            context.flow()
+
+    def put_seeds(self, **kwargs):
         """
         将种子放入容器
 
-        :param context:
         :param kwargs:
         :return:
         """
 
-        if context:
-            task_queue = context.task_queue
-            queue_name = context.queue_name
-            seeds = context.seeds
-
-        else:
-            task_queue: TaskQueue = kwargs.pop('task_queue', None) or self.task_queue
-            queue_name: str = kwargs.pop('queue_name', None) or self.queue_name
-            seeds = kwargs.pop('seeds', {})
+        task_queue: TaskQueue = kwargs.pop('task_queue', None) or self.task_queue
+        queue_name: str = kwargs.pop('queue_name', None) or self.queue_name
+        seeds = kwargs.pop('seeds', {})
 
         maxsize = kwargs.pop('maxsize', None)
         priority = kwargs.pop('priority', False)
         task_queue.continue_(queue_name, maxsize=maxsize, interval=1)
         return task_queue.put(queue_name, *pandora.iterable(seeds), priority=priority, **kwargs)
 
-    def get_context(self, **kwargs) -> Context:
-        flows = {
-            self.on_consume: self.on_seeds,
-            self.on_seeds: self.on_request,
-            self.on_request: self.on_response,
-            self.on_response: self.on_pipeline,
-            self.on_pipeline: None
-        }
+    def get_context(self, flows: dict, **kwargs) -> Context:
         context = Context(target=self, flows=flows, **kwargs)
         return context
 
@@ -332,15 +307,23 @@ class Spider(Pangu):
         :return:
         """
         count = 0
-        task_queue: TaskQueue = self.get_attr("spider.task_queue", self.task_queue)
-        queue_name: str = self.get_attr("spider.queue_name", self.queue_name)
+        task_queue: TaskQueue = self.obtain("spider.task_queue", self.task_queue)
+        queue_name: str = self.obtain("spider.queue_name", self.queue_name)
         output = time.time()
 
         while True:
             context = self.get_context(
+                {
+                    self.on_consume: self.on_seeds,
+                    self.on_seeds: self.on_request,
+                    self.on_request: self.on_response,
+                    self.on_response: self.on_pipeline,
+                    self.on_pipeline: None
+                },
                 task_queue=task_queue,
-                queue_name=queue_name,
+                queue_name=queue_name
             )
+
             prepared = pandora.prepare(
                 func=self.get_seeds,
                 annotations={Context: context},
@@ -380,7 +363,7 @@ class Spider(Pangu):
                 if (
                         not task_queue.command(queue_name, {"action": task_queue.COMMANDS.IS_INIT_STATUS}) and
                         not self.forever and
-                        task_queue.is_empty(queue_name, threshold=self.get_attr("spider.threshold", default=0))
+                        task_queue.is_empty(queue_name, threshold=self.obtain("spider.threshold", default=0))
                 ):
                     if self.dispatcher.running == 0:
                         return count
@@ -401,21 +384,18 @@ class Spider(Pangu):
 
             else:
                 for seeds in pandora.iterable(fettle):
-                    context = self.get_context(
-                        seeds=seeds,
-                        task_queue=task_queue,
-                        queue_name=queue_name,
-                    )
-                    context.flow({"next": self.on_consume})
-                    self.submit(dispatch.Task(context.next, [context]))
+                    stuff = context.copy()
+                    stuff.seeds = seeds
+                    stuff.flow({"next": self.on_consume})
+                    self.submit(dispatch.Task(stuff.next, [stuff]))
                     count += 1
 
     def _when_run_spider(self, raw_method):
         @functools.wraps(raw_method)
         def wrapper(*args, **kwargs):
             self.dispatcher.start()
-            task_queue: TaskQueue = self.get_attr("spider.task_queue", self.task_queue)
-            queue_name: str = self.get_attr("spider.queue_name", self.queue_name)
+            task_queue: TaskQueue = self.obtain("spider.task_queue", self.task_queue)
+            queue_name: str = self.obtain("spider.queue_name", self.queue_name)
             task_queue.command(
                 queue_name,
                 {
@@ -432,8 +412,8 @@ class Spider(Pangu):
         self.dispatcher.start()
         init_task = dispatch.Task(func=self.run_init)
         self.active(init_task)
-        task_queue: TaskQueue = self.get_attr("init.task_queue", self.task_queue)
-        queue_name: str = self.get_attr("init.queue_name", self.queue_name)
+        task_queue: TaskQueue = self.obtain("init.task_queue", self.task_queue)
+        queue_name: str = self.obtain("init.queue_name", self.queue_name)
         task_queue.command(queue_name, {"action": task_queue.COMMANDS.WAIT_FOR_INIT_START})
         self.run_spider()
 
@@ -575,7 +555,7 @@ class Spider(Pangu):
         def wrapper(context: Context, *args, **kwargs):
             context.form = const.BEFORE_REQUEST
             events.Event.invoke(context)
-
+            context.form = const.ON_REQUEST
             prepared = pandora.prepare(
                 func=raw_method,
                 args=args,
@@ -644,7 +624,7 @@ class Spider(Pangu):
     def _when_on_response(self, raw_method):  # noqa
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
-            context.form = const.ON_PARSING
+            context.form = const.ON_PARSE
             prepared = pandora.prepare(
                 func=raw_method,
                 args=args,
@@ -721,7 +701,7 @@ class Spider(Pangu):
         def wrapper(context: Context, *args, **kwargs):
             context.form = const.BEFORE_PIPELINE
             events.Event.invoke(context)
-
+            context.form = const.ON_PIPELINE
             prepared = pandora.prepare(
                 func=raw_method,
                 args=args,
