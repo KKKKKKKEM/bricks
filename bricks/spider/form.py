@@ -223,7 +223,7 @@ class Spider(air.Spider):
             bookmark = context.signpost.get('bookmark', 0)
             # 没有下载节点 / 下载节点就在第一个 -> cursor 指向最起点
             if bookmark == 0:
-                context.signpost['cursor'] = 1
+                context.signpost['cursor'] = 0
 
             # 找到下载节点前面不是 Task 的节点, 但是如果是两个
             else:
