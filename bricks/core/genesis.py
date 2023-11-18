@@ -199,6 +199,7 @@ class Pangu(Chaos):
                     pass
 
                 except signals.Retry:
+                    context.signpost['retry'] = True
                     context.retry()
 
                 except signals.Success:

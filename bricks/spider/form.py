@@ -202,6 +202,7 @@ class Spider(air.Spider):
             self.on_consume: self.on_flow,
             self.on_seeds: self.on_request,
             self.on_request: self.on_flow,
+            self.on_retry: self.on_flow,
             self.on_response: self.on_flow,
             self.on_pipeline: self.on_flow,
         }
@@ -211,23 +212,43 @@ class Spider(air.Spider):
         raise NotImplementedError
 
     def on_flow(self, context: Context):
-        context.signpost = context.install("signpost", 0, True)
         if not self.config.spider:
             logger.warning('没有配置 Spider 节点流程..')
             raise signals.Exit
 
+        context.signpost.setdefault("cursor", 0)
+        # 这是重试回来了
+        if context.signpost.pop('retry', False):
+            # 找到之前下载节点的位置
+            bookmark = context.signpost.get('bookmark', 0)
+            # 没有下载节点 / 下载节点就在第一个 -> cursor 指向最起点
+            if bookmark == 0:
+                context.signpost['cursor'] = 1
+
+            # 找到下载节点前面不是 Task 的节点, 但是如果是两个
+            else:
+                for i in range(bookmark - 1, -1, -1):
+                    node = self.config.spider[i]
+                    if not isinstance(node, Task):
+                        context.signpost['cursor'] = i + 1
+                        break
+                else:
+                    context.signpost['cursor'] = bookmark
+
         while True:
             try:
-                node: Union[Download, Task, Parse, Pipeline] = self.config.spider[context.signpost]
+                node: Union[Download, Task, Parse, Pipeline] = self.config.spider[context.signpost['cursor']]
                 context.node = node
             except IndexError:
                 context.flow({"next": None})
                 raise signals.Switch
             else:
-                context.signpost += 1
+                context.signpost['cursor'] += 1
 
                 # 种子 -> Request
                 if isinstance(node, Download):
+                    # 记录下载节点的位置
+                    context.signpost['bookmark'] = context.signpost['cursor'] - 1
                     context.flow({"next": self.on_seeds})
                     raise signals.Switch
 

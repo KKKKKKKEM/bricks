@@ -137,6 +137,7 @@ class Spider(Pangu):
         return {
             self.on_consume: self.on_seeds,
             self.on_seeds: self.on_request,
+            self.on_retry: self.on_request,
             self.on_request: self.on_response,
             self.on_response: self.on_pipeline,
             self.on_pipeline: None
@@ -535,7 +536,7 @@ class Spider(Pangu):
                 }
             )
             ret = prepared.func(*prepared.args, **prepared.kwargs)
-            context.flow({"next": self.on_request})
+            context.flow()
             return ret
 
         return wrapper
