@@ -38,6 +38,17 @@ class MySpider(form.Spider):
         )
 
 
+class MySubSpidr(MySpider):
+
+    @property
+    def config(self) -> form.Config:
+        config = super().config
+        config.events[const.BEFORE_REQUEST].append(
+            form.Task(func=lambda: print('子类要开始请求啦!'))
+        )
+        return config
+
+
 if __name__ == '__main__':
-    spider = MySpider()
+    spider = MySubSpidr()
     spider.run()
