@@ -221,19 +221,14 @@ class Spider(air.Spider):
         if context.signpost.pop('retry', False):
             # 找到之前下载节点的位置
             bookmark = context.signpost.get('bookmark', 0)
-            # 没有下载节点 / 下载节点就在第一个 -> cursor 指向最起点
-            if bookmark == 0:
-                context.signpost['cursor'] = 0
-
-            # 找到下载节点前面不是 Task 的节点, 但是如果是两个
+            # 找到下载节点前面不是 Task 的节点
+            for i in range(bookmark - 1, -1, -1):
+                node = self.config.spider[i]
+                if not isinstance(node, Task):
+                    context.signpost['cursor'] = i + 1
+                    break
             else:
-                for i in range(bookmark - 1, -1, -1):
-                    node = self.config.spider[i]
-                    if not isinstance(node, Task):
-                        context.signpost['cursor'] = i + 1
-                        break
-                else:
-                    context.signpost['cursor'] = bookmark
+                context.signpost['cursor'] = bookmark
 
         while True:
             try:
