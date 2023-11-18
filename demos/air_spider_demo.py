@@ -82,5 +82,38 @@ class MySpider(air.Spider):
 
 
 if __name__ == '__main__':
-    spider = MySpider()
+    spider = MySpider(
+        # # 设置代理模式 1, 该模式适用于: 你已经将代理提取至 Redis 的 proxy 里面
+        # # 这样设置的话就会自动去取
+        # proxy={
+        #     "cls": "bricks.lib.proxies.RedisProxy",  # 指向 Redis
+        #     "key": "proxy",  # 指向代理 Key
+        #     # 这个不写默认指向本地 Redis, 无密码的
+        #     "options": {
+        #         "host": "127.0.0.1",
+        #         "port": 6379,
+        #         "password": "xsxsxax"
+        #     },
+        #     "threshold": 100,  # 一个代理最多使用多少次, 到这个次数之后就会归还到Redis, 然后重新拿, 默认不归还
+        #     "scheme": "socks5"  # 代理协议, 默认是 http
+        # }
+
+        # # 设置代理模式 2, 该模式适用于: 指向固定代理, 如 http://127.0.0.1:7890
+        # # 这样设置的话就会自动去取
+        # proxy={
+        #     "cls": "bricks.lib.proxies.CustomProxy",  # 指向 Redis
+        #     "key": "127.0.0.1:7890",  # 指向代理 Key
+        #     "threshold": 100,  # 一个代理最多使用多少次, 到这个次数之后就会归还到Redis, 然后重新拿, 默认不归还
+        #     "scheme": "http"  # 代理协议, 默认是 http
+        # },
+
+        # # 设置代理模式 3, 该模式适用于: 你有一个提取 api,访问就会获取代理
+        # # 这样设置的话就会自动去取
+        # proxy={
+        #     "cls": "bricks.lib.proxies.ApiProxy",  # 指向 Redis
+        #     "key": "http://你的提取代理的网址",  # 指向代理 Key
+        #     "threshold": 100,  # 一个代理最多使用多少次, 到这个次数之后就会归还到Redis, 然后重新拿, 默认不归还
+        #     "scheme": "http"  # 代理协议, 默认是 http
+        # }
+    )
     spider.run()
