@@ -404,30 +404,3 @@ class Spider(air.Spider):
         super().before_start()
         for form, events in (self.config.events or {}).items():
             self.use(form, *events)
-
-
-if __name__ == '__main__':
-    d = Download(
-        url="https://acs.m.taobao.com/gw/{api}/1.1",
-        headers={
-            # "dt-page-url": "https://market.m.taobao.com/app/a-studio/moviepro-h5/pro/cinema/detail/index.html?cinemaId=4380",
-            # "x-sign": "ab25090090502ca880fa3b1bfd370c6df6d3fe8f49e5d75cee",
-            "x-nettype": "WIFI",
-            "x-pv": "6.2",
-            "x-nq": "WIFI",
-            "dt_l": "zh_CN",
-            "x-features": "1051",
-            "x-app-conf-v": "0",
-            # "x-mini-wua": "adASJxU1ZBd1rIqFCSUeKmawTcG74Z%2Fzz7Rntp%2Fd5dxwLd9pueRruSU1EknkvQrBmrHQsQhXHN2m%2BgnDys2SAd3MgoaNIy60WS%2BRXI1%2Bfaax%2BHN5JhwcNqwBCVIOPDCA7w6qkTSdVe3pi%2BW9RwuNlwtcw6aP9vxuj%2FsZFRr%2F6Z41G0Ckv8%2B93u7Y8",
-            "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
-            "x-t": "1699461458",
-            # "Cookie": "cna=42rSHR6p+EECAd70tujrDbVI; xlly_s=1; tfstk=dNkJrxinKD7QMkX-badD8VB1apopsYnr04o1Ky4lOq3xo2E3E3znMvUxf3zkTQuKM2g4ZzOzKDgx-rBlKuYep2UjkzfnZ3oQOqax-_w7KWgLl2out3oupqernbX3rUyKAV2pSFvMI0ozBJTMSuNq40PEgl8XIdmr4gqWjm9M4ESsETceRUOKgyaEhHxG8eoLLRkY27OSVr6Q0xE8wPiSe96awADarLF70-UMDnCFT7ZVBj9wG; l=fBE9MDzIPRqJgd2EBOfwourza77OSCOAguPzaNbMi9fPObfH52LRW1FMoQLMC3GRFs99R35W-JgpBeYBYnY0k3ZkxiuJgIkmnmOk-Wf..; isg=BJOTxOac8vFpRb6lSQGP_0DzKR69SCcKGaZRJUWw77LpxLNmzRi3WvEW-jKq5H8C",
-            "x-bx-version": "6.5.909020002.15482077",
-            "f-refer": "mtop",
-            "x-ttid": "10005894%40moviepro_android_8.0.0",
-            "x-app-ver": "8.0.0",
-        })
-
-    dd = d.render(Context(target=None, seeds={'cinema_id': 57620, 'show_date': 20221225, 'split': 'last'}))
-
-    print(dd)
