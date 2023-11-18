@@ -144,10 +144,10 @@ class Response:
         """
 
         exs = {
-            'json': extractors.JsonExtractor,
-            'xpath': extractors.XpathExtractor,
-            'jsonpath': extractors.JsonpathExtractor,
-            'regex': extractors.RegexExtractor,
+            'JSON': extractors.JsonExtractor,
+            'XPATH': extractors.XpathExtractor,
+            'JASONPATH': extractors.JsonpathExtractor,
+            'REGEX': extractors.RegexExtractor,
         }
         if not engine:
             return []

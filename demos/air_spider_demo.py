@@ -1,94 +1,86 @@
-# -*- coding: utf-8 -*-
-# @Time    : 2023-11-15 18:17
-# @Author  : Kem
-# @Desc    :
-import time
+from loguru import logger
 
-from bricks import Request, const, plugins
+from bricks import Request, const
 from bricks.core import signals
-from bricks.lib.queues import RedisQueue
 from bricks.spider import air
 from bricks.spider.air import Context
 
 
 class MySpider(air.Spider):
 
-    def before_start(self):
-        # self.use(const.BEFORE_REQUEST, {"func": lambda context: print(context.request)})
-        self.use(const.BEFORE_REQUEST, {"func": plugins.set_proxy})
-        self.use(
-            const.AFTER_REQUEST,
-            {"func": plugins.show_response},
-            {"func": plugins.is_success},
-        )
-
-        super().before_start()
-
-    def before_request(self, context: Context):
-        if "done" not in context.seeds:
-            # 切换去做点别的事情
-            context.flow({"next": self.do_something})
-            raise signals.Switch
-        if context.seeds['id'] == 5:
-            time.sleep(10)
-            raise signals.Failure
-
-    @staticmethod
-    def do_something(context: Context):
-        context.seeds['done'] = 1
-        # 回滚回去
-        context.rollback()
-
     def make_seeds(self, context: Context, **kwargs):
-        yield [{"id": i} for i in range(10)]
-        # for i in range(10):
-        #     yield {"id": i}
+        # 因为只需要爬这个种子
+        # 所以可以实现 make_seeds 接口之后直接 return 出去即可
+        # 如果有多个, 你有两种方案
+        # 1. 将种子全部放置在一个列表里面, yield 出去, 如 return [{"page":1}, {"page":2}, {"page":3}]
+        # 2. 使用生成器, 每次生产一部分, 如 yield {"page":1}, yield {"page":2}, yield {"page":3}
+        return {"page": 1}
 
-    def make_request(self, context: air.Context) -> Request:
+    def make_request(self, context: Context) -> Request:
+        # 之前定义的种子会被投放至任务队列, 之后会被取出来, 迁入至 context 对象内
+        seeds = context.seeds
         return Request(
-            url=f"https://www.baidu.com/s?wd={context.seeds['id']}"
+            url="https://fx1.service.kugou.com/mfanxing-home/h5/cdn/room/index/list_v2",
+            params={
+                "page": seeds["page"],
+                "cid": 6000
+            },
+            headers={
+                "User-Agent": "Mozilla/5.0 (Linux; Android 10; Redmi K30 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Mobile Safari/537.36",
+                "Content-Type": "application/json;charset=UTF-8",
+            },
         )
 
     def parse(self, context: Context):
-        # print(context.response)
-        # time.sleep(5)
-        yield context.seeds
+        response = context.response
+        return response.extract(
+            engine="json",
+            rules={
+                "data.list": {
+                    "userId": "userId",
+                    "roomId": "roomId",
+                    "score": "score",
+                    "startTime": "startTime",
+                    "kugouId": "kugouId",
+                    "status": "status",
+                }
+            }
+        )
 
     def item_pipeline(self, context: Context):
-        super().item_pipeline(context)
-        # context2 = context.background(
-        #     {
-        #         "next": lambda name: (time.sleep(1), print(name)),
-        #         "kwargs": context.seeds
-        #     },
-        # )
-        # ret = context2.future.result()
-        # print(ret)
-        context.success(shutdown=True)
-        # if context.seeds['id'] < 10:
-        #     # 提交新请求
-        #     context.submit(
-        #         {**context.seeds, "id": context.seeds['id'] + 10},
-        #         # call_later=True
-        #     )
+        items = context.items
+        # 写自己的存储逻辑
+        logger.debug(f'存储: {items}')
+        # 确认种子爬取完毕后删除, 不删除的话后面又会爬取
+        context.success()
+
+    @staticmethod
+    def turn_page(context: Context):
+        # 判断是否存在下一页
+        has_next = context.response.get('data.hasNextPage')
+        if has_next == 1:
+            # 提交翻页的种子
+            context.submit({**context.seeds, "page": context.seeds["page"] + 1})
+
+    @staticmethod
+    def is_success(context: Context):
+        """
+        判断相应是否成功
+
+        :param context:
+        :return:
+        """
+        # 不成功 -> 返回 False
+        if context.response.get('code') != 0:
+            # 重试信号
+            raise signals.Retry
+
+    def before_start(self):
+        super().before_start()
+        self.use(const.BEFORE_PIPELINE, {"func": self.turn_page})
+        self.use(const.AFTER_REQUEST, {"func": self.is_success})
 
 
 if __name__ == '__main__':
-    # redis = Redis()
-    # redis.add("proxy", "127.0.0.1:7890")
-    spider = MySpider(
-        concurrency=1,
-        task_queue=RedisQueue(),
-        # proxy={
-        #     "ref": "bricks.lib.proxies.CustomProxy",
-        #     "key": "127.0.0.1:7890",
-        #     "threshold": 5,
-        # },
-        # proxy={
-        #     "ref": "bricks.lib.proxies.RedisProxy",
-        #     "key": "proxy",
-        #     "threshold": 5,  # 代理使用阈值, 用五次就归还
-        #     # "recover": False  # 回收函数
-        # },
-    )
-    spider.run(task_name="init")
+    spider = MySpider()
+    spider.run()

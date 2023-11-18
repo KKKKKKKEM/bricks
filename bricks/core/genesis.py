@@ -163,28 +163,28 @@ class Pangu(Chaos):
         context.next.root == self.on_consume and context.flow()
 
         while True:
-            stuff: Flow = context.produce()
-            if stuff is None: return
+            context: Flow = context.produce()
+            if context is None: return
 
-            while stuff.next and callable(stuff.next):
+            while context.next and callable(context.next):
                 try:
                     prepared = pandora.prepare(
-                        func=stuff.next.root,
-                        annotations={type(stuff): stuff},
-                        namespace={"context": stuff}
+                        func=context.next.root,
+                        annotations={type(context): context},
+                        namespace={"context": context}
                     )
 
                     product = prepared.func(*prepared.args, **prepared.kwargs)
-                    callable(stuff.callback) and pandora.invoke(
-                        stuff.callback,
+                    callable(context.callback) and pandora.invoke(
+                        context.callback,
                         args=[product],
-                        annotations={type(stuff): stuff},
-                        namespace={"context": stuff}
+                        annotations={type(context): context},
+                        namespace={"context": context}
                     )
 
                 # 中断信号
                 except signals.Break:
-                    stuff.next = None
+                    context.next = None
 
                 # 退出信号
                 except signals.Exit:
@@ -199,13 +199,13 @@ class Pangu(Chaos):
                     pass
 
                 except signals.Retry:
-                    stuff.retry()
+                    context.retry()
 
                 except signals.Success:
-                    stuff.success(shutdown=True)
+                    context.success(shutdown=True)
 
                 except signals.Failure:
-                    stuff.failure(shutdown=True)
+                    context.failure(shutdown=True)
 
                 except signals.Signal as e:
                     logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
@@ -216,7 +216,7 @@ class Pangu(Chaos):
 
                 except Exception as e:
                     logger.error(f"""\n{pandora.get_simple_stack(e)} [{context.form}] {e.__class__.__name__}({e})""")
-                    stuff.failure(shutdown=True)
+                    context.failure(shutdown=True)
 
     def submit(self, task: dispatch.Task, timeout=None) -> dispatch.Task:
         return self.dispatcher.submit_task(task=task, timeout=timeout)

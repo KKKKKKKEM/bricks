@@ -234,12 +234,18 @@ class Spider(Pangu):
         """
         settings: dict = context.obtain("settings", {})
         record: dict = settings.get("record") or {}
-        for seeds in pandora.invoke(
-                func=self.make_seeds,
-                kwargs={"record": record},
-                annotations={Context: context},
-                namespace={'context': context},
-        ):
+
+        gen = pandora.invoke(
+            func=self.make_seeds,
+            kwargs={"record": record},
+            annotations={Context: context},
+            namespace={'context': context},
+        )
+
+        if not inspect.isgenerator(gen):
+            gen = [gen]
+
+        for seeds in gen:
             seeds = pandora.iterable(seeds)
 
             seeds = seeds[0:min([
@@ -295,7 +301,6 @@ class Spider(Pangu):
         :param kwargs:
         :return:
         """
-
         task_queue: TaskQueue = kwargs.pop('task_queue', None) or self.task_queue
         queue_name: str = kwargs.pop('queue_name', None) or self.queue_name
         seeds = kwargs.pop('seeds', {})
