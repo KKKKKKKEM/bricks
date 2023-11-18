@@ -36,7 +36,7 @@ class MetaClass(type):
         def wrapper(raw_method):
             def inner(self, *args, **kwargs):
                 proxy = raw_method(self, *args, **kwargs)
-                proxy.proxy = self.strict(proxy=proxy.proxy)
+                proxy.proxy = self.fmt(proxy=proxy.proxy)
                 proxy.auth = self.auth
                 proxy.recover = self.recover
                 proxy.threshold = self.threshold

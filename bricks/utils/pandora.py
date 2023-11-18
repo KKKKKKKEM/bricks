@@ -114,7 +114,7 @@ def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, name
         # 参数在 kwargs 里面 -> 从 kwargs 里面取
         # param.default != inspect.Parameter.empty
         if name in kwargs:
-            value = kwargs['name']
+            value = kwargs[name]
 
         # 参数类型存在于 annotations, 并且还可以从 args 里面取值, 并且刚好取到的对应的值也是当前类型 -> 直接从 args 里面取
         elif param.annotation in annotations and index < len(args) and type(args[index]) == param.annotation:

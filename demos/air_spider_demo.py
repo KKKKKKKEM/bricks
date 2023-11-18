@@ -98,14 +98,14 @@ if __name__ == '__main__':
         #     "scheme": "socks5"  # 代理协议, 默认是 http
         # }
 
-        # # 设置代理模式 2, 该模式适用于: 指向固定代理, 如 http://127.0.0.1:7890
-        # # 这样设置的话就会自动去取
-        # proxy={
-        #     "ref": "bricks.lib.proxies.CustomProxy",  # 指向 Redis
-        #     "key": "127.0.0.1:7890",  # 指向代理 Key
-        #     "threshold": 100,  # 一个代理最多使用多少次, 到这个次数之后就会归还到Redis, 然后重新拿, 默认不归还
-        #     "scheme": "http"  # 代理协议, 默认是 http
-        # },
+        # 设置代理模式 2, 该模式适用于: 指向固定代理, 如 http://127.0.0.1:7890
+        # 这样设置的话就会自动去取
+        proxy={
+            "ref": "bricks.lib.proxies.CustomProxy",  # 指向 Redis
+            "key": "127.0.0.1:7890",  # 指向代理 Key
+            "threshold": 100,  # 一个代理最多使用多少次, 到这个次数之后就会归还到Redis, 然后重新拿, 默认不归还
+            "scheme": "http"  # 代理协议, 默认是 http
+        },
 
         # # 设置代理模式 3, 该模式适用于: 你有一个提取 api,访问就会获取代理
         # # 这样设置的话就会自动去取
