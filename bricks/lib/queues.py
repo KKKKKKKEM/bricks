@@ -962,7 +962,7 @@ end
 
 
 """),
-            "get_permision": self.redis_db.register_script("""
+            "get_permission": self.redis_db.register_script("""
             redis.replicate_commands()
             local current_key = KEYS[1]
             local temp_key = KEYS[2]
@@ -1249,7 +1249,7 @@ end
             pubsub.subscribe(**{channel: main})
             pubsub.run_in_thread(sleep_time=0.001, daemon=True)
 
-        def get_permision():
+        def get_permission():
             """
             判断是否有初始化权限
             判断依据:
@@ -1265,7 +1265,7 @@ end
             """
             keys = [self.name2key(name, i) for i in ['current', 'temp', 'failure', 'record']]
             args = [const.MACHINE_ID]
-            ret = self.scripts["get_permision"](keys=keys, args=args)
+            ret = self.scripts["get_permission"](keys=keys, args=args)
             return {
                 "state": ret == 1,
                 "msg": ret
@@ -1302,7 +1302,7 @@ end
 
         actions = {
             self.COMMANDS.RUN_SUBSCRIBE: lambda: run_subscribe(f'{name}-subscribe', order['target']),
-            self.COMMANDS.GET_PERMISSION: get_permision,
+            self.COMMANDS.GET_PERMISSION: get_permission,
             self.COMMANDS.GET_INIT_RECORD: lambda: self.redis_db.hgetall(self.name2key(name, 'record')),
             self.COMMANDS.RESET_QUEUE: lambda: self.clear(name),
             self.COMMANDS.CONTINUE_INIT_RECORD: lambda: self.reverse(name),
