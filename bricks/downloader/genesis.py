@@ -105,6 +105,11 @@ class Downloader(metaclass=genesis.MetaClass):
 
     @classmethod
     def parse_data(cls, request: Request):
+        if not request.body:
+            return {
+                "data": None,
+                "type": "raw"
+            }
         # 获取请求头中的Content-Type
         content_type = request.headers.get('Content-Type', '').lower()
 
