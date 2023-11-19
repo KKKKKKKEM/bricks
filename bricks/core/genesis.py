@@ -36,6 +36,7 @@ class MetaClass(type):
 
 
 class Chaos(metaclass=MetaClass):
+    Context = Context
 
     def obtain(self, name, default=None):
         """
@@ -114,12 +115,7 @@ class Chaos(metaclass=MetaClass):
 
         @functools.wraps(raw_method)
         def wrapper(*args, **kwargs):
-            context = Context(
-                form=const.BEFORE_START,
-                target=self,
-                args=args,
-                kwargs=kwargs
-            )
+            context = self.make_context(form=const.BEFORE_START)
 
             EventManger.invoke(context)
 
@@ -138,20 +134,19 @@ class Chaos(metaclass=MetaClass):
 
         @functools.wraps(raw_method)
         def wrapper(*args, **kwargs):
-            context = Context(
-                form=const.BEFORE_CLOSE,
-                target=self,
-                args=args,
-                kwargs=kwargs
-            )
+            context = self.make_context(form=const.BEFORE_CLOSE)
             EventManger.invoke(context)
             ret = raw_method(*args, **kwargs)
             return ret
 
         return wrapper
 
+    def make_context(self, **kwargs):
+        raise NotImplementedError
+
 
 class Pangu(Chaos):
+    Context = Flow
 
     def __init__(self, **kwargs) -> None:
         for k, v in kwargs.items():
@@ -199,7 +194,6 @@ class Pangu(Chaos):
                     pass
 
                 except signals.Retry:
-                    context.signpost['retry'] = True
                     context.retry()
 
                 except signals.Success:
@@ -226,8 +220,18 @@ class Pangu(Chaos):
         return self.dispatcher.active_task(task=task, timeout=timeout)
 
     def use(self, form: str, *events: Union[Task, dict]):
-        context = Context(form=form, target=self)
+        context = self.make_context(form=form)
         EventManger.register(context, *events)
+
+    def make_context(self, **kwargs):
+        kwargs.setdefault("flows", self.flows)
+        kwargs.setdefault("target", self)
+        context = self.Context(**kwargs)
+        return context
+
+    @property
+    def flows(self):
+        raise NotImplementedError
 
 
 if __name__ == '__main__':
