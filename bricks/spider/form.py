@@ -11,17 +11,28 @@ from typing import Optional, Union, List, Dict, Callable
 from loguru import logger
 
 from bricks import Request, Response
-from bricks.core import signals
-from bricks.core.events import Task
+from bricks.core import signals, events as _events
 from bricks.downloader import genesis
 from bricks.lib.headers import Header
 from bricks.lib.items import Items
 from bricks.lib.queues import TaskQueue, Item
 from bricks.spider import air
-from bricks.spider.air import Context
 from bricks.utils import pandora
 
 FORMAT_REGEX = re.compile(r'{(\w+)(?::(\w+))?}')
+
+
+class Context(air.Context):
+
+    def retry(self):
+        super().retry()
+        self.signpost['retry'] = True
+
+    def submit(self, obj: Union[Request, Item, dict], call_later=False) -> "Context":
+        context = super().submit(obj, call_later)
+        if not call_later:
+            context.signpost = {"cursor": 1}
+        return context
 
 
 @dataclass
@@ -137,6 +148,10 @@ class Node:
         return node
 
 
+class Task(_events.Task, Node):
+    ...
+
+
 @dataclass
 class Download(Node):
     url: str
@@ -189,6 +204,7 @@ class Config:
 
 
 class Spider(air.Spider):
+    Context = Context
 
     def __init__(self, concurrency: Optional[int] = 1, survey: Optional[Union[dict, List[dict]]] = None,
                  downloader: Optional[Union[str, genesis.Downloader]] = None, task_queue: Optional[TaskQueue] = None,
@@ -233,7 +249,6 @@ class Spider(air.Spider):
         while True:
             try:
                 node: Union[Download, Task, Parse, Pipeline] = self.config.spider[context.signpost['cursor']]
-                context.node = node
             except IndexError:
                 context.flow({"next": None})
                 raise signals.Switch
@@ -244,19 +259,23 @@ class Spider(air.Spider):
                 if isinstance(node, Download):
                     # 记录下载节点的位置
                     context.signpost['bookmark'] = context.signpost['cursor'] - 1
+                    context.download = node
                     context.flow({"next": self.on_seeds})
                     raise signals.Switch
 
                 # Request -> Response
                 elif isinstance(node, Parse):
+                    context.parse = node
                     context.flow({"next": self.on_response})
                     raise signals.Switch
 
                 elif isinstance(node, Pipeline):
+                    context.pipeline = node
                     context.flow({"next": self.on_pipeline})
                     raise signals.Switch
 
                 elif isinstance(node, Task):
+                    context.task = node
                     pandora.invoke(
                         func=node.func,
                         args=node.args,
@@ -310,7 +329,7 @@ class Spider(air.Spider):
                     yield seeds or []
 
     def make_request(self, context: Context) -> Request:
-        node: Download = context.obtain("node")
+        node: Download = context.obtain("download")
         s = node.render(context)
         return Request(
             url=s.url,
@@ -330,7 +349,7 @@ class Spider(air.Spider):
         )
 
     def parse(self, context: Context):
-        node: Parse = context.obtain("node")
+        node: Parse = context.obtain("parse")
         engine = node.func
         args = node.args or []
         kwargs = node.kwargs or {}
@@ -382,7 +401,7 @@ class Spider(air.Spider):
             yield items or []
 
     def item_pipeline(self, context: Context):
-        node: Pipeline = context.obtain("node")
+        node: Pipeline = context.obtain("pipeline")
         engine = node.func
         args = node.args or []
         kwargs = node.kwargs or {}
