@@ -144,7 +144,7 @@ class Download(Node):
     method: str = 'GET'
     body: Union[str, dict] = None
     headers: Union[Header, dict] = None
-    cookies: Union[Dict[str, str]] = None
+    cookies: Dict[str, str] = None
     options: dict = None
     timeout: int = ...
     allow_redirects: bool = True
