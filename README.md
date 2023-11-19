@@ -25,3 +25,5 @@ pip install bricks-py
 * [1.0 简介](https://github.com/KKKKKKKEM/bricks/wiki/1.0-%E7%AE%80%E4%BB%8B)
 * [1.1 需求分析](https://github.com/KKKKKKKEM/bricks/wiki/1.1-需求分析)
 * [1.2 代码式开发](https://github.com/KKKKKKKEM/bricks/wiki/1.2-代码式开发)
+* [1.3 配置式开发](https://github.com/KKKKKKKEM/bricks/wiki/1.3-配置式开发)
+
