@@ -108,6 +108,7 @@ class Context(Flow):
 
 
 class Spider(Pangu):
+    Context = Context
 
     def __init__(
             self,
@@ -207,8 +208,7 @@ class Spider(Pangu):
                 "count_size": count_size,
             }
 
-            context_ = self.get_context(
-                {},
+            context_ = self.make_context(
                 task_queue=task_queue,
                 queue_name=queue_name,
                 next=self.produce_seeds,
@@ -311,12 +311,6 @@ class Spider(Pangu):
         task_queue.continue_(queue_name, maxsize=maxsize, interval=1)
         return task_queue.put(queue_name, *pandora.iterable(seeds), priority=priority, **kwargs)
 
-    def get_context(self, flows: dict = None, **kwargs) -> Context:
-        flows = self.flows if flows is None else flows
-
-        context = Context(target=self, flows=flows, **kwargs)
-        return context
-
     def run_spider(self):
         """
         start run spider
@@ -330,7 +324,7 @@ class Spider(Pangu):
         output = time.time()
 
         while True:
-            context = self.get_context(
+            context = self.make_context(
                 task_queue=task_queue,
                 queue_name=queue_name
             )
