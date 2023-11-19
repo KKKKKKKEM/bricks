@@ -38,7 +38,7 @@ class MySpider(form.Spider):
         )
 
 
-class MySubSpidr(MySpider):
+class MySubSpider(MySpider):
 
     @property
     def config(self) -> form.Config:
@@ -50,5 +50,5 @@ class MySubSpidr(MySpider):
 
 
 if __name__ == '__main__':
-    spider = MySubSpidr()
+    spider = MySubSpider()
     spider.run()

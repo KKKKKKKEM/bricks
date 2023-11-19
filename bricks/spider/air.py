@@ -13,6 +13,7 @@ from typing import Optional, List, Union, Iterable, Callable
 from loguru import logger
 
 from bricks import const
+from bricks import plugins
 from bricks.core import dispatch, signals, events
 from bricks.core.genesis import Pangu
 from bricks.downloader import genesis, cffi
@@ -757,5 +758,3 @@ class Spider(Pangu):
         self.use(const.AFTER_REQUEST, {"func": plugins.show_response}, {"func": plugins.is_success})
         super().before_start()
 
-
-from bricks import plugins
