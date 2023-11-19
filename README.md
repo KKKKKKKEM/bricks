@@ -19,7 +19,7 @@ Bricks 拥有以下特性
 pip install bricks-py
 ```
 
-# 文档地址
+# 使用文档
 ## 快速上手
 
 * [1.0 简介](https://github.com/KKKKKKKEM/bricks/wiki/1.0-%E7%AE%80%E4%BB%8B)
