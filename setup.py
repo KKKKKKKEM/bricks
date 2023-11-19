@@ -21,6 +21,8 @@ def read_requirements(filename):
         if not line.startswith('#')
     ]
 
+
+# python setup.py sdist bdist_wheel upload -r pypi
 setup(
     name='bricks-py',  # 包名
     python_requires='>=3.8.0',  # python环境
@@ -36,6 +38,3 @@ setup(
     script_name="setup.py",
     script_args="sdist bdist_wheel".split(" "),
 )
-
-
-# python setup.py sdist bdist_wheel upload -r pypi
