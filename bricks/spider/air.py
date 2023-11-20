@@ -2,13 +2,14 @@
 # @Time    : 2023-11-15 14:09
 # @Author  : Kem
 # @Desc    :
+import dataclasses
 import datetime
 import functools
 import inspect
 import math
 import re
 import time
-from typing import Optional, List, Union, Iterable, Callable
+from typing import Optional, List, Union, Iterable, Callable, Dict
 
 from loguru import logger
 
@@ -18,7 +19,9 @@ from bricks.core.genesis import Pangu
 from bricks.downloader import genesis, cffi
 from bricks.lib.context import Flow
 from bricks.lib.counter import FastWriteCounter
+from bricks.lib.headers import Header
 from bricks.lib.items import Items
+from bricks.lib.nodes import RenderNode
 from bricks.lib.proxies import manager
 from bricks.lib.queues import TaskQueue, LocalQueue, Item
 from bricks.lib.request import Request
@@ -26,6 +29,68 @@ from bricks.lib.response import Response
 from bricks.utils import pandora
 
 IP_REGEX = re.compile(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+')
+
+
+@dataclasses.dataclass
+class Download(RenderNode):
+    url: str
+    params: Optional[dict] = None
+    method: str = 'GET'
+    body: Union[str, dict] = None
+    headers: Union[Header, dict] = None
+    cookies: Dict[str, str] = None
+    options: dict = None
+    timeout: int = ...
+    allow_redirects: bool = True
+    proxies: Optional[str] = None
+    proxy: Optional[dict] = None
+    status_codes: Optional[dict] = ...
+    retry: int = 0
+    max_retry: int = 5
+    strict: str = "fix"
+
+    def to_request(self) -> Request:
+        return Request(
+            url=self.url,
+            params=self.params,
+            method=self.method,
+            body=self.body,
+            headers=self.headers,
+            cookies=self.cookies,
+            options=self.options,
+            timeout=self.timeout,
+            allow_redirects=self.allow_redirects,
+            proxies=self.proxies,
+            proxy=self.proxy,
+            status_codes=self.status_codes,
+            retry=self.retry,
+            max_retry=self.max_retry
+        )
+
+    def to_response(self, spider: "Spider" = None) -> Response:
+        stop_dispacher = False
+        if not spider:
+            spider = Spider()
+            spider.before_start()
+            if inspect.iscoroutinefunction(spider.downloader.fetch):
+                spider.dispatcher.start()
+                stop_dispacher = True
+
+        request = self.to_request()
+        context = spider.make_context(
+            request=request,
+            next=spider.on_request,
+            flows={
+                spider.on_request: None,
+                spider.on_retry: spider.on_request
+            },
+        )
+        context.failure = lambda shutdown: context.flow({"next": None})
+        try:
+            spider.on_consume(context=context)
+            return context.response
+        finally:
+            stop_dispacher and spider.dispatcher.stop()
 
 
 class Context(Flow):
@@ -480,7 +545,7 @@ class Spider(Pangu):
             if '$requestId' in options:
                 request.retry += 1
 
-            elif "proxyerror" in str(response.error).lower():
+            elif "proxyerror" not in str(response.error).lower():
                 request.retry += 1
 
             if '$retry' not in options:
@@ -493,16 +558,8 @@ class Spider(Pangu):
                 request.proxy = ""
 
         else:
-            indent = '\n            '
-            header = f"\n{'=' * 25} \033[33m[WARNING]\033[0m {'=' * 25}"
-            msg = [
-                "",
-                f"请求已经达到了最大重试次数,依旧请求失败",
-                f"seeds: {context.seeds}",
-                f"url: {request.real_url}",
-                ""
-            ]
-            logger.warning(f'{header}\n{indent.join(msg)}{header}')
+            logger.warning(
+                f'[超过重试次数] {f"SEEDS: {context.seeds}, " if context.seeds else ""} URL: {request.real_url}')
 
             if request.retry > options.get('$requestRetry', math.inf):
                 raise signals.Success
