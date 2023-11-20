@@ -6,12 +6,13 @@ import copy
 import inspect
 import re
 from dataclasses import dataclass, fields, is_dataclass
-from typing import Optional, Union, List, Dict, Callable
+from typing import Optional, Union, List, Dict, Callable, Any
 
 from loguru import logger
 
-from bricks import Request, Response
+from bricks import Request, Response, const
 from bricks.core import signals, events as _events
+from bricks.downloader import cffi
 from bricks.downloader import genesis
 from bricks.lib.headers import Header
 from bricks.lib.items import Items
@@ -22,17 +23,72 @@ from bricks.utils import pandora
 FORMAT_REGEX = re.compile(r'{(\w+)(?::(\w+))?}')
 
 
+@dataclass
+class Post:
+    value: Any = None
+    prev: "Post" = None
+
+
+@dataclass
+class SignPost:
+    """
+    流程游标
+
+    """
+
+    cursor: Union[Post, int] = Post(0)
+    download: Union[Post, int] = Post(0)
+    parse: Union[Post, int] = Post(0)
+    pipeline: Union[Post, int] = Post(0)
+    action: Union[Post, str] = Post("")
+
+    def __setattr__(self, key, value):
+        if not isinstance(value, Post):
+            value = Post(value)
+            value.prev = getattr(self, key, Post())
+
+        return super().__setattr__(key, value)
+
+    def rollback(self, names: list = None):
+
+        names = names or [field.name for field in fields(self)]
+
+        for name in names:
+            v = getattr(self, name, None)
+            if v is None:
+                continue
+            else:
+                setattr(self, name, v.prev)
+
+
 class Context(air.Context):
+    target: "Spider"
+
+    def __init__(self, target: "Spider", form: str = const.ON_CONSUME, **kwargs) -> None:
+        super().__init__(target, form, **kwargs)
+        self.signpost: SignPost = kwargs.get("signpost") or SignPost()
 
     def retry(self):
         super().retry()
-        self.signpost['retry'] = True
+        self.signpost.action = "retry"
 
-    def submit(self, obj: Union[Request, Item, dict], call_later=False) -> "Context":
-        context = super().submit(obj, call_later)
-        if not call_later:
-            context.signpost = {"cursor": 1}
-        return context
+    def submit(self, obj: Union[Request, Item, dict], call_later=False, signpost: SignPost = None) -> "Context":
+        assert obj.__class__ in [Request, Item, dict], f"不支持的类型: {obj.__class__}"
+        if obj.__class__ in [Item, dict]:
+            signpost = SignPost(cursor=Post(self.signpost.download.value)) if signpost is None else signpost
+
+            if call_later:
+                self.task_queue.put(self.queue_name, obj)
+                return self
+            else:
+                self.task_queue.put(self.queue_name, obj, qtypes="temp")
+                return self.branch({
+                    "seeds": obj,
+                    "signpost": signpost
+                })
+        else:
+            signpost = signpost or SignPost()
+            return self.branch({"request": obj, "next": self.target.on_request, "signpost": signpost})
 
 
 @dataclass
@@ -170,6 +226,29 @@ class Download(Node):
     max_retry: int = 5
     strict: str = "fix"
 
+    def to_request(self) -> Request:
+        return Request(
+            url=self.url,
+            params=self.params,
+            method=self.method,
+            body=self.body,
+            headers=self.headers,
+            cookies=self.cookies,
+            options=self.options,
+            timeout=self.timeout,
+            allow_redirects=self.allow_redirects,
+            proxies=self.proxies,
+            proxy=self.proxy,
+            status_codes=self.status_codes,
+            retry=self.retry,
+            max_retry=self.max_retry
+        )
+
+    def to_response(self, downloader: genesis.Downloader = None) -> Response:
+        request = self.to_request()
+        downloader = downloader or cffi.Downloader()
+        return downloader.fetch(request)
+
 
 @dataclass
 class Parse(Node):
@@ -216,7 +295,8 @@ class Spider(air.Spider):
     def flows(self):
         return {
             self.on_consume: self.on_flow,
-            self.on_seeds: self.on_request,
+            self.on_seeds: self.on_flow,
+            self.make_request: self.on_request,
             self.on_request: self.on_flow,
             self.on_retry: self.on_flow,
             self.on_response: self.on_flow,
@@ -232,44 +312,45 @@ class Spider(air.Spider):
             logger.warning('没有配置 Spider 节点流程..')
             raise signals.Exit
 
-        context.signpost.setdefault("cursor", 0)
         # 这是重试回来了
-        if context.signpost.pop('retry', False):
-            # 找到之前下载节点的位置
-            bookmark = context.signpost.get('bookmark', 0)
+        if context.signpost.action.value == "retry":
             # 找到下载节点前面不是 Task 的节点
-            for i in range(bookmark - 1, -1, -1):
+            for i in range(context.signpost.download.value - 1, -1, -1):
                 node = self.config.spider[i]
                 if not isinstance(node, Task):
-                    context.signpost['cursor'] = i + 1
+                    context.signpost.cursor = i + 1
                     break
             else:
-                context.signpost['cursor'] = bookmark
+                context.signpost.cursor = context.signpost.download.value
+
+            context.signpost.action = ""
 
         while True:
             try:
-                node: Union[Download, Task, Parse, Pipeline] = self.config.spider[context.signpost['cursor']]
+                node: Union[Download, Task, Parse, Pipeline] = self.config.spider[context.signpost.cursor.value]
             except IndexError:
                 context.flow({"next": None})
                 raise signals.Switch
             else:
-                context.signpost['cursor'] += 1
+                context.signpost.cursor = context.signpost.cursor.value + 1
 
                 # 种子 -> Request
                 if isinstance(node, Download):
                     # 记录下载节点的位置
-                    context.signpost['bookmark'] = context.signpost['cursor'] - 1
+                    context.signpost.download = context.signpost.cursor.value - 1
                     context.download = node
-                    context.flow({"next": self.on_seeds})
+                    context.flow({"next": self.make_request})
                     raise signals.Switch
 
                 # Request -> Response
                 elif isinstance(node, Parse):
+                    context.signpost.parse = context.signpost.cursor.value - 1
                     context.parse = node
                     context.flow({"next": self.on_response})
                     raise signals.Switch
 
                 elif isinstance(node, Pipeline):
+                    context.signpost.pipeline = context.signpost.cursor.value - 1
                     context.pipeline = node
                     context.flow({"next": self.on_pipeline})
                     raise signals.Switch
@@ -331,22 +412,9 @@ class Spider(air.Spider):
     def make_request(self, context: Context) -> Request:
         node: Download = context.obtain("download")
         s = node.render(context)
-        return Request(
-            url=s.url,
-            params=s.params,
-            method=s.method,
-            body=s.body,
-            headers=s.headers,
-            cookies=s.cookies,
-            options=s.options,
-            timeout=s.timeout,
-            allow_redirects=s.allow_redirects,
-            proxies=s.proxies,
-            proxy=s.proxy,
-            status_codes=s.status_codes,
-            retry=s.retry,
-            max_retry=s.max_retry
-        )
+        request = s.to_request()
+        context.flow({"request": request})
+        return request
 
     def parse(self, context: Context):
         node: Parse = context.obtain("parse")
@@ -439,3 +507,11 @@ class Spider(air.Spider):
         super().before_start()
         for form, events in (self.config.events or {}).items():
             self.use(form, *events)
+
+
+if __name__ == '__main__':
+    s = SignPost(1)
+    s.cursor = 2
+    print(s.cursor, s.download)
+    s.rollback()
+    print(s.cursor, s.download)
