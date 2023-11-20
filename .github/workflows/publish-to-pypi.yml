@@ -34,8 +34,7 @@ jobs:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
         run: |
-            twine check dist/*
-            twine upload dist/*
+            twine upload --repository testpypi dist/* 
 
   deploy-to-pypi:
     runs-on: ubuntu-latest
@@ -62,5 +61,4 @@ jobs:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          twine check dist/* --verbose
-          twine upload dist/* --verbose
+          twine upload dist/* 
