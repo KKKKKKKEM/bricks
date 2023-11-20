@@ -48,9 +48,6 @@ class Item(dict):
         fdel=lambda self: setattr(self, "_fingerprint", None)
     )
 
-    def rebuild_fingerprint(self):
-        self.fingerprint = json.dumps(self, default=str, sort_keys=True)
-
     def __str__(self):
         if self:
             return repr(self)
