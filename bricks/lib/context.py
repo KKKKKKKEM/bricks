@@ -67,7 +67,6 @@ class Flow(Context):
         super().__init__(form, target, **kwargs)
         self.doing: deque = deque([self])
         self.pending: deque = deque([])
-        self.signpost: dict = self.install("signpost", {}, True)
 
     def _set_next(self, value):
         if isinstance(value, Node):
