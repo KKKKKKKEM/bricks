@@ -2,63 +2,20 @@
 # @Time    : 2023-11-18 10:47
 # @Author  : Kem
 # @Desc    :
-import copy
 import inspect
-import re
-from dataclasses import dataclass, fields, is_dataclass
-from typing import Optional, Union, List, Dict, Callable, Any
+from dataclasses import dataclass
+from typing import Optional, Union, List, Dict, Callable
 
 from loguru import logger
 
 from bricks import Request, Response, const
 from bricks.core import signals, events as _events
-from bricks.downloader import cffi
 from bricks.downloader import genesis
-from bricks.lib.headers import Header
 from bricks.lib.items import Items
+from bricks.lib.nodes import RenderNode, SignPost, Post
 from bricks.lib.queues import TaskQueue, Item
 from bricks.spider import air
 from bricks.utils import pandora
-
-FORMAT_REGEX = re.compile(r'{(\w+)(?::(\w+))?}')
-
-
-@dataclass
-class Post:
-    value: Any = None
-    prev: "Post" = None
-
-
-@dataclass
-class SignPost:
-    """
-    流程游标
-
-    """
-
-    cursor: Union[Post, int] = Post(0)
-    download: Union[Post, int] = Post(0)
-    parse: Union[Post, int] = Post(0)
-    pipeline: Union[Post, int] = Post(0)
-    action: Union[Post, str] = Post("")
-
-    def __setattr__(self, key, value):
-        if not isinstance(value, Post):
-            value = Post(value)
-            value.prev = getattr(self, key, Post())
-
-        return super().__setattr__(key, value)
-
-    def rollback(self, names: list = None):
-
-        names = names or [field.name for field in fields(self)]
-
-        for name in names:
-            v = getattr(self, name, None)
-            if v is None:
-                continue
-            else:
-                setattr(self, name, v.prev)
 
 
 class Context(air.Context):
@@ -91,167 +48,12 @@ class Context(air.Context):
             return self.branch({"request": obj, "next": self.target.on_request, "signpost": signpost})
 
 
-@dataclass
-class Node:
-
-    @classmethod
-    def format(cls, value, base: dict, errors: str = "raise"):
-        if isinstance(value, str):
-            while True:
-                try:
-                    return value.format(**base)
-                except ValueError:
-
-                    placeholders = FORMAT_REGEX.findall(value)
-                    # 有多个, 那最终肯定还是字符串
-                    convert_value = len(placeholders) == 1
-                    for placeholder, type_str in placeholders:
-
-                        if placeholder not in base:
-                            if errors == 'raise':
-                                raise ValueError(f"Missing key in base: {placeholder}")
-                            elif errors == 'ignore':
-                                return value
-                            else:
-                                base.setdefault(placeholder, "")
-
-                        placeholder_value = base[placeholder]
-                        if type_str:
-                            placeholder_value = cls.convert(placeholder_value, type_str)
-                            value = value.replace(f"{{{placeholder}:{type_str}}}", str(placeholder_value))
-                        else:
-                            value = value.replace(f"{{{placeholder}}}", str(placeholder_value))
-
-                        if convert_value:
-                            value = cls.convert(value, type(placeholder_value))
-
-                    return value
-
-                except KeyError as e:
-                    if errors == "raise":
-                        raise ValueError(f"Missing key in base: {e}")
-
-                    elif errors == 'ignore':
-                        return value
-
-                    else:
-                        base.setdefault(e.args[0], "")
-
-        elif isinstance(value, list):
-            return [cls.format(item, base, errors=errors) for item in value]
-        elif isinstance(value, dict):
-            return {k: cls.format(v, base, errors=errors) for k, v in value.items()}
-        elif is_dataclass(value):
-            return value.render(base)
-        return value
-
-    @staticmethod
-    def convert(value, type_str):
-        maps = {
-            "int": {
-                "action": int,
-                "default": 0
-            },
-            int: {
-                "action": int,
-                "default": 0
-            },
-            "str": {
-                "action": str,
-                "default": ""
-            },
-            str: {
-                "action": str,
-                "default": ""
-            },
-            "float": {
-                "action": str,
-                "default": 0.0
-            },
-            float: {
-                "action": str,
-                "default": 0.0
-            },
-            "json": {
-                "action": pandora.json_or_eval,
-                "default": None
-            },
-            list: {
-                "action": pandora.json_or_eval,
-                "default": None
-            },
-            dict: {
-                "action": pandora.json_or_eval,
-                "default": None
-            },
-        }
-        if type_str in maps:
-            try:
-                return maps[type_str]['action'](value)
-            except ValueError:
-                return maps[type_str]['default']
-        else:
-            return value
-
-    def render(self, context: Context):
-        base = context.seeds
-        # 创建一个新的实例，避免修改原始实例
-        node = copy.deepcopy(self)
-        for field in fields(self):
-            value = getattr(node, field.name)
-            new_value = self.format(value, base, errors=getattr(self, "strict", "fix"))
-            setattr(node, field.name, new_value)
-        return node
-
-
-class Task(_events.Task, Node):
+class Task(_events.Task, RenderNode):
     ...
 
 
 @dataclass
-class Download(Node):
-    url: str
-    params: Optional[dict] = None
-    method: str = 'GET'
-    body: Union[str, dict] = None
-    headers: Union[Header, dict] = None
-    cookies: Dict[str, str] = None
-    options: dict = None
-    timeout: int = ...
-    allow_redirects: bool = True
-    proxies: Optional[str] = None
-    proxy: Optional[dict] = None
-    status_codes: Optional[dict] = ...
-    retry: int = 0
-    max_retry: int = 5
-    strict: str = "fix"
-
-    def to_request(self) -> Request:
-        return Request(
-            url=self.url,
-            params=self.params,
-            method=self.method,
-            body=self.body,
-            headers=self.headers,
-            cookies=self.cookies,
-            options=self.options,
-            timeout=self.timeout,
-            allow_redirects=self.allow_redirects,
-            proxies=self.proxies,
-            proxy=self.proxy,
-            status_codes=self.status_codes,
-            retry=self.retry,
-            max_retry=self.max_retry
-        )
-
-    def to_response(self, downloader: genesis.Downloader = None) -> Response:
-        request = self.to_request()
-        downloader = downloader or cffi.Downloader()
-        return downloader.fetch(request)
-
-
-@dataclass
-class Parse(Node):
+class Parse(RenderNode):
     func: Union[str, Callable]
     args: Optional[list] = None
     kwargs: Optional[dict] = None
@@ -259,7 +61,7 @@ class Parse(Node):
 
 
 @dataclass
-class Pipeline(Node):
+class Pipeline(RenderNode):
     func: Union[str, Callable]
     args: Optional[list] = None
     kwargs: Optional[dict] = None
@@ -268,11 +70,14 @@ class Pipeline(Node):
 
 
 @dataclass
-class Init(Node):
+class Init(RenderNode):
     func: Union[str, Callable]
     args: Optional[list] = None
     kwargs: Optional[dict] = None
     strict: str = "fix"
+
+
+Download = air.Download
 
 
 @dataclass
@@ -411,7 +216,7 @@ class Spider(air.Spider):
 
     def make_request(self, context: Context) -> Request:
         node: Download = context.obtain("download")
-        s = node.render(context)
+        s = node.render(context.seeds)
         request = s.to_request()
         context.flow({"request": request})
         return request
@@ -510,8 +315,6 @@ class Spider(air.Spider):
 
 
 if __name__ == '__main__':
-    s = SignPost(1)
-    s.cursor = 2
-    print(s.cursor, s.download)
-    s.rollback()
-    print(s.cursor, s.download)
+    node = Download(url="https://www.baidu.com")
+    res = node.to_response()
+    print(res)
