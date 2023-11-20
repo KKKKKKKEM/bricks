@@ -2,8 +2,6 @@ from os import path as os_path
 
 from setuptools import setup, find_packages
 
-from bricks import const
-
 this_directory = os_path.abspath(os_path.dirname(__file__))
 
 
@@ -25,7 +23,7 @@ def read_requirements(filename):
 setup(
     name='bricks-py',  # 包名
     python_requires='>=3.8.0',  # python环境
-    version=const.VERSION,  # 包的版本
+    version="0.0.6.2",  # 包的版本
     description="quickly build your crawler",  # 包简介，显示在PyPI上
     author="Kem",  # 作者相关信息
     author_email='531144129@qq.com',
