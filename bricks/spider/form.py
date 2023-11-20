@@ -312,9 +312,3 @@ class Spider(air.Spider):
         super().before_start()
         for form, events in (self.config.events or {}).items():
             self.use(form, *events)
-
-
-if __name__ == '__main__':
-    node = Download(url="https://www.baidu.com")
-    res = node.to_response()
-    print(res)
