@@ -3,9 +3,9 @@
 # @Author  : Kem
 # @Desc    :
 from collections import deque
-from typing import Callable, Optional
 
 from bricks.core import signals
+from bricks.lib.nodes import LinkNode
 
 
 class Context:
@@ -31,68 +31,34 @@ class Context:
             return value
 
 
-class Node:
+class Flow(Context):
 
     def __init__(
             self,
-            root: Callable = None,
-            prev: Optional['Node'] = None,
-            callback: Optional[Callable] = None
-    ):
-        self._prev = prev
-        self.root = root
-        self.callback = callback
-
-    @property
-    def prev(self):
-        if not isinstance(self._prev, Node):
-            return Node(self._prev)
-        return self._prev
-
-    def __bool__(self):
-        return bool(self.root)
-
-    def __str__(self):
-        return f'Node({self.root})'
-
-    def __call__(self, *args, **kwargs):
-        return self.root(*args, **kwargs)
-
-
-class Flow(Context):
-    _next: Node
-
-    def __init__(self, form: str, target=None, **kwargs) -> None:
+            form: str,
+            target=None,
+            next: LinkNode = None,  # noqa
+            flows: dict = None,
+            args: list = None,
+            kwargs: dict = None,
+            **options
+    ) -> None:
+        self.next = next
         self.callback = None
-        super().__init__(form, target, **kwargs)
+        self.args = args or []
+        self.kwargs = kwargs or {}
+        self.flows = flows or {}
+        super().__init__(form, target, **options)
         self.doing: deque = deque([self])
         self.pending: deque = deque([])
 
-    def _set_next(self, value):
-        if isinstance(value, Node):
-            value = value.root
-        self._next = Node(value, self.next)
+    def __setattr__(self, key, value):
+        if key == "next":
+            if isinstance(value, LinkNode):
+                value = value.root
+            value = LinkNode(value, getattr(self, "next", LinkNode()))
 
-    next: Node = property(
-        fget=lambda self: getattr(self, "_next", Node()),
-        fset=_set_next,
-        fdel=lambda self: setattr(self, "_next", Node())
-    )
-    args: list = property(
-        fget=lambda self: getattr(self, "_args", []),
-        fset=lambda self, value: setattr(self, "_args", value),
-        fdel=lambda self: setattr(self, "_args", [])
-    )
-    kwargs: dict = property(
-        fget=lambda self: getattr(self, "_kwargs", {}),
-        fset=lambda self, value: setattr(self, "_kwargs", value),
-        fdel=lambda self: setattr(self, "_kwargs", {})
-    )
-    flows: dict = property(
-        fget=lambda self: getattr(self, "_flow", {}),
-        fset=lambda self, value: setattr(self, "_flow", value),
-        fdel=lambda self: setattr(self, "_flow", {})
-    )
+        super().__setattr__(key, value)
 
     def is_continue(self) -> bool:
         return bool(self.doing or self.pending)
@@ -114,7 +80,7 @@ class Flow(Context):
                 node = self.flows[self.next.root]
 
             else:
-                node = Node()
+                node = LinkNode()
 
             self.next = node
 
@@ -129,7 +95,7 @@ class Flow(Context):
         node = self.next.prev
         while recursion and node and node.root not in self.flows:
             node = node.prev
-        self._next = node
+        self.next = node
         return self
 
     def branch(self, attrs: dict = None, rollback=False, submit=True):
