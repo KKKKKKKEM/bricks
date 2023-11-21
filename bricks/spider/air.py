@@ -110,29 +110,16 @@ class Context(Flow):
         super().__init__(form, target, **kwargs)
         self.target: Spider = target
 
-    seeds: Item = property(
-        fget=lambda self: getattr(self, "_seeds", None),
-        fset=lambda self, value: setattr(self, "_seeds", pandora.ensure_type(value, Item)),
-        fdel=lambda self: setattr(self, "_seeds", None)
-    )
+    def __setattr__(self, key, value):
+        maps = {
+            "seeds": Item,
+            "items": Items,
+        }
 
-    items: Items = property(
-        fget=lambda self: getattr(self, "_items", None),
-        fset=lambda self, value: setattr(self, "_items", pandora.ensure_type(value, Items)),
-        fdel=lambda self: setattr(self, "_items", None)
-    )
+        if key in maps and type(value) != maps[key]:
+            value = maps[key](value)
 
-    task_queue: TaskQueue = property(
-        fget=lambda self: getattr(self, "_task_queue", None),
-        fset=lambda self, value: setattr(self, "_task_queue", value),
-        fdel=lambda self: setattr(self, "_task_queue", None)
-    )
-
-    queue_name: str = property(
-        fget=lambda self: getattr(self, "_queue_name", None),
-        fset=lambda self, value: setattr(self, "_queue_name", value),
-        fdel=lambda self: setattr(self, "_queue_name", None)
-    )
+        super().__setattr__(key, value)
 
     def success(self, shutdown=False):
         ret = self.task_queue.remove(self.queue_name, self.seeds)
@@ -212,84 +199,78 @@ class Spider(Pangu):
     def run_init(self):
         """
         初始化
+
         :return:
         """
 
         task_queue: TaskQueue = self.obtain("init.task_queue", self.task_queue)
         queue_name: str = self.obtain("init.queue_name", self.queue_name)
+        # 判断是否有初始化权限
+        pinfo: dict = task_queue.command(queue_name, {"action": task_queue.COMMANDS.GET_PERMISSION})
+        if not pinfo['state']:
+            logger.debug(f"[停止投放] 当前机器 ID: {const.MACHINE_ID}, 原因: {pinfo['msg']}")
+            return
 
-        if self.obtain('task_name') != "init":
-            # 判断是否有初始化权限
-            pinfo: dict = task_queue.command(queue_name, {"action": task_queue.COMMANDS.GET_PERMISSION})
-            if not pinfo['state']:
-                logger.debug(f"[停止投放] 当前机器 ID: {const.MACHINE_ID}, 原因: {pinfo['msg']}")
-                return
+        task_queue.command(queue_name, {"action": task_queue.COMMANDS.SET_INIT})
 
-        task_queue.command(queue_name, {"action": task_queue.COMMANDS.SET_INIT_STATUS})
+        logger.debug(f"[开始投放] 获取初始化权限成功, MACHINE_ID: {const.MACHINE_ID}")
+        # 本地的初始化记录 -> 启动传入的
+        local_init_record: dict = self.obtain('init.record') or {}
+        # 云端的初始化记录 -> 初始化的时候会存储(如果支持的话)
+        remote_init_record = task_queue.command(
+            queue_name,
+            {"action": task_queue.COMMANDS.GET_RECORD, "filter": 1}
+        ) or {}
 
-        try:
-            logger.debug(f"[开始投放] 获取初始化权限成功, MACHINE_ID: {const.MACHINE_ID}")
-            # 本地的初始化记录 -> 启动传入的
-            local_init_record: dict = self.obtain('init.record') or {}
-            # 云端的初始化记录 -> 初始化的时候会存储(如果支持的话)
-            remote_init_record = task_queue.command(queue_name, {"action": task_queue.COMMANDS.GET_INIT_RECORD}) or {}
+        # 初始化记录信息
+        record: dict = {
+            **local_init_record,
+            **remote_init_record,
+            "queue_name": queue_name,
+            "task_queue": task_queue,
+            "identifier": const.MACHINE_ID,
+        }
 
-            # 初始化记录信息
-            record: dict = {
-                **local_init_record,
-                **remote_init_record,
-                "queue_name": queue_name,
-                "task_queue": task_queue,
-                "identifier": const.MACHINE_ID,
-            }
+        # 设置一个启动时间, 防止被覆盖
+        record.setdefault("start", str(datetime.datetime.now()))
 
-            # 设置一个启动时间, 防止被覆盖
-            record.setdefault("start", str(datetime.datetime.now()))
+        # 获取已经初始化的总量
+        total = int(record.setdefault('total', 0))
+        # 获取已经初始化的去重数量
+        success = int(record.setdefault('success', 0))
 
-            # 获取已经初始化的总量
-            total = int(record.setdefault('total', 0))
-            # 获取已经初始化的去重数量
-            success = int(record.setdefault('success', 0))
+        # 初始化总数量阈值 -> 大于这个数量停止初始化
+        total_size = self.obtain('init.total.size', math.inf)
+        # 当前初始化总量阈值 -> 大于这个数量停止初始化
+        count_size = self.obtain('init.count.size', math.inf)
+        # 初始化成功数量阈值 (去重) -> 大于这个数量停止初始化
+        success_size = self.obtain('init.success.size', math.inf)
+        # 初始化队列最大数量 -> 大于这个数量暂停初始化
+        queue_size: int = self.obtain("init.queue.size", 100000)
 
-            # 初始化总数量阈值 -> 大于这个数量停止初始化
-            total_size = self.obtain('init.total.size', math.inf)
-            # 当前初始化总量阈值 -> 大于这个数量停止初始化
-            count_size = self.obtain('init.count.size', math.inf)
-            # 初始化成功数量阈值 (去重) -> 大于这个数量停止初始化
-            success_size = self.obtain('init.success.size', math.inf)
-            # 初始化队列最大数量 -> 大于这个数量暂停初始化
-            queue_size: int = self.obtain("init.queue.size", 100000)
+        settings = {
+            "total": total,
+            "success": success,
+            "count": 0,
 
-            settings = {
-                "total": total,
-                "success": success,
-                "count": 0,
+            "record": record,
+            "queue_size": queue_size,
 
-                "record": record,
-                "queue_size": queue_size,
+            "total_size": total_size,
+            "success_size": success_size,
+            "count_size": count_size,
+        }
 
-                "total_size": total_size,
-                "success_size": success_size,
-                "count_size": count_size,
-            }
-
-            context_ = self.make_context(
-                task_queue=task_queue,
-                queue_name=queue_name,
-                next=self.produce_seeds,
-                settings=settings
-            )
-            self.on_consume(context_)
-            record.update(finish=str(datetime.datetime.now()))
-            task_queue.command(queue_name, {
-                "action": task_queue.COMMANDS.BACKUP_INIT_RECORD,
-                "record": record,
-                "ttl": self.obtain("init.history.ttl")
-            })
-            return record
-
-        finally:
-            task_queue.command(queue_name, {"action": task_queue.COMMANDS.RELEASE_INIT_STATUS})
+        context_ = self.make_context(
+            task_queue=task_queue,
+            queue_name=queue_name,
+            next=self.produce_seeds,
+            settings=settings
+        )
+        self.on_consume(context_)
+        record.update(finish=str(datetime.datetime.now()))
+        task_queue.command(queue_name, {"action": task_queue.COMMANDS.RELEASE_INIT, "time": int(time.time() * 1000)})
+        return record
 
     def produce_seeds(self, context: Context):
         """
@@ -347,7 +328,7 @@ class Spider(Pangu):
                 "update": str(datetime.datetime.now()),
             })
 
-            context.task_queue.command(context.queue_name, {"action": context.task_queue.COMMANDS.SET_INIT_RECORD,
+            context.task_queue.command(context.queue_name, {"action": context.task_queue.COMMANDS.SET_RECORD,
                                                             "record": settings["record"]})
             logger.debug(output)
 
@@ -431,7 +412,7 @@ class Spider(Pangu):
                 # 判断是否应该停止爬虫
                 #  没有初始化 + 本地没有运行的任务 + 任务队列为空 -> 退出
                 if (
-                        not task_queue.command(queue_name, {"action": task_queue.COMMANDS.IS_INIT_STATUS}) and
+                        not task_queue.command(queue_name, {"action": task_queue.COMMANDS.IS_INIT}) and
                         not self.forever and
                         task_queue.is_empty(queue_name, threshold=self.obtain("spider.threshold", default=0))
                 ):
@@ -480,11 +461,12 @@ class Spider(Pangu):
 
     def run_all(self):
         self.dispatcher.start()
+        t1 = int(time.time() * 1000)
         init_task = dispatch.Task(func=self.run_init)
         self.active(init_task)
         task_queue: TaskQueue = self.obtain("init.task_queue", self.task_queue)
         queue_name: str = self.obtain("init.queue_name", self.queue_name)
-        task_queue.command(queue_name, {"action": task_queue.COMMANDS.WAIT_FOR_INIT_START})
+        task_queue.command(queue_name, {"action": task_queue.COMMANDS.WAIT_INIT, "time": t1})
         self.run_spider()
 
     @staticmethod

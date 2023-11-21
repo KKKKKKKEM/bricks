@@ -246,15 +246,17 @@ class TaskQueue(metaclass=genesis.MetaClass):
 
     class COMMANDS:
         GET_PERMISSION = "GET_PERMISSION"
-        GET_INIT_RECORD = "GET_INIT_RECORD"
-        RESET_QUEUE = "RESET_QUEUE"
-        CONTINUE_INIT_RECORD = "CONTINUE_INIT_RECORD"
-        SET_INIT_RECORD = "SET_INIT_RECORD"
-        BACKUP_INIT_RECORD = "BACKUP_INIT_RECORD"
-        WAIT_FOR_INIT_START = "WAIT_FOR_INIT_START"
-        SET_INIT_STATUS = "SET_INIT_STATUS"
-        IS_INIT_STATUS = "IS_INIT_STATUS"
-        RELEASE_INIT_STATUS = "RELEASE_INIT_STATUS"
+
+        GET_RECORD = "GET_RECORD"
+        CONTINUE_RECORD = "CONTINUE_RECORD"
+        SET_RECORD = "SET_RECORD"
+
+        WAIT_INIT = "WAIT_INIT"
+        RESET_INIT = "RESET_INIT"
+        RELEASE_INIT = "RELEASE_INIT"
+        IS_INIT = "IS_INIT"
+        SET_INIT = "SET_INIT"
+
         RUN_SUBSCRIBE = "RUN_SUBSCRIBE"
 
     reversible = property(
@@ -552,35 +554,36 @@ class LocalQueue(TaskQueue):
                 self._container.pop(self.name2key(name, qtype), None)
 
     def command(self, name: str, order: dict):
-        def set_init_record():
-            os.environ[f'{name}-init-record'] = json.dumps(order['record'], default=str)
+        def set_record():
+            key = self.name2key(name, "record")
+            os.environ[key] = json.dumps(order['record'], default=str)
 
         def reset_init_record():
-            os.environ.pop(f'{name}-init-record', None)
+            key = self.name2key(name, "record")
+            os.environ.pop(key, None)
             self.clear(name)
 
-        def backup_init_record():
-            record = order['record']
-            os.environ[f'{name}-init-record-backup'] = json.dumps(record, default=str)
-
         def wait_for_init_start():
+            key = self.name2key(name, "record")
 
-            while not self._status[f'{name}-init-status'].is_set() and self.is_empty(name):
+            while not self._status[key].is_set() and self.is_empty(name):
                 time.sleep(1)
                 logger.debug('等待初始化开始')
 
         actions = {
             self.COMMANDS.GET_PERMISSION: lambda: {"state": True, "msg": "success"},
-            self.COMMANDS.GET_INIT_RECORD: lambda: json.loads(os.environ.get(f'{name}-init-record') or "{}"),
-            self.COMMANDS.RESET_QUEUE: reset_init_record,
-            self.COMMANDS.CONTINUE_INIT_RECORD: lambda: self.reverse(name),
-            self.COMMANDS.SET_INIT_RECORD: set_init_record,
-            self.COMMANDS.BACKUP_INIT_RECORD: backup_init_record,
 
-            self.COMMANDS.WAIT_FOR_INIT_START: wait_for_init_start,
-            self.COMMANDS.SET_INIT_STATUS: lambda: self._status[f'{name}-init-status'].set(),
-            self.COMMANDS.IS_INIT_STATUS: lambda: self._status[f'{name}-init-status'].is_set(),
-            self.COMMANDS.RELEASE_INIT_STATUS: lambda: self._status[f'{name}-init-status'].clear(),
+            self.COMMANDS.GET_RECORD: lambda: json.loads(os.environ.get(self.name2key(name, "record")) or "{}"),
+            self.COMMANDS.CONTINUE_RECORD: lambda: self.reverse(name),
+
+            self.COMMANDS.SET_RECORD: set_record,
+
+            self.COMMANDS.RESET_INIT: reset_init_record,
+
+            self.COMMANDS.WAIT_INIT: wait_for_init_start,
+            self.COMMANDS.SET_INIT: lambda: self._status[self.name2key(name, "record")].set(),
+            self.COMMANDS.IS_INIT: lambda: self._status[self.name2key(name, "record")].is_set(),
+            self.COMMANDS.RELEASE_INIT: lambda: self._status[self.name2key(name, "record")].clear(),
         }
         action = order['action']
         if action in actions:
@@ -988,12 +991,14 @@ end
                 -- 1. 存在种子 
                 local is_record_key_exists = redis.call("EXISTS", record_key)
                 if is_record_key_exists == 1 then
-                    -- 1.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 -> true
+                    -- 1.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 + record.status = 1 -> true
                     local identifier = redis.call("HGET", record_key, "identifier")
-                    if machine_id == identifier then
+                    local status = redis.call("HGET", record_key, "status")
+                    if (machine_id == identifier and status == "1") then
+                    
                         return true
                     else
-                        return "非初始化机器"
+                        return "非初始化机器/初始化状态不为 0"
                     end
                 else
                     -- 1.2 不存在 record -> false
@@ -1005,15 +1010,23 @@ end
                 -- 2.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 -> true
                 local is_record_key_exists = redis.call("EXISTS", record_key)
                 if is_record_key_exists == 1 then
-                    -- 1.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 -> true
+                    -- 1.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 -> 判断 record.status
                     local identifier = redis.call("HGET", record_key, "identifier")
+                    local status = redis.call("HGET", record_key, "status")
                     if machine_id == identifier then
+                        -- record.status == 0, 表示曾经跑过 -> 重新初始化
+                        if status == "0" then
+                            redis.call("DEL", record_key)
+                        end
+                        
+                        redis.call("HSET", record_key, "identifier", machine_id)
                         return true
                     else
-                        return "非初始化机器"
+                        return "非初始化机器/初始化状态不为 0"
                     end
                 else
                     -- 不存在 record -> true
+                    redis.call("HSET", record_key, "identifier", machine_id)
                     return true
                 end
             
@@ -1021,6 +1034,30 @@ end
             end
             
             """),
+            "release_init": self.redis_db.register_script("""
+            redis.replicate_commands()
+            local record_key = KEYS[1]
+            local history_key = KEYS[2]
+            local machine_id = ARGV[1]
+            local ttl = ARGV[2]
+            local tt = ARGV[3]
+            local identifier = redis.call("HGET", record_key, "identifier")
+            if machine_id == identifier then
+                redis.call("HSET", record_key, "status", 0, "time", tt)
+                redis.call("HDEL", record_key, "identifier")
+                if ttl ~= 0 then
+                    redis.call("DEL", history_key)    
+                    local dump = redis.call('DUMP', record_key)
+                    redis.call('RESTORE', history_key, ttl, dump)
+                end
+                return true
+            
+            end
+            return false
+            
+            
+            
+            """)
         }
 
     def get(self, name, **kwargs):
@@ -1194,26 +1231,16 @@ end
         ret = self.scripts["smart_reverse"](keys=keys, args=args)
         return ret == 1
 
-    def is_empty(self, name, timeout=5, threshold=0, **kwargs):
+    def is_empty(self, name, threshold=0, **kwargs):
         """
         判断 `name` 是否为空
 
         :param threshold:
         :param name:
-        :param timeout:
         :return:
         """
         db_num = kwargs.pop('db_num', self.database)
-        stime = time.time()
-        while time.time() - stime < timeout:
-            try:
-                assert self.size(name, db_num=db_num) <= threshold and not self.redis_db.exists(
-                    self.name2key(name, 'status'),
-                    self.name2key(name, 'lock'),
-                )
-            except AssertionError:
-                return False
-        return True
+        return self.size(name, db_num=db_num) <= threshold
 
     @classmethod
     def from_redis(cls, obj, **kwargs):
@@ -1268,47 +1295,87 @@ end
                 "msg": ret
             }
 
-        def set_init_record():
+        def set_record():
             self.redis_db.hset(
                 self.name2key(name, 'record'),
                 mapping=json.loads(json.dumps(order['record'], default=str))
             )
 
-        def backup_init_record():
-            dst = self.name2key(name, 'history')
-            src = self.name2key(name, 'record')
-            record = order['record']
-            self.redis_db.delete(dst, src)
-            self.redis_db.hset(dst, mapping=json.loads(
-                json.dumps({**record, "finish": str(datetime.datetime.now())}, default=str)))
-            history_ttl = order.get('ttl')
-            history_ttl and self.redis_db.expire(dst, history_ttl)
+        def wait_init():
+            key = self.name2key(name, 'record')
+            t1 = order.get('time')
+            while True:
+                if not self.is_empty(name):
+                    return
 
-        def wait_for_init_start():
-            # 没有 init-status 这个 key 并且队列为空 -> 一直等待
-            while not self.redis_db.exists(self.name2key(name, 'init-status')) and self.is_empty(name):
+                t2 = self.redis_db.hget(key, "time")
+                if self.redis_db.exists(key) and (t2 and t2 >= t1):
+                    return
+
                 logger.debug('等待初始化开始')
                 time.sleep(1)
 
-        def set_init_status():
-            # 设置 init-status 信息
-            self.redis_db.hset(self.name2key(name, 'init-status'), mapping={
-                "identifier": const.MACHINE_ID,
-                "time": str(datetime.datetime.now())
-            })
+        def set_init():
+            key = self.name2key(name, "record")
+            if self.redis_db.hget(key, 'identifier') == const.MACHINE_ID:
+                self.redis_db.hset(key, mapping={
+                    "identifier": const.MACHINE_ID,
+                    "time": int(time.time() * 1000),
+                    "status": 1
+                })
+
+        def is_init():
+            key = self.name2key(name, 'record')
+            # 队列不为空 -> true
+            if not self.is_empty(name):
+                return True
+
+            # record 存在, 并且 status 为 1 -> true
+            if self.redis_db.exists(key) and self.redis_db.hget(key, 'status') == 1:
+                return True
+
+            return False
+
+        def release_init():
+            key = self.name2key(name, "record")
+            history = self.name2key(name, 'history')
+            ttl = order.get('ttl') or 0
+            t = order.get('time')
+
+            ret = self.scripts["release_init"](
+                keys=[
+                    key, history
+                ],
+                args=[
+                    const.MACHINE_ID,
+                    ttl,
+                    t
+                ]
+            )
+            return bool(ret)
+
+        def get_record():
+            key = self.name2key(name, 'record')
+            record = self.redis_db.hgetall(key) or {}
+            if record.get(key, 'status') == 0:
+                self.redis_db.delete(key)
+                return {}
+            else:
+                return record
 
         actions = {
             self.COMMANDS.RUN_SUBSCRIBE: lambda: run_subscribe(f'{name}-subscribe', order['target']),
             self.COMMANDS.GET_PERMISSION: get_permission,
-            self.COMMANDS.GET_INIT_RECORD: lambda: self.redis_db.hgetall(self.name2key(name, 'record')),
-            self.COMMANDS.RESET_QUEUE: lambda: self.clear(name),
-            self.COMMANDS.CONTINUE_INIT_RECORD: lambda: self.reverse(name),
-            self.COMMANDS.SET_INIT_RECORD: set_init_record,
-            self.COMMANDS.BACKUP_INIT_RECORD: backup_init_record,
-            self.COMMANDS.WAIT_FOR_INIT_START: wait_for_init_start,
-            self.COMMANDS.SET_INIT_STATUS: set_init_status,
-            self.COMMANDS.IS_INIT_STATUS: lambda: self.redis_db.exists(self.name2key(name, 'init-status')),
-            self.COMMANDS.RELEASE_INIT_STATUS: lambda: self.redis_db.delete(self.name2key(name, 'init-status')),
+
+            self.COMMANDS.GET_RECORD: get_record,
+            self.COMMANDS.CONTINUE_RECORD: lambda: self.reverse(name),
+            self.COMMANDS.SET_RECORD: set_record,
+
+            self.COMMANDS.WAIT_INIT: wait_init,
+            self.COMMANDS.RESET_INIT: lambda: self.clear(name),
+            self.COMMANDS.RELEASE_INIT: release_init,
+            self.COMMANDS.IS_INIT: is_init,
+            self.COMMANDS.SET_INIT: set_init,
         }
         action = order['action']
         if action in actions:
@@ -1319,12 +1386,5 @@ end
 
 
 if __name__ == '__main__':
-    def my_callback(msg):
-        print(msg)
-        rds.redis_db.hset(rds.name2key("xxx", "report"), const.MACHINE_ID, "0")
-
-
-    rds = RedisQueue()
-    # rds.command("xxx", {"action": rds.COMMANDS.RUN_SUBSCRIBE, "callback": my_callback})
-    print(rds.command("xxx", {"action": rds.COMMANDS.GET_PERMISSION, "callback": my_callback}))
-    # time.sleep(5)
+    red = RedisQueue()
+    print(red.command("MySpider", {"action": red.COMMANDS.RELEASE_INIT}))
