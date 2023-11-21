@@ -32,10 +32,15 @@ setup(
     # 指定包信息，还可以用find_packages()函数
     packages=find_packages(),
     install_requires=read_requirements('requirements.txt'),  # 指定需要安装的依赖
+    # 其他依赖版本
+    extras_require={
+        "mongo": ["pymongo==4.6.0"]
+    },
     license="MIT",
     keywords=['bricks'],
     script_name="setup.py",
     script_args="sdist bdist_wheel".split(" "),
+
 )
 
 # python setup.py sdist bdist_wheel upload -r pypi
