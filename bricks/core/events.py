@@ -40,7 +40,7 @@ class RegisteredEvents:
 
 @dataclass
 class Task:
-    func: callable
+    func: Callable
     args: Optional[list] = None
     kwargs: Optional[dict] = None
     match: Union[Callable, str] = None
