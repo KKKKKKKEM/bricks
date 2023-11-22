@@ -18,7 +18,7 @@ from bricks.lib.response import Response
 
 class Downloader(metaclass=genesis.MetaClass):
 
-    def fetch(self, request: (Request, dict)) -> Response:
+    def fetch(self, request: Union[Request, dict]) -> Response:
         """
         发送请求以获得一个响应
 

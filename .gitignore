@@ -1,7 +1,6 @@
 /.svn
 /.idea
-/__pycache__
-*/__pycache__
+__pycache__
 /logs
 /Files
 /test
