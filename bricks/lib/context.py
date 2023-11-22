@@ -43,7 +43,7 @@ class Flow(Context):
             kwargs: dict = None,
             **options
     ) -> None:
-        self.next = next
+        self.next: LinkNode = next
         self.callback = None
         self.args = args or []
         self.kwargs = kwargs or {}
