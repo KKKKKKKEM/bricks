@@ -193,12 +193,13 @@ class ApiProxy(BaseProxy):
     def get(self, timeout=None) -> Proxy:
         # 这个要加锁, 不然多线程会都去提取代理
         with self.lock:
-            try:
-                proxy = self.container.get(timeout=1)
-            except queue.Empty:
-                self.fetch(timeout)
-            else:
-                return Proxy(proxy)
+            while True:
+                try:
+                    proxy = self.container.get(timeout=1)
+                except queue.Empty:
+                    self.fetch(timeout)
+                else:
+                    return Proxy(proxy)
 
     def fetch(self, timeout=None):
         if timeout is None:
