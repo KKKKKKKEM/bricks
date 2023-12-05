@@ -9,7 +9,7 @@ import uuid
 MACHINE_ID = hashlib.sha256(uuid.UUID(int=uuid.getnode()).hex[-12:].encode()).hexdigest()
 
 # 当前框架版本
-VERSION = "0.0.6.7"
+VERSION = "0.0.6.8"
 
 # 事件类型
 ERROR_OCCURRED = 'ERROR_OCCURRED'

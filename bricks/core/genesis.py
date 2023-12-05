@@ -31,6 +31,8 @@ class MetaClass(type):
 
             method_wrapper = getattr(instance, interceptor)
             raw_method and setattr(instance, raw_method_name, method_wrapper(raw_method))
+        else:
+            hasattr(instance, "install") and instance.install()
 
         return instance
 
@@ -38,16 +40,17 @@ class MetaClass(type):
 class Chaos(metaclass=MetaClass):
     Context = Context
 
-    def obtain(self, name, default=None):
+    def get(self, name, default=None):
         """
         获取属性
+
         :param name:
         :param default:
         :return:
         """
         return getattr(self, name, default)
 
-    def install(self, name, value, nx=False):
+    def set(self, name, value, nx=False):
         if nx:
             if hasattr(self, name):
                 return getattr(self, name)
@@ -73,7 +76,7 @@ class Chaos(metaclass=MetaClass):
         if not task_name:
             return
 
-        self.install("task_name", task_name)
+        self.set("task_name", task_name)
         method = getattr(self, f'run_{task_name}', None)
         if method:
             return method(*args, **kwargs)
@@ -150,9 +153,9 @@ class Pangu(Chaos):
 
     def __init__(self, **kwargs) -> None:
         for k, v in kwargs.items():
-            self.install(k, v, nx=True)
+            self.set(k, v, nx=True)
 
-        self.dispatcher = dispatch.Dispatcher(max_workers=self.obtain("concurrency", 1))
+        self.dispatcher = dispatch.Dispatcher(max_workers=self.get("concurrency", 1))
 
     def on_consume(self, context: Flow):
         context.next.root == self.on_consume and context.flow()
@@ -233,6 +236,9 @@ class Pangu(Chaos):
     @property
     def flows(self):
         raise NotImplementedError
+
+    def install(self):
+        pass
 
 
 if __name__ == '__main__':

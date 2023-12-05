@@ -301,7 +301,8 @@ class Spider(air.Spider):
 
         node.success and context.success()
 
-    def before_start(self):
-        super().before_start()
+    def install(self):
+        super().install()
+
         for form, events in (self.config.events or {}).items():
             self.use(form, *events)

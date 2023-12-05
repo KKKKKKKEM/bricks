@@ -71,7 +71,6 @@ class Download(RenderNode):
         stop_dispacher = False
         if not spider:
             spider = Spider()
-            spider.before_start()
             if inspect.iscoroutinefunction(spider.downloader.fetch):
                 spider.dispatcher.start()
                 stop_dispacher = True
@@ -203,8 +202,8 @@ class Spider(Pangu):
         :return:
         """
 
-        task_queue: TaskQueue = self.obtain("init.task_queue", self.task_queue)
-        queue_name: str = self.obtain("init.queue_name", self.queue_name)
+        task_queue: TaskQueue = self.get("init.task_queue", self.task_queue)
+        queue_name: str = self.get("init.queue_name", self.queue_name)
         # 判断是否有初始化权限
         pinfo: dict = task_queue.command(queue_name, {"action": task_queue.COMMANDS.GET_PERMISSION})
         if not pinfo['state']:
@@ -215,7 +214,7 @@ class Spider(Pangu):
 
         logger.debug(f"[开始投放] 获取初始化权限成功, MACHINE_ID: {const.MACHINE_ID}")
         # 本地的初始化记录 -> 启动传入的
-        local_init_record: dict = self.obtain('init.record') or {}
+        local_init_record: dict = self.get('init.record') or {}
         # 云端的初始化记录 -> 初始化的时候会存储(如果支持的话)
         remote_init_record = task_queue.command(
             queue_name,
@@ -240,13 +239,13 @@ class Spider(Pangu):
         success = int(record.setdefault('success', 0))
 
         # 初始化总数量阈值 -> 大于这个数量停止初始化
-        total_size = self.obtain('init.total.size', math.inf)
+        total_size = self.get('init.total.size', math.inf)
         # 当前初始化总量阈值 -> 大于这个数量停止初始化
-        count_size = self.obtain('init.count.size', math.inf)
+        count_size = self.get('init.count.size', math.inf)
         # 初始化成功数量阈值 (去重) -> 大于这个数量停止初始化
-        success_size = self.obtain('init.success.size', math.inf)
+        success_size = self.get('init.success.size', math.inf)
         # 初始化队列最大数量 -> 大于这个数量暂停初始化
-        queue_size: int = self.obtain("init.queue.size", 100000)
+        queue_size: int = self.get("init.queue.size", 100000)
 
         settings = {
             "total": total,
@@ -367,8 +366,8 @@ class Spider(Pangu):
         :return:
         """
         count = 0
-        task_queue: TaskQueue = self.obtain("spider.task_queue", self.task_queue)
-        queue_name: str = self.obtain("spider.queue_name", self.queue_name)
+        task_queue: TaskQueue = self.get("spider.task_queue", self.task_queue)
+        queue_name: str = self.get("spider.queue_name", self.queue_name)
         output = time.time()
 
         while True:
@@ -416,7 +415,7 @@ class Spider(Pangu):
                 if (
                         not task_queue.command(queue_name, {"action": task_queue.COMMANDS.IS_INIT}) and
                         not self.forever and
-                        task_queue.is_empty(queue_name, threshold=self.obtain("spider.threshold", default=0))
+                        task_queue.is_empty(queue_name, threshold=self.get("spider.threshold", default=0))
                 ):
                     if self.dispatcher.running == 0:
                         return count
@@ -447,8 +446,8 @@ class Spider(Pangu):
         @functools.wraps(raw_method)
         def wrapper(*args, **kwargs):
             self.dispatcher.start()
-            task_queue: TaskQueue = self.obtain("spider.task_queue", self.task_queue)
-            queue_name: str = self.obtain("spider.queue_name", self.queue_name)
+            task_queue: TaskQueue = self.get("spider.task_queue", self.task_queue)
+            queue_name: str = self.get("spider.queue_name", self.queue_name)
             task_queue.command(
                 queue_name,
                 {
@@ -466,8 +465,8 @@ class Spider(Pangu):
         t1 = int(time.time() * 1000)
         init_task = dispatch.Task(func=self.run_init)
         self.active(init_task)
-        task_queue: TaskQueue = self.obtain("init.task_queue", self.task_queue)
-        queue_name: str = self.obtain("init.queue_name", self.queue_name)
+        task_queue: TaskQueue = self.get("init.task_queue", self.task_queue)
+        queue_name: str = self.get("init.queue_name", self.queue_name)
         task_queue.command(queue_name, {"action": task_queue.COMMANDS.WAIT_INIT, "time": t1})
         self.run_spider()
 
@@ -786,11 +785,10 @@ class Spider(Pangu):
     def item_pipeline(self, context: Context):
         context.items and logger.debug(context.items)
 
-    def before_start(self):
-
+    def install(self):
+        super().install()
         self.use(const.BEFORE_REQUEST, {"func": plugins.set_proxy, "index": math.inf})
         self.use(const.AFTER_REQUEST, {"func": plugins.show_response}, {"func": plugins.is_success})
-        super().before_start()
 
 
 from bricks import plugins
