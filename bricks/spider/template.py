@@ -168,5 +168,5 @@ class Spider(air.Spider):
     def install(self):
         super().install()
 
-        for form, events in (self.config.events or {}).items():
-            self.use(form, *events)
+        for _form, events in (self.config.events or {}).items():
+            self.use(_form, *events)
