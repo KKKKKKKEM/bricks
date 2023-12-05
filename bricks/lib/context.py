@@ -2,13 +2,35 @@
 # @Time    : 2023-11-15 12:19
 # @Author  : Kem
 # @Desc    :
+import threading
 from collections import deque
 
 from bricks.core import signals
 from bricks.lib.nodes import LinkNode
 
 
+class LocalStack(threading.local):
+    def __init__(self):
+        self._stack = deque()
+
+    def push(self, item):
+        self._stack.append(item)
+
+    def pop(self):
+        return self._stack.pop()
+
+    def top(self):
+        try:
+            return self._stack[-1]
+        except IndexError:
+            return None
+
+    def __len__(self):
+        return len(self._stack)
+
+
 class Context:
+    _stack = LocalStack()
 
     def __init__(self, form: str, target=None, **kwargs) -> None:
         self.form = form
@@ -29,6 +51,29 @@ class Context:
         else:
             setattr(self, name, value)
             return value
+
+    @classmethod
+    def get_context(cls) -> "Context":
+        """
+        获取当前正在 consume 的 Context
+        仅支持正在 consume 的
+        没有被 on consume 使用的话是获取不到的
+
+        :return:
+        """
+        return cls._stack.top()
+
+    def set_context(self, context: "Context"):
+        self._stack.push(context)
+
+    def clear_context(self):
+        return self._stack.pop()
+
+    def __enter__(self):
+        self.set_context(self)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.clear_context()
 
 
 class Flow(Context):
@@ -135,7 +180,7 @@ class Flow(Context):
         else:
             fun = self.target.active
 
-        future = fun(dispatch.Task(context.next, [context]), timeout=-1)
+        future = fun(dispatch.Task(context.next.root, [context]), timeout=-1)
         context.future = future
         return context
 

@@ -154,64 +154,65 @@ class Pangu(Chaos):
 
         self.dispatcher = dispatch.Dispatcher(max_workers=self.obtain("concurrency", 1))
 
-    def on_consume(self, context: Flow):  # noqa
+    def on_consume(self, context: Flow):
         context.next.root == self.on_consume and context.flow()
 
         while True:
             context: Flow = context.produce()
             if context is None: return
+            with context:
+                while context.next and callable(context.next.root):
+                    try:
+                        prepared = pandora.prepare(
+                            func=context.next.root,
+                            annotations={type(context): context},
+                            namespace={"context": context}
+                        )
 
-            while context.next and callable(context.next):
-                try:
-                    prepared = pandora.prepare(
-                        func=context.next.root,
-                        annotations={type(context): context},
-                        namespace={"context": context}
-                    )
+                        product = prepared.func(*prepared.args, **prepared.kwargs)
+                        callable(context.callback) and pandora.invoke(
+                            context.callback,
+                            args=[product],
+                            annotations={type(context): context},
+                            namespace={"context": context}
+                        )
 
-                    product = prepared.func(*prepared.args, **prepared.kwargs)
-                    callable(context.callback) and pandora.invoke(
-                        context.callback,
-                        args=[product],
-                        annotations={type(context): context},
-                        namespace={"context": context}
-                    )
+                    # 中断信号
+                    except signals.Break:
+                        context.flow({"next": None})
+                        pass
+                    # 退出信号
+                    except signals.Exit:
+                        return
 
-                # 中断信号
-                except signals.Break:
-                    context.next = None
+                    # 等待信号
+                    except signals.Wait as sig:
+                        time.sleep(sig.duration)
+                        return
 
-                # 退出信号
-                except signals.Exit:
-                    return
+                    except signals.Switch:
+                        pass
 
-                # 等待信号
-                except signals.Wait as sig:
-                    time.sleep(sig.duration)
-                    return
+                    except signals.Retry:
+                        context.retry()
 
-                except signals.Switch:
-                    pass
+                    except signals.Success:
+                        context.success(shutdown=True)
 
-                except signals.Retry:
-                    context.retry()
+                    except signals.Failure:
+                        context.failure(shutdown=True)
 
-                except signals.Success:
-                    context.success(shutdown=True)
+                    except signals.Signal as e:
+                        logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
+                        raise e
 
-                except signals.Failure:
-                    context.failure(shutdown=True)
+                    except (KeyboardInterrupt, SystemExit):
+                        raise
 
-                except signals.Signal as e:
-                    logger.warning(f"[{context.form}] 无法处理的信号类型: {e}")
-                    raise e
-
-                except (KeyboardInterrupt, SystemExit):
-                    raise
-
-                except Exception as e:
-                    logger.error(f"""\n{pandora.get_simple_stack(e)} [{context.form}] {e.__class__.__name__}({e})""")
-                    context.failure(shutdown=True)
+                    except Exception as e:
+                        logger.error(
+                            f"""\n{pandora.get_simple_stack(e)} [{context.form}] {e.__class__.__name__}({e})""")
+                        context.failure(shutdown=True)
 
     def submit(self, task: dispatch.Task, timeout=None) -> dispatch.Task:
         return self.dispatcher.submit_task(task=task, timeout=timeout)
