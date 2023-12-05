@@ -44,27 +44,23 @@ class Spider(air.Spider):
             engine = node.func
             args = node.args or []
             kwargs = node.kwargs or {}
-            # todo: 暂时没有内置引擎, 后面需要加几个常用的
-            if str(engine).lower() in []:
-                pass
 
+            if not callable(engine):
+                engine = pandora.load_objects(engine)
+
+            seeds = pandora.invoke(
+                func=engine,
+                args=[context, *args],
+                kwargs=kwargs,
+                annotations={air.Context: context},
+                namespace={"context": context}
+            )
+
+            if inspect.isgenerator(seeds):
+                for seed in seeds:
+                    yield seed
             else:
-                if not callable(engine):
-                    engine = pandora.load_objects(engine)
-
-                seeds = pandora.invoke(
-                    func=engine,
-                    args=[context, *args],
-                    kwargs=kwargs,
-                    annotations={air.Context: context},
-                    namespace={"context": context}
-                )
-
-                if inspect.isgenerator(seeds):
-                    for seed in seeds:
-                        yield seed
-                else:
-                    yield seeds or []
+                yield seeds or []
 
     def make_request(self, context: air.Context) -> Request:
         signpost: int = context.seeds.get('$config', 0)
@@ -136,32 +132,28 @@ class Spider(air.Spider):
             args = node.args or []
             kwargs = node.kwargs or {}
 
-            # todo: 暂时没有内置引擎, 后面需要加几个常用的
-            if str(engine).lower() in []:
-                pass
-            else:
-                if not callable(engine):
-                    engine = pandora.load_objects(engine)
+            if not callable(engine):
+                engine = pandora.load_objects(engine)
 
-                pandora.invoke(
-                    func=engine,
-                    args=args,
-                    kwargs=kwargs,
-                    annotations={
-                        air.Context: context,
-                        Response: context.response,
-                        Request: context.request,
-                        Item: context.seeds,
-                        Items: context.items
-                    },
-                    namespace={
-                        "context": context,
-                        "response": context.response,
-                        "request": context.request,
-                        "seeds": context.seeds,
-                        "items": context.items
-                    }
-                )
+            pandora.invoke(
+                func=engine,
+                args=args,
+                kwargs=kwargs,
+                annotations={
+                    air.Context: context,
+                    Response: context.response,
+                    Request: context.request,
+                    Item: context.seeds,
+                    Items: context.items
+                },
+                namespace={
+                    "context": context,
+                    "response": context.response,
+                    "request": context.request,
+                    "seeds": context.seeds,
+                    "items": context.items
+                }
+            )
 
             node.success and context.success()
 
