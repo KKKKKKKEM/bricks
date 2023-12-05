@@ -10,10 +10,9 @@ from loguru import logger
 
 from bricks import Request, Response, const
 from bricks.core import signals, events as _events
-from bricks.downloader import genesis
 from bricks.lib.items import Items
 from bricks.lib.nodes import RenderNode, SignPost, Post
-from bricks.lib.queues import TaskQueue, Item
+from bricks.lib.queues import Item
 from bricks.spider import air
 from bricks.utils import pandora
 
@@ -89,12 +88,6 @@ class Config:
 
 class Spider(air.Spider):
     Context = Context
-
-    def __init__(self, concurrency: Optional[int] = 1, survey: Optional[Union[dict, List[dict]]] = None,
-                 downloader: Optional[Union[str, genesis.Downloader]] = None, task_queue: Optional[TaskQueue] = None,
-                 queue_name: Optional[str] = "", proxy: Optional[dict] = None, forever: Optional[bool] = False,
-                 **kwargs) -> None:
-        super().__init__(concurrency, survey, downloader, task_queue, queue_name, proxy, forever, **kwargs)
 
     @property
     def flows(self):
