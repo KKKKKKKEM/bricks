@@ -6,7 +6,7 @@ import asyncio
 import threading
 import time
 
-from bricks import Task, Dispatcher
+from bricks.core.dispatch import Task, Dispatcher
 
 """
 

@@ -8,7 +8,7 @@ from typing import Optional, Union, List, Dict, Callable
 
 from loguru import logger
 
-from bricks import Request, Response, const
+from bricks import Request, Response, state
 from bricks.core import signals, events as _events
 from bricks.lib.items import Items
 from bricks.lib.nodes import RenderNode, SignPost, Post
@@ -20,7 +20,7 @@ from bricks.utils import pandora
 class Context(air.Context):
     target: "Spider"
 
-    def __init__(self, target: "Spider", form: str = const.ON_CONSUME, **kwargs) -> None:
+    def __init__(self, target: "Spider", form: str = state.const.ON_CONSUME, **kwargs) -> None:
         super().__init__(target, form, **kwargs)
         self.signpost: SignPost = kwargs.get("signpost") or SignPost()
 

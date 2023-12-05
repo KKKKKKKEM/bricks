@@ -17,9 +17,9 @@ from asyncio import futures, ensure_future
 from concurrent.futures import Future
 from typing import Union, Dict, Optional
 
-from bricks import const
 from bricks.core import events
 from bricks.lib import context
+from bricks.state import const
 
 
 class Task(Future):

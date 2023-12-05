@@ -6,9 +6,9 @@ import sys
 
 from loguru import logger
 
-from bricks.core.dispatch import Dispatcher, Task  # noqa
 from bricks.lib.request import Request
 from bricks.lib.response import Response
+from bricks.state import *
 
 logger.remove()
 logger.add(

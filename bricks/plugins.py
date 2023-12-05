@@ -11,38 +11,37 @@ from loguru import logger
 
 from bricks.core import signals
 from bricks.lib import proxies
-from bricks.spider.air import Context
+from bricks.lib.context import Context
 from bricks.utils import pandora
 
 
-def set_proxy(context: Context, timeout=None):
+def set_proxy(timeout=None):
     """
     为请求设置代理
 
-    :param context:
     :param timeout:
     :return:
     """
-    request = context.request
-    proxy = context.request.proxy or context.target.proxy
+    context: Context = Context.get_context()
+    request = context.obtain("request")
+    proxy = request.proxy or context.target.proxy
     proxy_ = proxies.manager.get_proxy(*pandora.iterable(proxy), timeout=timeout)
     request.proxies = proxy_.proxy
     callable(proxy_.auth) and proxy_.auth(request)
     proxies.manager.use_proxy(proxy_)
 
 
-def show_response(context: Context, handle: Callable = logger.debug, fmt: int = 0):
+def show_response(handle: Callable = logger.debug, fmt: int = 0):
     """
     展示相应信息
 
-    :param context:
     :param fmt:
     :param handle:
     :return:
     """
-
-    request = context.request
-    response = context.response
+    context: Context = Context.get_context()
+    request = context.obtain("request")
+    response = context.obtain("response")
 
     if fmt == 0:
         msg = " ".join([
@@ -75,14 +74,13 @@ def show_response(context: Context, handle: Callable = logger.debug, fmt: int = 
     return response
 
 
-def is_success(context: Context):
+def is_success():
     """
     通用的判断响应是否成功
 
-    :param context:
-    :type context:
     :return:
     """
-
-    if not context.response.ok:
+    context: Context = Context.get_context()
+    response = context.obtain("response")
+    if not response.ok:
         raise signals.Retry

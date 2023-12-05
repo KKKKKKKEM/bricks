@@ -8,7 +8,7 @@ from typing import Union
 
 from loguru import logger
 
-from bricks import const
+from bricks.state import const
 from bricks.core import signals, dispatch
 from bricks.core.events import EventManger, Task
 from bricks.lib.context import Flow, Context

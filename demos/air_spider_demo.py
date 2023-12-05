@@ -1,9 +1,12 @@
 from loguru import logger
 
+import bricks
 from bricks import Request, const
 from bricks.core import signals
 from bricks.spider import air
 from bricks.spider.air import Context
+
+bricks.T.set("name", "kem")
 
 
 class MySpider(air.Spider):
@@ -14,7 +17,7 @@ class MySpider(air.Spider):
         # 如果有多个, 你有两种方案
         # 1. 将种子全部放置在一个列表里面, yield 出去, 如 return [{"page":1}, {"page":2}, {"page":3}]
         # 2. 使用生成器, 每次生产一部分, 如 yield {"page":1}, yield {"page":2}, yield {"page":3}
-        return {"page": 1}
+        return [{"page":1}, {"page":2}, {"page":3}]
 
     def make_request(self, context: Context) -> Request:
         # 之前定义的种子会被投放至任务队列, 之后会被取出来, 迁入至 context 对象内
@@ -84,6 +87,7 @@ class MySpider(air.Spider):
 
 if __name__ == '__main__':
     spider = MySpider(
+        concurrency=3
         # # 设置代理模式 1, 该模式适用于: 你已经将代理提取至 Redis 的 proxy 里面
         # # 这样设置的话就会自动去取
         # proxy={

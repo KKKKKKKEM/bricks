@@ -12,7 +12,7 @@ from typing import Optional, Union, Callable
 
 from loguru import logger
 
-from bricks import const
+from bricks.state import const
 from bricks.lib.context import Context, Error
 from bricks.utils import pandora
 

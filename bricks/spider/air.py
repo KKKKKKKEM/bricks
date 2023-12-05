@@ -13,7 +13,7 @@ from typing import Optional, List, Union, Iterable, Callable, Dict
 
 from loguru import logger
 
-from bricks import const
+from bricks import state, plugins
 from bricks.core import dispatch, signals, events
 from bricks.core.genesis import Pangu
 from bricks.downloader import genesis, cffi
@@ -96,7 +96,7 @@ class Context(Flow):
     def __init__(
             self,
             target: "Spider",
-            form: str = const.ON_CONSUME,
+            form: str = state.const.ON_CONSUME,
             **kwargs
 
     ) -> None:
@@ -207,12 +207,12 @@ class Spider(Pangu):
         # 判断是否有初始化权限
         pinfo: dict = task_queue.command(queue_name, {"action": task_queue.COMMANDS.GET_PERMISSION})
         if not pinfo['state']:
-            logger.debug(f"[停止投放] 当前机器 ID: {const.MACHINE_ID}, 原因: {pinfo['msg']}")
+            logger.debug(f"[停止投放] 当前机器 ID: {state.MACHINE_ID}, 原因: {pinfo['msg']}")
             return
 
         task_queue.command(queue_name, {"action": task_queue.COMMANDS.SET_INIT})
 
-        logger.debug(f"[开始投放] 获取初始化权限成功, MACHINE_ID: {const.MACHINE_ID}")
+        logger.debug(f"[开始投放] 获取初始化权限成功, MACHINE_ID: {state.MACHINE_ID}")
         # 本地的初始化记录 -> 启动传入的
         local_init_record: dict = self.get('init.record') or {}
         # 云端的初始化记录 -> 初始化的时候会存储(如果支持的话)
@@ -227,7 +227,7 @@ class Spider(Pangu):
             **remote_init_record,
             "queue_name": queue_name,
             "task_queue": task_queue,
-            "identifier": const.MACHINE_ID,
+            "identifier": state.MACHINE_ID,
         }
 
         # 设置一个启动时间, 防止被覆盖
@@ -389,10 +389,10 @@ class Spider(Pangu):
 
             except signals.Success:
 
-                if context.form == const.BEFORE_GET_SEEDS:
+                if context.form == state.const.BEFORE_GET_SEEDS:
                     time.sleep(1)
 
-                elif context.form == const.AFTER_GET_SEEDS:
+                elif context.form == state.const.AFTER_GET_SEEDS:
                     context.success()
 
                 else:
@@ -400,10 +400,10 @@ class Spider(Pangu):
 
             except signals.Failure:
 
-                if context.form == const.BEFORE_GET_SEEDS:
+                if context.form == state.const.BEFORE_GET_SEEDS:
                     time.sleep(1)
 
-                elif context.form == const.AFTER_GET_SEEDS:
+                elif context.form == state.const.AFTER_GET_SEEDS:
                     pass
 
                 else:
@@ -485,7 +485,7 @@ class Spider(Pangu):
     def _when_get_seeds(self, raw_method):
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
-            context.form = const.BEFORE_GET_SEEDS
+            context.form = state.const.BEFORE_GET_SEEDS
             events.EventManger.invoke(context)
             count = self.dispatcher.max_workers - self.dispatcher.running
             kwargs.setdefault('count', 1 if count <= 0 else count)
@@ -501,7 +501,7 @@ class Spider(Pangu):
             # 没有种子返回空信号
             if ret is None: raise signals.Empty
 
-            context.form = const.AFTER_GET_SEEDS
+            context.form = state.const.AFTER_GET_SEEDS
             events.EventManger.invoke(context)
 
             return ret
@@ -553,7 +553,7 @@ class Spider(Pangu):
     def _when_on_retry(self, raw_method):  # noqa
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
-            context.form = const.BEFORE_RETRY
+            context.form = state.const.BEFORE_RETRY
             prepared = pandora.prepare(
                 func=raw_method,
                 args=args,
@@ -598,9 +598,9 @@ class Spider(Pangu):
     def _when_on_request(self, raw_method):  # noqa
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
-            context.form = const.BEFORE_REQUEST
+            context.form = state.const.BEFORE_REQUEST
             events.EventManger.invoke(context)
-            context.form = const.ON_REQUEST
+            context.form = state.const.ON_REQUEST
             prepared = pandora.prepare(
                 func=raw_method,
                 args=args,
@@ -618,7 +618,7 @@ class Spider(Pangu):
             )
             response: Response = prepared.func(*prepared.args, **prepared.kwargs)
 
-            context.form = const.AFTER_REQUEST
+            context.form = state.const.AFTER_REQUEST
             context.response = response
 
             events.EventManger.invoke(context)
@@ -669,7 +669,7 @@ class Spider(Pangu):
     def _when_on_response(self, raw_method):  # noqa
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
-            context.form = const.ON_PARSE
+            context.form = state.const.ON_PARSE
             prepared = pandora.prepare(
                 func=raw_method,
                 args=args,
@@ -744,9 +744,9 @@ class Spider(Pangu):
     def _when_on_pipeline(self, raw_method):  # noqa
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
-            context.form = const.BEFORE_PIPELINE
+            context.form = state.const.BEFORE_PIPELINE
             events.EventManger.invoke(context)
-            context.form = const.ON_PIPELINE
+            context.form = state.const.ON_PIPELINE
             prepared = pandora.prepare(
                 func=raw_method,
                 args=args,
@@ -767,7 +767,7 @@ class Spider(Pangu):
                 }
             )
             prepared.func(*prepared.args, **prepared.kwargs)
-            context.form = const.AFTER_PIPELINE
+            context.form = state.const.AFTER_PIPELINE
             events.EventManger.invoke(context)
             context.flow()
 
@@ -787,8 +787,5 @@ class Spider(Pangu):
 
     def install(self):
         super().install()
-        self.use(const.BEFORE_REQUEST, {"func": plugins.set_proxy, "index": math.inf})
-        self.use(const.AFTER_REQUEST, {"func": plugins.show_response}, {"func": plugins.is_success})
-
-
-from bricks import plugins
+        self.use(state.const.BEFORE_REQUEST, {"func": plugins.set_proxy, "index": math.inf})
+        self.use(state.const.AFTER_REQUEST, {"func": plugins.show_response}, {"func": plugins.is_success})

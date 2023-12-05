@@ -85,6 +85,19 @@ class VariableG:
 
         return self[key]
 
+    def set(self, key, value, count: int = None, until: int = None):
+        self[key] = value
+        (count or until) and self.expire(key, count, until)
+
+    def get(self, key, default=None):
+        if key not in self._map:
+            return default
+
+        return self[key]
+
+    def delete(self, key):
+        del self[key]
+
 
 class VariableT(threading.local, VariableG):
     """线程专用变量[各线程独立]"""

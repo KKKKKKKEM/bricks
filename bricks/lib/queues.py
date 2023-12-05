@@ -15,7 +15,7 @@ from typing import Optional, Union
 
 from loguru import logger
 
-from bricks import const
+from bricks import state
 from bricks.core import genesis
 from bricks.db.redis_ import Redis
 from bricks.utils import pandora
@@ -1266,7 +1266,7 @@ end
                 if message['data'] == "collect-status":
                     self.redis_db.hset(
                         self.name2key(name, 'report'),
-                        mapping={const.MACHINE_ID: target.dispatcher.running}
+                        mapping={state.MACHINE_ID: target.dispatcher.running}
                     )
 
             pubsub = self.redis_db.pubsub()
@@ -1288,7 +1288,7 @@ end
             :rtype:
             """
             keys = [self.name2key(name, i) for i in ['current', 'temp', 'failure', 'record']]
-            args = [const.MACHINE_ID]
+            args = [state.MACHINE_ID]
             ret = self.scripts["get_permission"](keys=keys, args=args)
             return {
                 "state": ret == 1,
@@ -1317,9 +1317,9 @@ end
 
         def set_init():
             key = self.name2key(name, "record")
-            if self.redis_db.hget(key, 'identifier') == const.MACHINE_ID:
+            if self.redis_db.hget(key, 'identifier') == state.MACHINE_ID:
                 self.redis_db.hset(key, mapping={
-                    "identifier": const.MACHINE_ID,
+                    "identifier": state.MACHINE_ID,
                     "time": int(time.time() * 1000),
                     "status": 1
                 })
@@ -1347,7 +1347,7 @@ end
                     key, history
                 ],
                 args=[
-                    const.MACHINE_ID,
+                    state.MACHINE_ID,
                     ttl,
                     t
                 ]
