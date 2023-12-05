@@ -265,14 +265,14 @@ class RedisProxy(BaseProxy):
             timeout = math.inf
 
         start = time.time()
-        while True:
+        while time.time() - start < timeout:
             proxy = self.container.pop(self.key)
             if not proxy:
-                if time.time() - start > timeout: raise TimeoutError
                 logger.warning(f'[获取代理失败] ref: {self}')
                 time.sleep(1)
             else:
                 return Proxy(proxy)
+        raise TimeoutError
 
     def __str__(self):
         return f'<RedisProxy [key: {self.key} | options:{self.options}]>'
