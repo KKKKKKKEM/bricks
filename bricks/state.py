@@ -19,7 +19,7 @@ __all__ = (
 MACHINE_ID = hashlib.sha256(uuid.UUID(int=uuid.getnode()).hex[-12:].encode()).hexdigest()
 
 # 当前框架版本
-VERSION = "0.0.6.9"
+VERSION = "0.0.6.10"
 
 # 全局变量
 G = variable.VariableG()
