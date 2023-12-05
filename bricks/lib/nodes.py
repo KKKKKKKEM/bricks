@@ -142,9 +142,6 @@ class LinkNode:
     def __str__(self):
         return f'LinkNode({self.root})'
 
-    def __call__(self, *args, **kwargs):
-        return self.root(*args, **kwargs)
-
 
 @dataclasses.dataclass
 class Post:
