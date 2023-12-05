@@ -2,7 +2,6 @@ from loguru import logger
 
 from bricks import Request, const
 from bricks.core import signals
-from bricks.lib.queues import RedisQueue
 from bricks.spider import air
 from bricks.spider.air import Context
 
@@ -56,7 +55,8 @@ class MySpider(air.Spider):
         context.success()
 
     @staticmethod
-    def turn_page(context: Context):
+    def turn_page():
+        context: Context = Context.get_context()
         # 判断是否存在下一页
         has_next = context.response.get('data.hasNextPage')
         if has_next == 1:
@@ -116,6 +116,6 @@ if __name__ == '__main__':
         #     "threshold": 100,  # 一个代理最多使用多少次, 到这个次数之后就会归还到Redis, 然后重新拿, 默认不归还
         #     "scheme": "http"  # 代理协议, 默认是 http
         # },
-        task_queue=RedisQueue()
+        # task_queue=RedisQueue()
     )
-    spider.run(task_name="init")
+    spider.run()
