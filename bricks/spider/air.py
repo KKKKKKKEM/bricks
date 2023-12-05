@@ -301,7 +301,7 @@ class Spider(Pangu):
                 settings['success_size'] - settings['success'],
                 len(seeds)
             ])]
-
+            context.seeds = seeds
             fettle = pandora.invoke(
                 func=self.put_seeds,
                 kwargs={
@@ -328,8 +328,10 @@ class Spider(Pangu):
                 "update": str(datetime.datetime.now()),
             })
 
-            context.task_queue.command(context.queue_name, {"action": context.task_queue.COMMANDS.SET_RECORD,
-                                                            "record": settings["record"]})
+            context.task_queue.command(context.queue_name, {
+                "action": context.task_queue.COMMANDS.SET_RECORD,
+                "record": settings["record"]
+            })
             logger.debug(output)
 
             if (
@@ -438,7 +440,7 @@ class Spider(Pangu):
                     stuff = context.copy()
                     stuff.seeds = seeds
                     stuff.flow({"next": self.on_consume})
-                    self.submit(dispatch.Task(stuff.next, [stuff]))
+                    self.submit(dispatch.Task(stuff.next.root, [stuff]))
                     count += 1
 
     def _when_run_spider(self, raw_method):
