@@ -50,6 +50,7 @@ class Task:
 
 @dataclass
 class Register:
+
     task: Task
     container: list
     form: str
@@ -177,6 +178,7 @@ class EventManager:
 
             container[context.target][context.form].append(event)
             ret.append(Register(
+
                 task=event,
                 container=container[context.target][context.form],
                 form=context.form,
