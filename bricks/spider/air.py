@@ -27,7 +27,7 @@ from bricks.lib.proxies import manager
 from bricks.lib.queues import TaskQueue, LocalQueue, Item
 from bricks.lib.request import Request
 from bricks.lib.response import Response
-from bricks.plugins import foundation
+from bricks.plugins import on_request
 from bricks.utils import pandora
 
 IP_REGEX = re.compile(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+')
@@ -787,5 +787,12 @@ class Spider(Pangu):
 
     def install(self):
         super().install()
-        self.use(state.const.BEFORE_REQUEST, {"func": foundation.set_proxy, "index": math.inf})
-        self.use(state.const.AFTER_REQUEST, {"func": foundation.show_response}, {"func": foundation.is_success})
+        self.use(
+            state.const.BEFORE_REQUEST,
+            {"func": on_request.Before.set_proxy, "index": math.inf}
+        )
+        self.use(
+            state.const.AFTER_REQUEST,
+            {"func": on_request.After.show_response},
+            {"func": on_request.After.is_success}
+        )
