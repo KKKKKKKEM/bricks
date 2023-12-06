@@ -33,7 +33,7 @@ class Spider(template.Spider):
                         "cid": 6000
                     },
                     headers={
-                        "User-Agent": "Mozilla/5.0 (Linux; Android 10; Redmi K30 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Mobile Safari/537.36",
+                        "User-Agent": "@chrome",
                         "Content-Type": "application/json;charset=UTF-8",
                     },
                 ),

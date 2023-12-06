@@ -789,7 +789,8 @@ class Spider(Pangu):
         super().install()
         self.use(
             state.const.BEFORE_REQUEST,
-            {"func": on_request.Before.set_proxy, "index": math.inf}
+            {"func": on_request.Before.fake_ua},
+            {"func": on_request.Before.set_proxy, "index": math.inf},
         )
         self.use(
             state.const.AFTER_REQUEST,

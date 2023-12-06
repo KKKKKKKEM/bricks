@@ -12,6 +12,7 @@ from bricks.core import signals
 from bricks.lib import proxies
 from bricks.lib.context import Context
 from bricks.utils import pandora
+from bricks.utils.fake import user_agent
 
 
 class Before:
@@ -19,6 +20,7 @@ class Before:
     请求前
 
     """
+
     @classmethod
     def set_proxy(cls, timeout=None):
         """
@@ -35,12 +37,41 @@ class Before:
         callable(proxy_.auth) and proxy_.auth(request)
         proxies.manager.use_proxy(proxy_)
 
+    @classmethod
+    def fake_ua(cls):
+        """
+        为请求设置随机 ua
+        语法:
+        "User-Agent": "@chrome" -- 设置 chrome
+        "User-Agent": "@random" -- 设置 随机
+        "User-Agent": "@edge" -- 设置 edge
+        "User-Agent": "@mobile" -- 设置 手机
+        "User-Agent": "@pc" -- 设置 PC
+        ..... 还有很多语法!, 详情可以看当前源码和 bricks/utils/fake/user_agent.py 实现
+
+        :return:
+        """
+        context: Context = Context.get_context()
+        request = context.obtain("request")
+        raw: str = request.headers.setdefault("User-Agent", user_agent.get())
+        raw = raw or ""
+        if raw.startswith("@"):
+
+            if raw.startswith('@random'):
+                raw = "@get" + raw[7:]
+
+            if not raw.endswith(")"):
+                raw = raw + "()"
+            raw = eval(f'user_agent.{raw[1:]}', {"user_agent": user_agent})
+            request.headers["User-Agent"] = raw
+
 
 class After:
     """
     请求后
 
     """
+
     @classmethod
     def show_response(cls, handle: Callable = logger.debug, fmt: int = 0):
         """
