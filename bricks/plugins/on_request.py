@@ -53,7 +53,7 @@ class Before:
         """
         context: Context = Context.get_context()
         request = context.obtain("request")
-        raw: str = request.headers.setdefault("User-Agent", user_agent.get())
+        raw: str = request.headers.get("User-Agent")
         raw = raw or ""
         if raw.startswith("@"):
 
