@@ -49,7 +49,7 @@ class Task:
 
 
 @dataclass
-class Registed:
+class Registered:
     task: Task
     container: list
     form: str
@@ -158,7 +158,7 @@ class EventManger:
         )
 
     @classmethod
-    def register(cls, context: Context, *events: Task) -> List[Registed]:
+    def register(cls, context: Context, *events: Task) -> List[Registered]:
         ret = []
         for event in events:
             if isinstance(event, dict):
@@ -176,7 +176,7 @@ class EventManger:
             event.index = next(counter) if event.index is None else event.index
 
             container[context.target][context.form].append(event)
-            ret.append(Registed(
+            ret.append(Registered(
                 task=event,
                 container=container[context.target][context.form],
                 form=context.form,
