@@ -115,7 +115,7 @@ class Context(Flow):
             "items": Items,
         }
 
-        if key in maps and type(value) != maps[key]:
+        if key in maps and type(value) is not maps[key]:
             value = maps[key](value)
 
         super().__setattr__(key, value)
@@ -486,7 +486,7 @@ class Spider(Pangu):
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = state.const.BEFORE_GET_SEEDS
-            events.EventManger.invoke(context)
+            events.EventManager.invoke(context)
             count = self.dispatcher.max_workers - self.dispatcher.running
             kwargs.setdefault('count', 1 if count <= 0 else count)
             prepared = pandora.prepare(
@@ -502,7 +502,7 @@ class Spider(Pangu):
             if ret is None: raise signals.Empty
 
             context.form = state.const.AFTER_GET_SEEDS
-            events.EventManger.invoke(context)
+            events.EventManager.invoke(context)
 
             return ret
 
@@ -599,7 +599,7 @@ class Spider(Pangu):
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = state.const.BEFORE_REQUEST
-            events.EventManger.invoke(context)
+            events.EventManager.invoke(context)
             context.form = state.const.ON_REQUEST
             prepared = pandora.prepare(
                 func=raw_method,
@@ -621,7 +621,7 @@ class Spider(Pangu):
             context.form = state.const.AFTER_REQUEST
             context.response = response
 
-            events.EventManger.invoke(context)
+            events.EventManager.invoke(context)
             context.flow()
 
         return wrapper
@@ -745,7 +745,7 @@ class Spider(Pangu):
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = state.const.BEFORE_PIPELINE
-            events.EventManger.invoke(context)
+            events.EventManager.invoke(context)
             context.form = state.const.ON_PIPELINE
             prepared = pandora.prepare(
                 func=raw_method,
@@ -768,7 +768,7 @@ class Spider(Pangu):
             )
             prepared.func(*prepared.args, **prepared.kwargs)
             context.form = state.const.AFTER_PIPELINE
-            events.EventManger.invoke(context)
+            events.EventManager.invoke(context)
             context.flow()
 
         return wrapper

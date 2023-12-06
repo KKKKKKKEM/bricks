@@ -121,7 +121,7 @@ def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, name
             value = namespace[param.name]
 
         # 参数类型存在于 annotations, 并且还可以从 args 里面取值, 并且刚好取到的对应的值也是当前类型 -> 直接从 args 里面取
-        elif param.annotation in annotations and index < len(args) and type(args[index]) == param.annotation:
+        elif param.annotation in annotations and index < len(args) and type(args[index]) is param.annotation:
             value = args[index]
             index += 1
 

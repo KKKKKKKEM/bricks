@@ -49,7 +49,8 @@ class Task:
 
 
 @dataclass
-class Registered:
+class Register:
+
     task: Task
     container: list
     form: str
@@ -92,7 +93,7 @@ class Registered:
         self.reindex(index + 1)
 
 
-class EventManger:
+class EventManager:
     counter = collections.defaultdict(itertools.count)
 
     @classmethod
@@ -158,7 +159,7 @@ class EventManger:
         )
 
     @classmethod
-    def register(cls, context: Context, *events: Task) -> List[Registered]:
+    def register(cls, context: Context, *events: Task) -> List[Register]:
         ret = []
         for event in events:
             if isinstance(event, dict):
@@ -176,7 +177,8 @@ class EventManger:
             event.index = next(counter) if event.index is None else event.index
 
             container[context.target][context.form].append(event)
-            ret.append(Registered(
+            ret.append(Register(
+
                 task=event,
                 container=container[context.target][context.form],
                 form=context.form,

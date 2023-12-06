@@ -84,7 +84,7 @@ class Worker(threading.Thread):
 
             except Exception as e:
                 task.set_exception(e)
-                events.EventManger.invoke(context.Error(error=e, form=const.ERROR_OCCURRED))
+                events.EventManager.invoke(context.Error(error=e, form=const.ERROR_OCCURRED))
 
     def stop(self) -> None:
 

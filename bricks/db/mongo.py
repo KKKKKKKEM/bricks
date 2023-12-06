@@ -96,7 +96,7 @@ class Mongo(pymongo.MongoClient):
             count: int = 1000,
     ) -> Iterable[List[dict]]:
         """
-        从 collecion_name 获取迭代数据
+        从 collection_name 获取迭代数据
 
         :param collection: 表名
         :param query: 过滤条件
@@ -145,7 +145,7 @@ class Mongo(pymongo.MongoClient):
             count: int = 1000,
     ) -> Iterable[List[dict]]:
         """
-        从 collecion_name 获取迭代数据
+        从 collection_name 获取迭代数据
 
         :param collection: 表名
         :param query: 过滤条件
