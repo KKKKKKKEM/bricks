@@ -10,7 +10,7 @@ from loguru import logger
 
 from bricks.state import const
 from bricks.core import signals, dispatch
-from bricks.core.events import EventManger, Task
+from bricks.core.events import EventManager, Task
 from bricks.lib.context import Flow, Context
 from bricks.utils import pandora
 
@@ -120,7 +120,7 @@ class Chaos(metaclass=MetaClass):
         def wrapper(*args, **kwargs):
             context = self.make_context(form=const.BEFORE_START)
 
-            EventManger.invoke(context)
+            EventManager.invoke(context)
 
             ret = raw_method(*args, **kwargs)
             return ret
@@ -138,7 +138,7 @@ class Chaos(metaclass=MetaClass):
         @functools.wraps(raw_method)
         def wrapper(*args, **kwargs):
             context = self.make_context(form=const.BEFORE_CLOSE)
-            EventManger.invoke(context)
+            EventManager.invoke(context)
             ret = raw_method(*args, **kwargs)
             return ret
 
@@ -226,7 +226,7 @@ class Pangu(Chaos):
 
     def use(self, form: str, *events: Union[Task, dict]):
         context = self.make_context(form=form)
-        return EventManger.register(context, *events)
+        return EventManager.register(context, *events)
 
     def make_context(self, **kwargs):
         kwargs.setdefault("flows", self.flows)
