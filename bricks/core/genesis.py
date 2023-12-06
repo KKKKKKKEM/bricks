@@ -214,7 +214,8 @@ class Pangu(Chaos):
 
                     except Exception as e:
                         logger.error(
-                            f"""\n{pandora.get_simple_stack(e)} [{context.form}] {e.__class__.__name__}({e})""")
+                            f"\n{pandora.get_simple_stack(e)} [{context.form}] {e.__class__.__name__}({e})"
+                        )
                         context.failure(shutdown=True)
 
     def submit(self, task: dispatch.Task, timeout=None) -> dispatch.Task:
@@ -225,7 +226,7 @@ class Pangu(Chaos):
 
     def use(self, form: str, *events: Union[Task, dict]):
         context = self.make_context(form=form)
-        EventManger.register(context, *events)
+        return EventManger.register(context, *events)
 
     def make_context(self, **kwargs):
         kwargs.setdefault("flows", self.flows)
@@ -238,6 +239,11 @@ class Pangu(Chaos):
         raise NotImplementedError
 
     def install(self):
+        """
+        实例化之后会运行一次
+
+        :return:
+        """
         pass
 
 

@@ -2,6 +2,7 @@
 # @Time    : 2023-11-15 14:09
 # @Author  : Kem
 # @Desc    :
+import contextlib
 import dataclasses
 import datetime
 import functools
@@ -13,7 +14,7 @@ from typing import Optional, List, Union, Iterable, Callable, Dict
 
 from loguru import logger
 
-from bricks import state, plugins
+from bricks import state
 from bricks.core import dispatch, signals, events
 from bricks.core.genesis import Pangu
 from bricks.downloader import genesis, cffi
@@ -26,6 +27,7 @@ from bricks.lib.proxies import manager
 from bricks.lib.queues import TaskQueue, LocalQueue, Item
 from bricks.lib.request import Request
 from bricks.lib.response import Response
+from bricks.plugins import foundation
 from bricks.utils import pandora
 
 IP_REGEX = re.compile(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+')
@@ -68,28 +70,26 @@ class Download(RenderNode):
         )
 
     def to_response(self, spider: "Spider" = None) -> Response:
-        stop_dispacher = False
+        dispatcher = contextlib.nullcontext()
         if not spider:
             spider = Spider()
-            if inspect.iscoroutinefunction(spider.downloader.fetch):
-                spider.dispatcher.start()
-                stop_dispacher = True
 
-        request = self.to_request()
-        context = spider.make_context(
-            request=request,
-            next=spider.on_request,
-            flows={
-                spider.on_request: None,
-                spider.on_retry: spider.on_request
-            },
-        )
-        context.failure = lambda shutdown: context.flow({"next": None})
-        try:
+        if inspect.iscoroutinefunction(spider.downloader.fetch):
+            dispatcher = spider.dispatcher
+
+        with dispatcher:
+            request = self.to_request()
+            context = spider.make_context(
+                request=request,
+                next=spider.on_request,
+                flows={
+                    spider.on_request: None,
+                    spider.on_retry: spider.on_request
+                },
+            )
+            context.failure = lambda shutdown: context.flow({"next": None})
             spider.on_consume(context=context)
             return context.response
-        finally:
-            stop_dispacher and spider.dispatcher.stop()
 
 
 class Context(Flow):
@@ -445,30 +445,30 @@ class Spider(Pangu):
     def _when_run_spider(self, raw_method):
         @functools.wraps(raw_method)
         def wrapper(*args, **kwargs):
-            self.dispatcher.start()
-            task_queue: TaskQueue = self.get("spider.task_queue", self.task_queue)
-            queue_name: str = self.get("spider.queue_name", self.queue_name)
-            task_queue.command(
-                queue_name,
-                {
-                    "action": task_queue.COMMANDS.RUN_SUBSCRIBE,
-                    "target": self
-                }
-            )
+            with self.dispatcher:
+                task_queue: TaskQueue = self.get("spider.task_queue", self.task_queue)
+                queue_name: str = self.get("spider.queue_name", self.queue_name)
+                task_queue.command(
+                    queue_name,
+                    {
+                        "action": task_queue.COMMANDS.RUN_SUBSCRIBE,
+                        "target": self
+                    }
+                )
 
-            return raw_method(*args, **kwargs)
+                return raw_method(*args, **kwargs)
 
         return wrapper
 
     def run_all(self):
-        self.dispatcher.start()
-        t1 = int(time.time() * 1000)
-        init_task = dispatch.Task(func=self.run_init)
-        self.active(init_task)
-        task_queue: TaskQueue = self.get("init.task_queue", self.task_queue)
-        queue_name: str = self.get("init.queue_name", self.queue_name)
-        task_queue.command(queue_name, {"action": task_queue.COMMANDS.WAIT_INIT, "time": t1})
-        self.run_spider()
+        with self.dispatcher:
+            t1 = int(time.time() * 1000)
+            init_task = dispatch.Task(func=self.run_init)
+            self.active(init_task)
+            task_queue: TaskQueue = self.get("init.task_queue", self.task_queue)
+            queue_name: str = self.get("init.queue_name", self.queue_name)
+            task_queue.command(queue_name, {"action": task_queue.COMMANDS.WAIT_INIT, "time": t1})
+            self.run_spider()
 
     @staticmethod
     def get_seeds(context: Context) -> Union[Iterable[Item], Item]:
@@ -787,5 +787,5 @@ class Spider(Pangu):
 
     def install(self):
         super().install()
-        self.use(state.const.BEFORE_REQUEST, {"func": plugins.set_proxy, "index": math.inf})
-        self.use(state.const.AFTER_REQUEST, {"func": plugins.show_response}, {"func": plugins.is_success})
+        self.use(state.const.BEFORE_REQUEST, {"func": foundation.set_proxy, "index": math.inf})
+        self.use(state.const.AFTER_REQUEST, {"func": foundation.show_response}, {"func": foundation.is_success})

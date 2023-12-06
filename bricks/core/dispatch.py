@@ -55,7 +55,7 @@ class Worker(threading.Thread):
 
     """
 
-    def __init__(self, dispatcher: 'Dispatcher', name: str, daemon=False, trace=False, **kwargs):
+    def __init__(self, dispatcher: 'Dispatcher', name: str, daemon=True, trace=False, **kwargs):
         self.dispatcher = dispatcher
         self._shutdown = False
         self.trace = trace
@@ -364,8 +364,9 @@ class Dispatcher:
 
             self._running.wait()
 
+    def __enter__(self):
+        self.start()
+        return self
 
-if __name__ == '__main__':
-    dis = Dispatcher()
-    dis.start()
-    dis.start()
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop()

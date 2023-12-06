@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-# @Time    : 2023-11-17 17:39
+# @Time    : 2023-12-06 13:20
 # @Author  : Kem
-# @Desc    :
+# @Desc    : 基础插件: 设置代理, 显示响应, 判断响应是否成功
 
 
 import threading

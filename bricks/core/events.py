@@ -8,12 +8,12 @@ import itertools
 import threading
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Optional, Union, Callable
+from typing import Optional, Union, Callable, Any, List
 
 from loguru import logger
 
-from bricks.state import const
 from bricks.lib.context import Context, Error
+from bricks.state import const
 from bricks.utils import pandora
 
 
@@ -46,6 +46,50 @@ class Task:
     match: Union[Callable, str] = None
     index: Optional[int] = None
     disposable: Optional[bool] = False
+
+
+@dataclass
+class Registed:
+    task: Task
+    container: list
+    form: str
+    target: Optional[Any] = None
+
+    def unregister(self):
+        """
+        取消注册该事件
+
+        :return:
+        """
+        self.container.remove(self.task)
+
+    def reindex(self, index: int):
+        """
+        重构当前事件的 index, 并进行排序
+
+        :param index:
+        :return:
+        """
+        self.task.index = index
+        self.container.sort(key=lambda x: x.index)
+
+    def move2top(self):
+        """
+        将事件移动到最前面
+
+        :return:
+        """
+        index = min([x.index for x in self.container])
+        self.reindex(index - 1)
+
+    def move2tail(self):
+        """
+        将事件移动到最后面
+
+        :return:
+        """
+        index = max([x.index for x in self.container])
+        self.reindex(index + 1)
 
 
 class EventManger:
@@ -114,8 +158,8 @@ class EventManger:
         )
 
     @classmethod
-    def register(cls, context: Context, *events: Task):
-
+    def register(cls, context: Context, *events: Task) -> List[Registed]:
+        ret = []
         for event in events:
             if isinstance(event, dict):
                 event = Task(**event)
@@ -132,9 +176,16 @@ class EventManger:
             event.index = next(counter) if event.index is None else event.index
 
             container[context.target][context.form].append(event)
+            ret.append(Registed(
+                task=event,
+                container=container[context.target][context.form],
+                form=context.form,
+                target=context.target
+            ))
 
         REGISTERED_EVENTS.disposable[context.target][context.form].sort(key=lambda x: x.index)
         REGISTERED_EVENTS.permanent[context.target][context.form].sort(key=lambda x: x.index)
+        return ret
 
 
 # 已注册事件
