@@ -994,8 +994,8 @@ end
                     -- 1.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 + record.status = 1 -> true
                     local identifier = redis.call("HGET", record_key, "identifier")
                     local status = redis.call("HGET", record_key, "status")
-                    if (machine_id == identifier and status == "1") then
-                    
+                    if (not identifier or machine_id == identifier and status == "1") then
+                        redis.call("HSET", record_key, "identifier", machine_id)
                         return true
                     else
                         return "非初始化机器/初始化状态不为 0"
@@ -1013,7 +1013,7 @@ end
                     -- 1.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 -> 判断 record.status
                     local identifier = redis.call("HGET", record_key, "identifier")
                     local status = redis.call("HGET", record_key, "status")
-                    if machine_id == identifier then
+                    if not identifier or machine_id == identifier then
                         -- record.status == 0, 表示曾经跑过 -> 重新初始化
                         if status == "0" then
                             redis.call("DEL", record_key)
