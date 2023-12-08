@@ -31,7 +31,7 @@ class Items(UserList):
             for column in columns:
                 try:
                     item.__delitem__(column)
-                except:
+                except:  # noqa
                     pass
 
     @property

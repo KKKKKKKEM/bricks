@@ -345,7 +345,7 @@ class Dispatcher:
         self.loop.run_until_complete(main())
         try:
             self.loop.close()
-        except:
+        except: # noqa
             pass
 
     def stop(self):
