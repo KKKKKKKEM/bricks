@@ -12,10 +12,10 @@ from bricks.core.dispatch import Task, Dispatcher
 
 本调度器超好用的功能：
 
-1. 支持设置最大并发数，可以根据当前提交的任务数量自动新增 / 关闭 worker
+1. 支持设置最大并发数 可以根据当前提交的任务数量自动新增 / 关闭 worker
 2. worker 支持手动暂停和关闭
 3. 提交的任务不管你是异步任务还是同步任务都能 hold 住
-4. 提交之后返回 future, 想要等待结果只需要 future.result() 即可，你也可以取消任务, 避免异步编程
+4. 提交之后返回 future 想要等待结果只需要 future.result() 即可 你也可以取消任务 避免异步编程
 
 """
 if __name__ == '__main__':

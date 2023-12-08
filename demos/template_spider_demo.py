@@ -4,7 +4,6 @@
 # @Desc    :
 from bricks import const
 from bricks.core import signals
-from bricks.lib.queues import RedisQueue
 from bricks.plugins.make_seeds import by_csv
 from bricks.spider import template
 from bricks.spider.template import Config
@@ -101,4 +100,3 @@ if __name__ == '__main__':
     spider.run(
         task_name='init'
     )
-

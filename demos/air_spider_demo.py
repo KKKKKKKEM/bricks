@@ -17,7 +17,7 @@ class MySpider(air.Spider):
         # 如果有多个, 你有两种方案
         # 1. 将种子全部放置在一个列表里面, yield 出去, 如 return [{"page":1}, {"page":2}, {"page":3}]
         # 2. 使用生成器, 每次生产一部分, 如 yield {"page":1}, yield {"page":2}, yield {"page":3}
-        return [{"page":1}, {"page":2}, {"page":3}]
+        return [{"page": 1}, {"page": 2}, {"page": 3}]
 
     def make_request(self, context: Context) -> Request:
         # 之前定义的种子会被投放至任务队列, 之后会被取出来, 迁入至 context 对象内

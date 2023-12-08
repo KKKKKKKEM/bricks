@@ -149,5 +149,4 @@ class SqlLite:
             })
         subprocess.run(cmd, shell=True, text=True, **options)
 
-
         return conn
