@@ -5,24 +5,24 @@
 import contextlib
 import json
 import sqlite3
+import subprocess
 
 
 class SqlLite:
 
-    def __init__(self, name, structure: dict):
+    def __init__(self, name, structure: dict = None, database=":memory:"):
         sqlite3.register_adapter(bool, int)
         sqlite3.register_adapter(list, json.dumps)
         sqlite3.register_adapter(list, json.dumps)
         sqlite3.register_adapter(dict, json.dumps)
         sqlite3.register_converter("BOOLEAN", lambda v: bool(int(v)))
         sqlite3.register_converter("OBJECT", json.loads)
-
-        self._db = sqlite3.connect(":memory:", detect_types=sqlite3.PARSE_DECLTYPES)
-
-        self._columns = []
+        self.database = database
         self.name = name
+        self._db = sqlite3.connect(database, detect_types=sqlite3.PARSE_DECLTYPES)
+        self._columns = []
         self.structure: dict = structure
-        self.create_table(name, structure)
+        structure and self.create_table(name, structure)
 
     @contextlib.contextmanager
     def cursor(self) -> sqlite3.Cursor:
@@ -78,9 +78,16 @@ class SqlLite:
             cur.execute(sql)
 
     def create_table(self, name, structure: dict):
+        python_to_sqlite_types = {
+            type(None): "NULL",
+            int: "INTEGER",
+            float: "REAL",
+            str: "TEXT",
+            bytes: "BLOB"
+        }
         with self.cursor() as cur:
             sql = f"CREATE TABLE IF NOT EXISTS {name}(" + ",".join(
-                [f'{k} {v}' if v else k for k, v in structure.items()]) + ")"
+                [f'{k} {python_to_sqlite_types.get(v, "TEXT")}' if v else k for k, v in structure.items()]) + ")"
             cur.execute(sql)
 
     @property
@@ -92,7 +99,55 @@ class SqlLite:
 
         return self._columns
 
-    def run_sql(self, sql: str):
-        with self.cursor() as cur:
-            cur.execute(sql)
-            return cur.fetchall()
+    def run_sql(self, sql: str) -> sqlite3.Cursor:
+        with self.cursor() as cursor:
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+            columns = [description[0] for description in cursor.description]
+            for row in rows:
+                yield dict(zip(columns, row))
+
+    def execute(self, sql: str):
+        with self.cursor() as cursor:
+            cursor.execute(sql)
+            return cursor.fetchall()
+
+    @classmethod
+    def load_csv(
+            cls,
+            database: str,
+            table: str,
+            path: str,
+            structure: dict = None,
+            reload=True,
+            debug=False
+    ):
+        """
+        从 csv 中加载数据
+
+        :param structure:
+        :param database: 数据库名称
+        :param table: 表名
+        :param path: 路径
+        :param reload: 是否重新加载, 是的话如果数据库存在, 会先删除数据库
+        :param debug: debug 模式会
+        :return:
+        """
+        conn = cls(database=database + ".db", name=table)
+
+        if reload:
+            conn.execute(f'DROP TABLE IF EXISTS {table};')
+        if structure:
+            conn.create_table(table, structure=structure)
+        cmd = f'sqlite3 {database}.db ".mode csv" ".import {path} {table}"'
+
+        options = {}
+        if not debug:
+            options.update({
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+            })
+        subprocess.run(cmd, shell=True, text=True, **options)
+
+
+        return conn
