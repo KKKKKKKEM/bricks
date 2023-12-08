@@ -353,7 +353,7 @@ class Response:
         try:
             self.json(**kwargs)
             return True
-        except:
+        except:  # noqa
             return False
 
     def __str__(self):

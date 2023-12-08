@@ -39,7 +39,7 @@ class Item(dict):
             self.fingerprint = None
         try:
             super().__init__(__dict, **kwargs)
-        except:
+        except:  # noqa
             self.fingerprint = __dict
 
     fingerprint = property(
@@ -213,7 +213,7 @@ class SmartQueue(queue.Queue):
             try:
                 for value in values:
                     self.queue.remove(value)
-            except:
+            except:  # noqa
                 pass
             else:
                 count += 1
