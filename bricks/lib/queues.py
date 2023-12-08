@@ -994,7 +994,7 @@ end
                     -- 1.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 + record.status = 1 -> true
                     local identifier = redis.call("HGET", record_key, "identifier")
                     local status = redis.call("HGET", record_key, "status")
-                    if (not identifier or machine_id == identifier and status == "1") then
+                    if not identifier or (machine_id == identifier and status == "1") then
                         redis.call("HSET", record_key, "identifier", machine_id)
                         return true
                     else
