@@ -4,17 +4,27 @@
 # @Desc    :
 from bricks import const
 from bricks.core import signals
+from bricks.lib.queues import RedisQueue
+from bricks.plugins.make_seeds import by_csv
 from bricks.spider import template
 from bricks.spider.template import Config
 
 
 class Spider(template.Spider):
+
+    def __init__(self, **kwargs):
+
+        super().__init__(**kwargs)
+
     @property
     def config(self) -> Config:
         return Config(
             init=[
                 template.Init(
-                    func=lambda: {"page": 1}
+                    func=by_csv,
+                    kwargs={
+                        'path': r'D:\yintian\myProject\bricks\files\e.csv',
+                    }
                 )
             ],
             events={
@@ -88,4 +98,7 @@ class Spider(template.Spider):
 
 if __name__ == '__main__':
     spider = Spider()
-    spider.run()
+    spider.run(
+        task_name='init'
+    )
+

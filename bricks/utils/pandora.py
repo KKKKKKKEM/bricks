@@ -93,7 +93,7 @@ def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, name
 
     try:
         parameters = inspect.signature(func).parameters
-    except:
+    except:  # noqa
         parameters = {}
         new_args = [*args]
         kwargs and new_args.append(kwargs)
@@ -221,7 +221,7 @@ def json_or_eval(text, jsonp=False, errors="strict", _step=0, **kwargs) -> Union
     for func in funcs:
         try:
             return func()
-        except:
+        except:  # noqa
             pass
 
     else:
@@ -254,6 +254,26 @@ def get_simple_stack(e):
         formatted_trace += f"    {line}\n"
         tb = tb.tb_next
     return formatted_trace
+
+
+def get_files_by_path(path: Union[List[str], str]):
+    if not path:
+        return []
+    if isinstance(path, list):
+        return [j for i in path for j in get_files_by_path(i)]
+    if os.path.isdir(path):
+        dirname = path
+    else:
+        return [path]
+    if os.path.exists(path):
+        ret = map(
+            lambda x: os.path.join(dirname, x),
+            os.listdir(path) if os.path.isdir(path) else [os.path.basename(path)]
+        )
+    else:
+        ret = []
+
+    return ret
 
 
 if __name__ == '__main__':

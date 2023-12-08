@@ -42,16 +42,16 @@ class Spider(air.Spider):
 
         for node in pandora.iterable(self.config.init):
             engine = node.func
-            args = node.args or []
-            kwargs = node.kwargs or {}
+            node_args = node.args or []
+            node_kwargs = node.kwargs or {}
 
             if not callable(engine):
                 engine = pandora.load_objects(engine)
 
             seeds = pandora.invoke(
                 func=engine,
-                args=[context, *args],
-                kwargs=kwargs,
+                args=[context, *node_args],
+                kwargs={**kwargs, **node_kwargs},
                 annotations={air.Context: context},
                 namespace={"context": context}
             )
