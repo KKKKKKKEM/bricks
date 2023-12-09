@@ -2,10 +2,10 @@
 # @Time    : 2023-12-05 20:29
 # @Author  : Kem
 # @Desc    :
+import time
+
 from bricks import const
 from bricks.core import signals
-from bricks.lib.queues import RedisQueue
-from bricks.plugins.make_seeds import by_csv
 from bricks.spider import template
 from bricks.spider.template import Config
 
@@ -21,10 +21,13 @@ class Spider(template.Spider):
         return Config(
             init=[
                 template.Init(
-                    func=by_csv,
-                    kwargs={
-                        'path': r'D:\yintian\myProject\bricks\files\e.csv',
-                    }
+                    func=lambda: {"page": 1},
+                    layout=template.Layout(
+                        factory={
+                            "time": lambda: time.time()
+                        }
+                    )
+
                 )
             ],
             events={
@@ -62,7 +65,11 @@ class Spider(template.Spider):
                                 "status": "status",
                             }
                         }
-                    }
+                    },
+                    layout=template.Layout(
+                        rename={"userId": "user_id"},
+                        default={"modify_at": time.time(), "page": "{page}", "seeds_time": "{time}"}
+                    )
                 )
             ],
             pipeline=[
@@ -98,7 +105,4 @@ class Spider(template.Spider):
 
 if __name__ == '__main__':
     spider = Spider()
-    spider.run(
-        task_name='init'
-    )
-
+    spider.run()

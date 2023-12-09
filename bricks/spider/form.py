@@ -2,6 +2,7 @@
 # @Time    : 2023-11-18 10:47
 # @Author  : Kem
 # @Desc    :
+import copy
 import inspect
 from dataclasses import dataclass
 from typing import Optional, Union, List, Dict, Callable
@@ -52,11 +53,21 @@ class Task(_events.Task, RenderNode):
 
 
 @dataclass
+class Layout(RenderNode):
+    rename: dict = None
+    show: dict = None
+    factory: dict = None
+    default: dict = None
+    strict: str = "fix"
+
+
+@dataclass
 class Parse(RenderNode):
     func: Union[str, Callable]
     args: Optional[list] = None
     kwargs: Optional[dict] = None
     strict: str = "fix"
+    layout: Optional[Layout] = None
 
 
 @dataclass
@@ -66,6 +77,7 @@ class Pipeline(RenderNode):
     kwargs: Optional[dict] = None
     strict: str = "fix"
     success: bool = False
+    layout: Optional[Layout] = None
 
 
 @dataclass
@@ -74,6 +86,7 @@ class Init(RenderNode):
     args: Optional[list] = None
     kwargs: Optional[dict] = None
     strict: str = "fix"
+    layout: Optional[Layout] = None
 
 
 Download = air.Download
@@ -182,9 +195,12 @@ class Spider(air.Spider):
             return
 
         for node in pandora.iterable(self.config.init):
+            node: Init
             engine = node.func
             args = node.args or []
             kwargs = node.kwargs or {}
+            layout = node.layout or Layout()
+
 
             if not callable(engine):
                 engine = pandora.load_objects(engine)
@@ -199,8 +215,22 @@ class Spider(air.Spider):
 
             if inspect.isgenerator(seeds):
                 for seed in seeds:
+                    pandora.clean_rows(
+                        *pandora.iterable(seed),
+                        rename=layout.rename,
+                        default=layout.default,
+                        factory=layout.factory,
+                        show=layout.show,
+                    )
                     yield seed
             else:
+                pandora.clean_rows(
+                    *pandora.iterable(seeds),
+                    rename=layout.rename,
+                    default=layout.default,
+                    factory=layout.factory,
+                    show=layout.show,
+                )
                 yield seeds or []
 
     def make_request(self, context: Context) -> Request:
@@ -215,6 +245,8 @@ class Spider(air.Spider):
         engine = node.func
         args = node.args or []
         kwargs = node.kwargs or {}
+        layout = node.layout or Layout()
+        layout = layout.render(context.seeds)
 
         if str(engine).lower() in ["json", "xpath", "jsonpath", "regex"]:
             items = pandora.invoke(
@@ -258,8 +290,22 @@ class Spider(air.Spider):
 
         if inspect.isgenerator(items):
             for item in items:
+                pandora.clean_rows(
+                    *pandora.iterable(item),
+                    rename=layout.rename,
+                    default=layout.default,
+                    factory=layout.factory,
+                    show=layout.show,
+                )
                 yield item
         else:
+            pandora.clean_rows(
+                *pandora.iterable(items),
+                rename=layout.rename,
+                default=layout.default,
+                factory=layout.factory,
+                show=layout.show,
+            )
             yield items or []
 
     def item_pipeline(self, context: Context):
@@ -267,29 +313,42 @@ class Spider(air.Spider):
         engine = node.func
         args = node.args or []
         kwargs = node.kwargs or {}
+        layout = node.layout or Layout()
+        layout = layout.render(context.seeds)
 
         if not callable(engine):
             engine = pandora.load_objects(engine)
+        back = context.items
+        try:
+            context.items = pandora.clean_rows(
+                *copy.deepcopy(context.items),
+                rename=layout.rename,
+                default=layout.default,
+                factory=layout.factory,
+                show=layout.show,
+            )
 
-        pandora.invoke(
-            func=engine,
-            args=args,
-            kwargs=kwargs,
-            annotations={
-                Context: context,
-                Response: context.response,
-                Request: context.request,
-                Item: context.seeds,
-                Items: context.items
-            },
-            namespace={
-                "context": context,
-                "response": context.response,
-                "request": context.request,
-                "seeds": context.seeds,
-                "items": context.items
-            }
-        )
+            pandora.invoke(
+                func=engine,
+                args=args,
+                kwargs=kwargs,
+                annotations={
+                    Context: context,
+                    Response: context.response,
+                    Request: context.request,
+                    Item: context.seeds,
+                    Items: context.items
+                },
+                namespace={
+                    "context": context,
+                    "response": context.response,
+                    "request": context.request,
+                    "seeds": context.seeds,
+                    "items": context.items
+                }
+            )
+        finally:
+            context.items = back
 
         node.success and context.success()
 

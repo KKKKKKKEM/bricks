@@ -285,5 +285,63 @@ def get_simple_stack(e):
     return formatted_trace
 
 
+def clean_rows(*rows: dict, **layout):
+    """
+    清洗数据
+
+    :param rows: 需要处理的数据
+    :param layout:
+        - rename: 修改名字
+        - show: 移除 / 保留 / 函数
+        - factory: 工厂函数, 动态处理
+        - default: 默认值
+    :return:
+    """
+
+    def _rename(rule: dict, data: dict):
+        for oldname, newname in rule.items():
+            data[newname] = data.pop(oldname, None)
+
+    def _show(rule: dict, data: dict):
+        for key, flag in rule.items():
+            if (
+                    callable(flag) and not invoke(flag, args=[data.get(key, None)], kwargs={"row": row})
+                    or not flag
+            ):
+                rule.pop(key, None)
+
+    def _factory(rule: dict, data: dict):
+        for key, func in rule.items():
+            if isinstance(func, str):
+                func = load_objects(func)
+            data[key] = invoke(func, args=[data.get(key, None)], kwargs={"row": row})
+
+    def _default(rule: dict, data: dict):
+        for key, default in rule.items():
+            data.setdefault(key, default)
+
+    flows = [
+        (layout.get("default"), _default),
+        (layout.get("show"), _show),
+        (layout.get("factory"), _factory),
+        (layout.get("rename"), _rename),
+
+    ]
+    for row in rows:
+        for _rule, flow in flows:
+            _rule and flow(_rule, row)
+
+    else:
+        return list(rows)
+
+
 if __name__ == '__main__':
-    print(require("pandas"))
+    # print(require("pandas"))
+    my_data = [{"id": i, "name": i} for i in range(100)]
+    print(clean_rows(
+        *my_data,
+        default={"hobby": "nothing"},
+        rename={"id": "uid"},
+        factory={"name": lambda x: "name: " + str(x)}
+    ))
+    print(my_data)
