@@ -69,12 +69,12 @@ def load_objects(path_or_reference, reload=False):
         raise ImportError(f"无法导入指定路径或引用: {path_or_reference}")
 
 
-def require(package_spec: str):
+def require(package_spec: str) -> str:
     """
     依赖 python 包
 
     :param package_spec: pymongo==4.6.0 / pymongo
-    :return:
+    :return: 安装的包版本号
     """
     # 分离包名和版本规范
     match = PACKAGE_REGEX.match(package_spec)
@@ -86,24 +86,18 @@ def require(package_spec: str):
     try:
         # 获取已安装的包版本
         installed_version = importlib_metadata.version(package)
-
         # 检查是否需要安装或更新
-        if required_version:
-            if operator == '==' and installed_version != required_version:
-                raise importlib_metadata.PackageNotFoundError
-            elif operator == '>=' and installed_version < required_version:
-                raise importlib_metadata.PackageNotFoundError
-            elif operator == '<=' and installed_version > required_version:
-                raise importlib_metadata.PackageNotFoundError
+        if required_version and not eval(f'{installed_version} {operator} {required_version}'):
+            raise importlib_metadata.PackageNotFoundError
         else:
-            return
+            return installed_version
 
     except importlib_metadata.PackageNotFoundError:
         # 包没有安装或版本不符合要求
         install_command = package_spec if required_version else package
-        logger.debug(f"正在安装/更新'{package}'...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", install_command])
-        logger.debug(f"'{package}'已安装/更新。")
+        logger.debug(f"'{install_command}'已安装/更新。")
+        return importlib_metadata.version(package)
 
 
 def invoke(func, args=None, kwargs: dict = None, annotations: dict = None, namespace: dict = None):
@@ -292,4 +286,4 @@ def get_simple_stack(e):
 
 
 if __name__ == '__main__':
-    require("pymongo")
+    print(require("pandas"))
