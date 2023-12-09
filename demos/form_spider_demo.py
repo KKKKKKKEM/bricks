@@ -1,5 +1,16 @@
 from bricks.core import signals
+from bricks.db.sqllite import SqlLite
 from bricks.spider import form
+
+sqllite = SqlLite("test")
+sqllite.create_table("user_info", structure={
+    "userId": int,
+    "roomId": int,
+    "score": float,
+    "startTime": float,
+    "kugouId": int,
+    "status": int,
+})
 
 
 class MySpider(form.Spider):
@@ -40,7 +51,11 @@ class MySpider(form.Spider):
                 ),
                 form.Task(func=self.turn_page),
                 form.Pipeline(
-                    func=lambda context: print(context.items),
+                    func="bricks.plugins.storage.to_sqllite",
+                    kwargs={
+                        "db": sqllite,
+                        "path": "user_info"
+                    },
                     success=True
                 )
 
@@ -70,5 +85,6 @@ class MySpider(form.Spider):
 
 
 if __name__ == '__main__':
-    spider = MySpider()
-    spider.run()
+    # spider = MySpider()
+    # spider.run()
+    print(list(sqllite.find("select * from user_info")))

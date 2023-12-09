@@ -10,7 +10,7 @@ import time
 from typing import Optional, Union
 from urllib.parse import urlencode
 
-from bricks.utils.csv_ import CsvReader
+from bricks.utils.csv_ import Reader
 
 LIMIT_PATTERN = re.compile(r"(LIMIT\s+)(\d+)", flags=re.IGNORECASE)
 OFFSET_PATTERN = re.compile(r"(OFFSET\s+)(\d+)", flags=re.IGNORECASE)
@@ -50,8 +50,8 @@ def by_csv(
     raw_skip = skip
     query = query or "select * from <TABLE>"
 
-    for file in CsvReader.get_files(path):
-        reader = CsvReader(file, **reader_options)
+    for file in Reader.get_files(path):
+        reader = Reader(file, **reader_options)
 
         record_key = _make_key({
             "path": path,
@@ -81,15 +81,10 @@ def by_csv(
             else:
                 query = LIMIT_PATTERN.sub(r"\1\2 OFFSET " + str(skip), query)
 
-        gen = reader.iter_data(query)
-        seeds = []
-        for _ in range(batch_size):
-            for data in gen:
-                seeds.append(data)
-                skip += 1
-        else:
+        for rows in reader.iter_data(query, batch_size=batch_size):
             record.update({record_key: skip})
-            yield seeds
+            yield rows
+            skip += len(rows)
 
 
 if __name__ == '__main__':
