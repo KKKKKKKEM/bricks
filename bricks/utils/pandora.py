@@ -11,10 +11,15 @@ import json
 import linecache
 import os
 import re
+import subprocess
 import sys
 from typing import Any, List, Union
 
+import importlib_metadata
+from loguru import logger
+
 JSONP_REGEX = re.compile(r'\S+?\((?P<obj>[\s\S]*)\)')
+PACKAGE_REGEX = re.compile(r"([a-zA-Z0-9_\-]+)([<>=]*)([\d.]*)")
 
 
 def load_objects(path_or_reference, reload=False):
@@ -62,6 +67,43 @@ def load_objects(path_or_reference, reload=False):
             except (ImportError, AttributeError):
                 continue
         raise ImportError(f"无法导入指定路径或引用: {path_or_reference}")
+
+
+def require(package_spec: str):
+    """
+    依赖 python 包
+
+    :param package_spec: pymongo==4.6.0 / pymongo
+    :return:
+    """
+    # 分离包名和版本规范
+    match = PACKAGE_REGEX.match(package_spec)
+    if not match:
+        raise ValueError("无效的包规范")
+
+    package, operator, required_version = match.groups()
+
+    try:
+        # 获取已安装的包版本
+        installed_version = importlib_metadata.version(package)
+
+        # 检查是否需要安装或更新
+        if required_version:
+            if operator == '==' and installed_version != required_version:
+                raise importlib_metadata.PackageNotFoundError
+            elif operator == '>=' and installed_version < required_version:
+                raise importlib_metadata.PackageNotFoundError
+            elif operator == '<=' and installed_version > required_version:
+                raise importlib_metadata.PackageNotFoundError
+        else:
+            return
+
+    except importlib_metadata.PackageNotFoundError:
+        # 包没有安装或版本不符合要求
+        install_command = package_spec if required_version else package
+        logger.debug(f"正在安装/更新'{package}'...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", install_command])
+        logger.debug(f"'{package}'已安装/更新。")
 
 
 def invoke(func, args=None, kwargs: dict = None, annotations: dict = None, namespace: dict = None):
@@ -147,13 +189,6 @@ def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, name
             new_kwargs[name] = value
 
     return prepared(func=func, args=new_args, kwargs=new_kwargs)
-
-
-def ensure_type(_object, _type):
-    if not isinstance(_object, _type):
-        return _type(_object)
-    else:
-        return _object
 
 
 def iterable(_object: Any, enforce=(dict, str, bytes), exclude=(), convert_null=True) -> List[Any]:
@@ -256,29 +291,5 @@ def get_simple_stack(e):
     return formatted_trace
 
 
-def get_files_by_path(path: Union[List[str], str]):
-    if not path:
-        return []
-    if isinstance(path, list):
-        return [j for i in path for j in get_files_by_path(i)]
-    if os.path.isdir(path):
-        dirname = path
-    else:
-        return [path]
-    if os.path.exists(path):
-        ret = map(
-            lambda x: os.path.join(dirname, x),
-            os.listdir(path) if os.path.isdir(path) else [os.path.basename(path)]
-        )
-    else:
-        ret = []
-
-    return ret
-
-
 if __name__ == '__main__':
-    def fun(a: int, *args, c: int = 1, **kwargs):
-        print(a, args, c, kwargs)
-
-
-    print(invoke(fun, args=[1], annotations={int: 999}))
+    require("pymongo")

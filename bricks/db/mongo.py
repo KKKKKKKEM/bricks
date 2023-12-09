@@ -4,11 +4,12 @@
 # @Desc    :
 from typing import Iterable, Optional, List
 
-try:
-    import pymongo
-    from pymongo import UpdateOne, InsertOne
-except ImportError:
-    raise ImportError(f'想要体验 Mongo 功能, 请先使用一下命令: pip install pymongo==4.6.0  / pip install bricks_py[mongo]')
+from bricks.utils import pandora
+
+pandora.require("pymongo==4.6.0")
+
+import pymongo
+from pymongo import UpdateOne, InsertOne
 
 
 class Mongo(pymongo.MongoClient):
