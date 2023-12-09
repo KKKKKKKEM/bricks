@@ -2,113 +2,119 @@
 # @Time    : 2023-11-15 16:42
 # @Author  : Kem
 # @Desc    :
-import contextlib
-import json
+import csv
+import os
+import pickle
 import sqlite3
 import subprocess
+from typing import List, Optional
 
 
 class SqlLite:
 
-    def __init__(self, name, structure: dict = None, database=":memory:"):
+    def __init__(self, database=":memory:", **kwargs):
         sqlite3.register_adapter(bool, int)
-        sqlite3.register_adapter(list, json.dumps)
-        sqlite3.register_adapter(list, json.dumps)
-        sqlite3.register_adapter(dict, json.dumps)
+        sqlite3.register_adapter(object, pickle.dumps)
+        sqlite3.register_adapter(list, pickle.dumps)
+        sqlite3.register_adapter(set, pickle.dumps)
+        sqlite3.register_adapter(tuple, pickle.dumps)
+        sqlite3.register_adapter(dict, pickle.dumps)
         sqlite3.register_converter("BOOLEAN", lambda v: bool(int(v)))
-        sqlite3.register_converter("OBJECT", json.loads)
+        sqlite3.register_converter("OBJECT", pickle.loads)
+        if database != ":memory:" and not database.endswith(".db"):
+            database = database + ".db"
+
         self.database = database
-        self.name = name
-        self._db = sqlite3.connect(database, detect_types=sqlite3.PARSE_DECLTYPES)
-        self._columns = []
-        self.structure: dict = structure
-        structure and self.create_table(name, structure)
-
-    @contextlib.contextmanager
-    def cursor(self) -> sqlite3.Cursor:
-        cur = self._db.cursor()
-        yield cur
-        cur.close()
-
-    def insert(self, *docs: dict):
-        sql = 'INSERT INTO ' + self.name + f' ({",".join(docs[0].keys())}) VALUES ({",".join(["?"] * len(docs[0]))})'
-        with self.cursor() as cur:
-            cur: sqlite3.Cursor
-            cur.executemany(sql, [tuple(doc.values()) for doc in docs])
-
-    def upsert(self, *docs: dict):
-        sql = 'INSERT OR REPLACE INTO ' + self.name + f' ({",".join(docs[0].keys())}) VALUES ({",".join(["?"] * len(docs[0]))})'
-        with self.cursor() as cur:
-            cur: sqlite3.Cursor
-            cur.executemany(sql, [tuple(doc.values()) for doc in docs])
-
-    def find(self, query: str = None, fields: list = None, skip=0, limit=1000):
-        if not fields:
-            fields = ["*"]
-            header = self.columns
-        else:
-            header = fields
-
-        sql = f'SELECT {",".join(fields)} FROM ' + self.name
-        if query:
-            sql += f" where {query} "
-
-        sql += f" limit {skip}"
-        if limit != -1:
-            sql += f',{limit}'
-
-        with self.cursor() as cur:
-            cur: sqlite3.Cursor
-            cur.execute(f'pragma table_info({self.name})')
-            cur.execute(sql)
-            for data in cur.fetchall():
-                yield dict(zip(header, data))
-
-    def find_one(self, query: str = None, fields: list = None, skip=0):
-        return next(self.find(query=query, fields=fields, skip=skip, limit=1), None)
-
-    def update(self, query: str, update: dict):
-        sql = f"UPDATE {self.name}" + f" SET {','.join([f'{k}=?' for k, v in update.items()])} WHERE {query}"
-        with self.cursor() as cur:
-            cur.execute(sql, tuple(update.values()))
-
-    def delete(self, query: str):
-        sql = "DELETE FROM " + f"{self.name} WHERE {query}"
-        with self.cursor() as cur:
-            cur.execute(sql)
-
-    def create_table(self, name, structure: dict):
-        python_to_sqlite_types = {
+        kwargs.setdefault("check_same_thread", False)
+        self.connection = sqlite3.connect(database, detect_types=sqlite3.PARSE_DECLTYPES, **kwargs)
+        self._cursor: sqlite3.Cursor
+        self.python_to_sqlite_types = {
             type(None): "NULL",
             int: "INTEGER",
             float: "REAL",
             str: "TEXT",
-            bytes: "BLOB"
+            bytes: "BLOB",
+            bool: "BOOLEAN",
+            list: "OBJECT",
+            set: "OBJECT",
+            tuple: "OBJECT",
+            dict: "OBJECT",
         }
-        with self.cursor() as cur:
-            sql = f"CREATE TABLE IF NOT EXISTS {name}(" + ",".join(
-                [f'{k} {python_to_sqlite_types.get(v, "TEXT")}' if v else k for k, v in structure.items()]) + ")"
+
+    register_adapter = sqlite3.register_adapter
+    register_converter = sqlite3.register_converter
+
+    def __enter__(self):
+        self._cursor = self.connection.cursor()
+        return self._cursor
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._cursor and self._cursor.close()
+        self.connection.commit()
+
+    def find(self, sql: str, batch_size: int = 10000, unpack: bool = False) -> List[dict]:
+        with self as cursor:
+            cursor: sqlite3.Cursor
+            cursor.execute(sql)
+            columns = [description[0] for description in cursor.description]
+
+            while True:
+                rows = cursor.fetchmany(batch_size)
+                if rows:
+                    rows = [dict(zip(columns, row)) for row in rows]
+                    if not unpack:
+                        rows = [rows]
+
+                    for row in rows:
+                        yield row
+
+                else:
+                    break
+
+    def insert(self, table: str, *docs: dict, row_keys: Optional[list] = None):
+        if not docs:
+            return
+
+        keys = docs[0].keys()
+        if row_keys:
+            query = f' ON CONFLICT({",".join(row_keys)}) DO UPDATE SET {", ".join([f"{key} = excluded.{key}" for key in set(keys) - set(row_keys)])}'
+        else:
+            query = ""
+
+        sql = 'INSERT INTO ' + table + f' ({",".join(keys)}) VALUES ({",".join(["?"] * len(keys))}){query}'
+        with self as cur:
+            cur.executemany(sql, [tuple(doc.values()) for doc in docs])
+
+    def upsert(self, table: str, *docs: dict):
+        sql = 'INSERT OR REPLACE INTO ' + table + f' ({",".join(docs[0].keys())}) VALUES ({",".join(["?"] * len(docs[0]))})'
+        with self as cur:
+            cur.executemany(sql, [tuple(doc.values()) for doc in docs])
+
+    def update(self, table: str, query: str, update: dict):
+        sql = f"UPDATE {table}" + f" SET {','.join([f'{k}=?' for k, v in update.items()])} WHERE {query}"
+        with self as cur:
+            cur.execute(sql, tuple(update.values()))
+
+    def delete(self, table: str, query: str):
+        sql = "DELETE FROM " + f"{table} WHERE {query}"
+        with self as cur:
             cur.execute(sql)
 
-    @property
-    def columns(self):
-        if not self._columns:
-            with self.cursor() as cur:
-                cur.execute(f'pragma table_info({self.name})')
-                self._columns = [i[1] for i in cur.fetchall()]
+    def drop(self, table: str):
+        sql = f'DROP TABLE IF EXISTS {table};'
+        with self as cur:
+            cur.execute(sql)
+            return cur.fetchone()
 
-        return self._columns
+    def create_table(self, name, structure: dict):
 
-    def run_sql(self, sql: str) -> sqlite3.Cursor:
-        with self.cursor() as cursor:
-            cursor.execute(sql)
-            rows = cursor.fetchall()
-            columns = [description[0] for description in cursor.description]
-            for row in rows:
-                yield dict(zip(columns, row))
+        with self as cur:
+            sql = f"CREATE TABLE IF NOT EXISTS {name}(" + ",".join(
+                [f'{k} {self.python_to_sqlite_types.get(v, "OBJECT")}' if v else k for k, v in structure.items()]) + ")"
+            cur.execute(sql)
 
     def execute(self, sql: str):
-        with self.cursor() as cursor:
+        with self as cursor:
             cursor.execute(sql)
             return cursor.fetchall()
 
@@ -125,7 +131,7 @@ class SqlLite:
         """
         从 csv 中加载数据
 
-        :param structure:
+        :param structure: 数据类型, 如 structure = {"a": int}, 这样查询出来的 a 就是 int 了
         :param database: 数据库名称
         :param table: 表名
         :param path: 路径
@@ -133,7 +139,10 @@ class SqlLite:
         :param debug: debug 模式会
         :return:
         """
-        conn = cls(database=database + ".db", name=table)
+        if database != ":memory:" and database.endswith(".db"):
+            database = database[:-3]
+
+        conn = cls(database=database + ".db")
 
         if reload:
             conn.execute(f'DROP TABLE IF EXISTS {table};')
@@ -150,3 +159,82 @@ class SqlLite:
         subprocess.run(cmd, shell=True, text=True, **options)
 
         return conn
+
+    def to_csv(
+            self,
+            sql: str,
+            path: str,
+            debug: bool = False,
+            mode: int = ...
+    ):
+        """
+        导出为 csv
+
+        :param sql: 查询 sql
+        :param path: 导出路径
+        :param debug: debug 信息
+        :param mode: 导出模式, 为 1 的时候会优先读取导出, 否则根据模式来使用导出命令或者读取导出
+        :return:
+        """
+        if self.database == ":memory:" or mode == 1:
+            if os.path.exists(path) and os.path.getsize(path):
+                write_header = False
+            else:
+                write_header = True
+
+            with open(path, "a+", newline='', encoding='utf-8') as f:
+                writer = None
+                for data in self.find(sql):
+                    if not data:
+                        return
+
+                    keys = list(data[0].keys())
+                    if not writer:
+                        writer = csv.DictWriter(f, keys)
+                        write_header and writer.writeheader()
+
+                    writer.writerows(data)
+
+        else:
+
+            cmd = f'sqlite3 {self.database} ".headers on" ".mode csv" ".output {path}" "{sql}" ".output stdout"'
+
+            options = {}
+            if not debug:
+                options.update({
+                    "stdout": subprocess.DEVNULL,
+                    "stderr": subprocess.DEVNULL,
+                })
+            subprocess.run(cmd, shell=True, text=True, **options)
+
+
+if __name__ == '__main__':
+    class People:
+        def __init__(self, name: str):
+            self.name = name
+
+        def __str__(self):
+            return f'<People name: {self.name}>'
+
+        __repr__ = __str__
+
+
+    # sqlite = SqlLite()
+    # sqlite.register_adapter(People, pickle.dumps)
+    # sqlite.create_table("test", {"a": object})
+    # sqlite.insert("test", {"a": People("xxx")})
+    # print(list(sqlite.find("select * from test")))
+    # sqlite = SqlLite(database="/Users/Kem/Documents/bricks/bricks/utils/test_csv")
+    # sqlite.to_csv(
+    #     sql="select * from test where a< 100",
+    #     path="xxx.csv",
+    #     debug=True
+    # )
+
+    sqlite = SqlLite()
+    sqlite.create_table("test", {"id": int, "name": str})
+    sqlite.execute("create table test (id INTEGER PRIMARY KEY, name TEXT)")
+    sqlite.insert("test", {"id": 1, "name": "kem"})
+    print(list(sqlite.execute("select * from test")))
+    sqlite.insert("test", {"id": 1, "name": "kem2"}, row_keys=['id'])
+    print(list(sqlite.execute("select * from test")))
