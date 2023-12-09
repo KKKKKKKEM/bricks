@@ -3,11 +3,11 @@
 @File    : make_seeds.py
 @Date    : 2023-12-06 16:39
 @Author  : yintian
-@Desc    : 
+@Desc    : 生产种子插件
 """
 import re
 import time
-from typing import Optional, Union
+from typing import Optional, Union, List
 from urllib.parse import urlencode
 
 from bricks.utils.csv_ import Reader
@@ -82,9 +82,48 @@ def by_csv(
                 query = LIMIT_PATTERN.sub(r"\1\2 OFFSET " + str(skip), query)
 
         for rows in reader.iter_data(query, batch_size=batch_size):
+            skip += len(rows)
             record.update({record_key: skip})
             yield rows
-            skip += len(rows)
+
+
+def by_mongo(
+        path: str,
+        conn,
+        query: str = None,
+        database: str = None,
+        batch_size: int = 10000,
+        skip: Union[str, int] = ...,
+        record: Optional[dict] = None,
+        sort: Optional[List[tuple]] = None,
+):
+    from bricks.db.mongo import Mongo
+    conn: Mongo
+    record = record or {}
+    if skip is ...:
+        if record:
+            skip = 'auto'
+        else:
+            skip = 0
+
+    raw_skip = skip
+    record_key = _make_key({
+        "path": path,
+        "conn": conn,
+        "query": query,
+        "skip": raw_skip,
+        "database": database,
+        "sort": sort,
+    })
+    if raw_skip == 'auto':
+        skip = int(record.get(record_key, 0))
+    else:
+        skip = raw_skip
+
+    for rows in conn.iter_data(collection=path, query=query, skip=skip, count=batch_size, database=database, sort=sort):
+        skip += len(rows)
+        record.update({record_key: skip})
+        yield rows
 
 
 if __name__ == '__main__':

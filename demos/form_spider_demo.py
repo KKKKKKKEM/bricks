@@ -1,4 +1,5 @@
 from bricks.core import signals
+from bricks.db.mongo import Mongo
 from bricks.db.sqllite import SqlLite
 from bricks.spider import form
 
@@ -11,6 +12,7 @@ sqllite.create_table("user_info", structure={
     "kugouId": int,
     "status": int,
 })
+mongo = Mongo()
 
 
 class MySpider(form.Spider):
@@ -50,11 +52,22 @@ class MySpider(form.Spider):
                     }
                 ),
                 form.Task(func=self.turn_page),
+                # form.Pipeline(
+                #     func="bricks.plugins.storage.to_sqllite",
+                #     kwargs={
+                #         "conn": sqllite,
+                #         "path": "user_info"
+                #     },
+                #     success=True
+                # )
+
                 form.Pipeline(
-                    func="bricks.plugins.storage.to_sqllite",
+                    func="bricks.plugins.storage.to_mongo",
                     kwargs={
-                        "db": sqllite,
-                        "path": "user_info"
+                        "conn": mongo,
+                        "path": "user_info",
+                        "database": "live",
+                        "row_keys": ['userId']
                     },
                     success=True
                 )
@@ -85,6 +98,6 @@ class MySpider(form.Spider):
 
 
 if __name__ == '__main__':
-    # spider = MySpider()
-    # spider.run()
-    print(list(sqllite.find("select * from user_info")))
+    spider = MySpider()
+    spider.run()
+    # print(list(sqllite.find("select * from user_info")))
