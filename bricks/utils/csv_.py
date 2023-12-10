@@ -95,7 +95,7 @@ class Reader:
 
 class Writer:
     def __init__(self, path: str, header: list, schema: str = "", mode: str = "a+", newline="",
-                 encoding: str = 'utf-8-sig', ):
+                 encoding: str = 'utf-8-sig'):
         """
         csv writer
 
