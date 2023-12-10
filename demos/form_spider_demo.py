@@ -66,6 +66,15 @@ class MySpider(form.Spider):
                         ]
                     }
                 ),
+                form.Task(
+                    func=scripts.inject,
+                    kwargs={
+                        "flows": [
+                            "context = Context.get_context()",
+                            "logger.debug(context.seeds)"
+                        ]
+                    }
+                ),
                 # form.Pipeline(
                 #     func="bricks.plugins.storage.to_sqllite",
                 #     kwargs={

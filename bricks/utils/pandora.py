@@ -4,7 +4,6 @@
 # @Desc    :
 import ast
 import collections
-import dataclasses
 import importlib
 import importlib.util
 import inspect
@@ -14,7 +13,7 @@ import os
 import re
 import subprocess
 import sys
-from typing import Any, List, Union, Tuple
+from typing import Any, List, Union
 
 import importlib_metadata
 from loguru import logger
@@ -330,39 +329,6 @@ def clean_rows(*rows: dict, **layout):
 
     else:
         return list(rows)
-
-
-@dataclasses.dataclass
-class CodeGenertor:
-    flows: List[Tuple[str, Any]]
-    code: str = ""
-    combination: str = "combination"
-    define: str = "define"
-    condition: str = "condition"
-
-    def make(self):
-        tpls = []
-        for ctype, value in self.flows:
-            if ctype == self.combination:
-                value: Union[str, list]
-                value and tpls.append(";".join(iterable(value)))
-            elif ctype == self.define:
-                value: Union[tuple, list]
-                value and tpls.append(f"{value[0]} = " + (" and ".join(iterable(value[1])) or "1"))
-            elif ctype == self.condition:
-                value: dict = value or {}
-                for i, (cond, action) in enumerate(value.items()):
-                    if i == 0:
-                        tpls.append(f"if {cond}:\n    {';'.join(iterable(action)) or 'pass'}")
-                    else:
-                        tpls.append(f"elif {cond}:\n    {';'.join(iterable(action)) or 'pass'}")
-
-                self.code = "\n".join(tpls)
-
-    def run(self, namespace: dict):
-        self.make()
-        exec(self.code, namespace)
-        return namespace
 
 
 if __name__ == '__main__':
