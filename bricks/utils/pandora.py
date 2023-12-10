@@ -4,6 +4,7 @@
 # @Desc    :
 import ast
 import collections
+import dataclasses
 import importlib
 import importlib.util
 import inspect
@@ -13,7 +14,7 @@ import os
 import re
 import subprocess
 import sys
-from typing import Any, List, Union
+from typing import Any, List, Union, Dict, Tuple
 
 import importlib_metadata
 from loguru import logger
@@ -38,13 +39,12 @@ def load_objects(path_or_reference, reload=False):
         try:
             module_name = os.path.splitext(os.path.basename(path_or_reference))[0]
             spec = importlib.util.spec_from_file_location(module_name, path_or_reference)
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                sys.modules[module_name] = module
-                spec.loader.exec_module(module)
-                return module
-            else:
-                raise ImportError(f"无法从文件路径导入模块：{path_or_reference}")
+
+            assert spec and spec.loader, ImportError(f"无法从文件路径导入模块：{path_or_reference}")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+            return module
         except Exception as e:
             raise e
     else:
@@ -78,8 +78,7 @@ def require(package_spec: str) -> str:
     """
     # 分离包名和版本规范
     match = PACKAGE_REGEX.match(package_spec)
-    if not match:
-        raise ValueError("无效的包规范")
+    assert match, ValueError("无效的包规范")
 
     package, operator, required_version = match.groups()
 
@@ -87,7 +86,7 @@ def require(package_spec: str) -> str:
         # 获取已安装的包版本
         installed_version = importlib_metadata.version(package)
         # 检查是否需要安装或更新
-        if required_version and not eval(f'{installed_version} {operator} {required_version}'):
+        if required_version and not eval(f'{installed_version!r} {operator} {required_version!r}'):
             raise importlib_metadata.PackageNotFoundError
         else:
             return installed_version
@@ -116,7 +115,7 @@ def invoke(func, args=None, kwargs: dict = None, annotations: dict = None, names
 
 
 def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, namespace: dict = None):
-    assert callable(func), f"func must be callable, but got {type(func)}"
+    assert callable(func), ValueError(f"func must be callable, but got {type(func)}")
     prepared = collections.namedtuple("prepared", ["func", "args", "kwargs"])
 
     args = args or []
@@ -254,10 +253,8 @@ def json_or_eval(text, jsonp=False, errors="strict", _step=0, **kwargs) -> Union
             pass
 
     else:
-        if errors != 'ignore':
-            raise ValueError(f'illegal json string: `{text}`')
-        else:
-            return text
+        assert errors == "ignore", ValueError(f'illegal json string: `{text}`')
+        return text
 
 
 def get_simple_stack(e):
@@ -333,6 +330,39 @@ def clean_rows(*rows: dict, **layout):
 
     else:
         return list(rows)
+
+
+@dataclasses.dataclass
+class CodeGenertor:
+    flows: List[Tuple[str, Any]]
+    code: str = ""
+    combination: str = "combination"
+    define: str = "define"
+    condition: str = "condition"
+
+    def make(self):
+        tpls = []
+        for ctype, value in self.flows:
+            if ctype == self.combination:
+                value: Union[str, list]
+                tpls.append(";".join(iterable(value)))
+            elif ctype == self.define:
+                value: Union[tuple, list]
+                tpls.append(f"{value[0]} = " + (" and ".join(iterable(value[1])) or "1"))
+            elif ctype == self.condition:
+                value: dict
+                for i, (cond, action) in enumerate(value.items()):
+                    if i == 0:
+                        tpls.append(f"if {cond}:\n    {';'.join(iterable(action))}")
+                    else:
+                        tpls.append(f"elif {cond}:\n    {';'.join(iterable(action))}")
+
+                self.code = "\n".join(tpls)
+
+    def run(self, namespace: dict):
+        self.make()
+        exec(self.code, namespace)
+        return namespace
 
 
 if __name__ == '__main__':
