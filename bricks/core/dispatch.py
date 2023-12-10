@@ -55,9 +55,10 @@ class Worker(threading.Thread):
 
     """
 
-    def __init__(self, dispatcher: 'Dispatcher', name: str, daemon=True, trace=False, **kwargs):
+    def __init__(self, dispatcher: 'Dispatcher', name: str, timeout=0, daemon=True, trace=False, **kwargs):
         self.dispatcher = dispatcher
         self._shutdown = False
+        self.timeout = timeout
         self.trace = trace
         self._awaken = threading.Event()
         self._awaken.set()
@@ -68,7 +69,7 @@ class Worker(threading.Thread):
         while self.dispatcher.is_running() and not self._shutdown:
             not self.trace and self._awaken.wait()
             try:
-                task: Task = self.dispatcher.tasks.get(timeout=5)
+                task: Task = self.dispatcher.tasks.get(timeout=self.timeout)
                 task.worker = self
 
             except queue.Empty:
