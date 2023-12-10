@@ -14,7 +14,7 @@ import os
 import re
 import subprocess
 import sys
-from typing import Any, List, Union, Dict, Tuple
+from typing import Any, List, Union, Tuple
 
 import importlib_metadata
 from loguru import logger
@@ -345,17 +345,17 @@ class CodeGenertor:
         for ctype, value in self.flows:
             if ctype == self.combination:
                 value: Union[str, list]
-                tpls.append(";".join(iterable(value)))
+                value and tpls.append(";".join(iterable(value)))
             elif ctype == self.define:
                 value: Union[tuple, list]
-                tpls.append(f"{value[0]} = " + (" and ".join(iterable(value[1])) or "1"))
+                value and tpls.append(f"{value[0]} = " + (" and ".join(iterable(value[1])) or "1"))
             elif ctype == self.condition:
-                value: dict
+                value: dict = value or {}
                 for i, (cond, action) in enumerate(value.items()):
                     if i == 0:
-                        tpls.append(f"if {cond}:\n    {';'.join(iterable(action))}")
+                        tpls.append(f"if {cond}:\n    {';'.join(iterable(action)) or 'pass'}")
                     else:
-                        tpls.append(f"elif {cond}:\n    {';'.join(iterable(action))}")
+                        tpls.append(f"elif {cond}:\n    {';'.join(iterable(action)) or 'pass'}")
 
                 self.code = "\n".join(tpls)
 
