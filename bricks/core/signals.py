@@ -2,7 +2,7 @@
 # @Time    : 2023-11-15 14:04
 # @Author  : Kem
 # @Desc    :
-class Signal(Exception):
+class Signal(BaseException):
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
             setattr(self, k, v)
@@ -21,7 +21,7 @@ class Break(Signal):
 # 切换信号, 切换流程
 # 如当前 flow.next 为函数 A, 在函数 A 内使用 flow.flow("next": 函数 B), 然后 raise Switch
 # 那么接下来会调用 函数 B
-# 如果函数 B 内没有手动 flow 流转, 那么记下来就会执行函数 A
+# 如果函数 B 内没有手动 flow 流转, 那么接下来就会执行函数 A
 class Switch(Signal):
     ...
 
