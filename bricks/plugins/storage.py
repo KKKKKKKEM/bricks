@@ -6,6 +6,7 @@ from typing import List, Union, Optional
 
 from bricks.db.sqllite import SqlLite
 from bricks.lib.items import Items
+from bricks.utils.csv_ import Writer
 
 
 def to_sqllite(
@@ -51,3 +52,23 @@ def to_mongo(
     if not items: return
     conn: Mongo
     return conn.write(path, *items, query=row_keys, database=database, **kwargs)
+
+
+def to_csv(
+        path: str,
+        items: Union[List[dict], Items],
+        encoding: str = 'utf-8-sig',
+        **kwargs
+):
+    """
+    存入数据至 csv
+
+    :param path: 表名
+    :param items: 数据
+    :param encoding: 编码
+    :param kwargs: DictWriter 的其他参数
+    :return:
+    """
+    if not items: return
+    conn = Writer(path, encoding=encoding, **kwargs)
+    return conn.writerows(items)
