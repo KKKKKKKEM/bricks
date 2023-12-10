@@ -8,10 +8,10 @@ from typing import Union
 
 from loguru import logger
 
-from bricks.state import const
 from bricks.core import signals, dispatch
 from bricks.core.events import EventManager, Task
 from bricks.lib.context import Flow, Context
+from bricks.state import const
 from bricks.utils import pandora
 
 
@@ -156,6 +156,7 @@ class Pangu(Chaos):
             self.set(k, v, nx=True)
 
         self.dispatcher = dispatch.Dispatcher(max_workers=self.get("concurrency", 1))
+        self.plugins = []
 
     def on_consume(self, context: Flow):
         context.next.root == self.on_consume and context.flow()
@@ -226,7 +227,9 @@ class Pangu(Chaos):
 
     def use(self, form: str, *events: Union[Task, dict]):
         context = self.make_context(form=form)
-        return EventManager.register(context, *events)
+        register = EventManager.register(context, *events)
+        self.plugins.extend(register)
+        return register
 
     def make_context(self, **kwargs):
         kwargs.setdefault("flows", self.flows)
