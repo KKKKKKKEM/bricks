@@ -1,6 +1,6 @@
-from bricks.core import signals
 from bricks.db.mongo import Mongo
 from bricks.db.sqllite import SqlLite
+from bricks.plugins import scripts
 from bricks.spider import form
 
 sqllite = SqlLite("test")
@@ -35,7 +35,14 @@ class MySpider(form.Spider):
                         "Content-Type": "application/json;charset=UTF-8",
                     },
                 ),
-                form.Task(func=self.is_success),
+                form.Task(
+                    func=scripts.is_success,
+                    kwargs={
+                        "match": [
+                            "context.response.get('code') == 0"
+                        ]
+                    }
+                ),
                 form.Parse(
                     func="json",
                     kwargs={
@@ -51,7 +58,14 @@ class MySpider(form.Spider):
                         }
                     }
                 ),
-                form.Task(func=self.turn_page),
+                form.Task(
+                    func=scripts.turn_page,
+                    kwargs={
+                        "match": [
+                            "context.response.get('data.hasNextPage') == 1"
+                        ]
+                    }
+                ),
                 # form.Pipeline(
                 #     func="bricks.plugins.storage.to_sqllite",
                 #     kwargs={
@@ -61,40 +75,23 @@ class MySpider(form.Spider):
                 #     success=True
                 # )
 
+                # form.Pipeline(
+                #     func="bricks.plugins.storage.to_mongo",
+                #     kwargs={
+                #         "conn": mongo,
+                #         "path": "user_info",
+                #         "database": "live",
+                #         "row_keys": ['userId']
+                #     },
+                #     success=True
+                # )
+
                 form.Pipeline(
-                    func="bricks.plugins.storage.to_mongo",
-                    kwargs={
-                        "conn": mongo,
-                        "path": "user_info",
-                        "database": "live",
-                        "row_keys": ['userId']
-                    },
+                    func=lambda context: print(context.items),
                     success=True
                 )
-
             ]
         )
-
-    @staticmethod
-    def turn_page(context: form.Context):
-        # 判断是否存在下一页
-        has_next = context.response.get('data.hasNextPage')
-        if has_next == 1:
-            # 提交翻页的种子
-            context.submit({**context.seeds, "page": context.seeds["page"] + 1})
-
-    @staticmethod
-    def is_success(context: form.Context):
-        """
-        判断相应是否成功
-
-        :param context:
-        :return:
-        """
-        # 不成功 -> 返回 False
-        if context.response.get('code') != 0:
-            # 重试信号
-            raise signals.Retry
 
 
 if __name__ == '__main__':
