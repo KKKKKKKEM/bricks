@@ -63,7 +63,8 @@ class MySpider(form.Spider):
                     kwargs={
                         "match": [
                             "context.response.get('data.hasNextPage') == 1"
-                        ]
+                        ],
+                        "call_later": True
                     }
                 ),
                 form.Task(
@@ -105,5 +106,6 @@ class MySpider(form.Spider):
 
 if __name__ == '__main__':
     spider = MySpider()
-    spider.run()
-    # print(list(sqllite.find("select * from user_info")))
+
+    r = spider.survey({"page": 5})
+    print(r)
