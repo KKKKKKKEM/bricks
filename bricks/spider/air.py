@@ -825,12 +825,13 @@ class Spider(Pangu):
             context.success()
 
         attrs = attrs or {}
+        modded = modded or {}
         modded.setdefault("make_seeds", mock_make_seeds)
         modded.setdefault("on_request", mock_on_request)
         modded.setdefault("item_pipeline", mock_item_pipeline)
         attrs.setdefault("task_queue", LocalQueue())
         attrs.setdefault("queue_name", f"{cls.__module__}.{cls.__name__}:survey")
-        clazz = type("Survey", (cls,), attrs)
+        clazz = type("Survey", (cls,), modded)
         survey: Spider = clazz(**attrs)
         survey.run()
         return list(collect.queue)
