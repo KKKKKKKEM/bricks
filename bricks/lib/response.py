@@ -4,8 +4,9 @@
 # @Desc    : Response Model
 import re
 import sys
-from typing import Union, Callable, Any, List
+from typing import Union, Callable, Any, List, Mapping
 
+from curl_cffi.requests import Cookies
 from lxml import etree
 from w3lib.encoding import http_content_type_encoding, html_body_declared_encoding
 
@@ -22,11 +23,11 @@ class Response:
             self,
             content: Any = None,
             status_code: int = 200,
-            headers: Union[Header, dict] = None,
+            headers: Union[Header, dict, Mapping] = None,
             url: str = None,
             encoding: str = None,
             reason: str = 'ok',
-            cookies=None,
+            cookies: Cookies = None,
             history: List['Response'] = None,
             request: 'Request' = ...,
             error: Any = ...,
