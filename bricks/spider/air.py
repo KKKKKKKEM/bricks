@@ -798,7 +798,7 @@ class Spider(Pangu):
         )
 
     @classmethod
-    def survey(cls, *seeds: dict, attrs: dict = None) -> List[Context]:
+    def survey(cls, *seeds: dict, attrs: dict = None, modded: dict = None) -> List[Context]:
         """
         调查种子, collect 会收集产生的 Context
         用户可以从 collect 的结果中根据 Context 获取到当时的 response, items, request, seeds 等等
@@ -806,7 +806,8 @@ class Spider(Pangu):
         但是: 如果在运行过程中用户修改了里面的结果, 那会被覆盖掉
         survey 会屏蔽原来的 make_seeds 和 item_pipeline 方法, 会使用用户传入的 seeds, 并且仅仅输出结果 (不会存储)
 
-        :param attrs: 属性
+        :param modded: 魔改 class
+        :param attrs: 初始化参数
         :param seeds: 需要调查的种子
         :return:
         """
@@ -824,12 +825,12 @@ class Spider(Pangu):
             context.success()
 
         attrs = attrs or {}
+        modded.setdefault("make_seeds", mock_make_seeds)
+        modded.setdefault("on_request", mock_on_request)
+        modded.setdefault("item_pipeline", mock_item_pipeline)
         attrs.setdefault("task_queue", LocalQueue())
         attrs.setdefault("queue_name", f"{cls.__module__}.{cls.__name__}:survey")
-        attrs.setdefault("make_seeds", mock_make_seeds)
-        attrs.setdefault("on_request", mock_on_request)
-        attrs.setdefault("item_pipeline", mock_item_pipeline)
         clazz = type("Survey", (cls,), attrs)
-        survey: Spider = clazz()
+        survey: Spider = clazz(**attrs)
         survey.run()
         return list(collect.queue)
