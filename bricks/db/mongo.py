@@ -2,6 +2,7 @@
 # @Time    : 2023-11-21 13:18
 # @Author  : Kem
 # @Desc    :
+from __future__ import absolute_import
 from typing import Iterable, Optional, List
 
 from bricks.utils import pandora
