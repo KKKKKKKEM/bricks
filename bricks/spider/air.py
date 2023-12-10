@@ -8,9 +8,10 @@ import datetime
 import functools
 import inspect
 import math
+import queue
 import re
 import time
-from typing import Optional, List, Union, Iterable, Callable, Dict
+from typing import Optional, Union, Iterable, Callable, Dict, List
 
 from loguru import logger
 
@@ -105,7 +106,7 @@ class Context(Flow):
         self.seeds: Item = kwargs.pop("seeds", None)
         self.items: Items = kwargs.pop("items", None)
         self.task_queue: TaskQueue = kwargs.pop("task_queue", None)
-        self.queue_name: str = kwargs.pop("queue_name", None)
+        self.queue_name: str = kwargs.pop("queue_name", f'{self.__class__.__module__}.{self.__class__.__name__}')
         super().__init__(form, target, **kwargs)
         self.target: Spider = target
 
@@ -164,7 +165,6 @@ class Spider(Pangu):
     def __init__(
             self,
             concurrency: Optional[int] = 1,
-            survey: Optional[Union[dict, List[dict]]] = None,
             downloader: Optional[Union[str, genesis.Downloader]] = None,
             task_queue: Optional[TaskQueue] = None,
             queue_name: Optional[str] = "",
@@ -174,9 +174,8 @@ class Spider(Pangu):
     ) -> None:
 
         self.concurrency = concurrency
-        self.survey = survey
         self.downloader = downloader or cffi.Downloader()
-        self.task_queue = LocalQueue() if not task_queue or survey else task_queue
+        self.task_queue = LocalQueue() if not task_queue else task_queue
         self.proxy = proxy
         self.queue_name = queue_name or self.__class__.__name__
         self.forever = forever
@@ -797,3 +796,40 @@ class Spider(Pangu):
             {"func": on_request.After.show_response},
             {"func": on_request.After.is_success}
         )
+
+    @classmethod
+    def survey(cls, *seeds: dict, attrs: dict = None) -> List[Context]:
+        """
+        调查种子, collect 会收集产生的 Context
+        用户可以从 collect 的结果中根据 Context 获取到当时的 response, items, request, seeds 等等
+
+        但是: 如果在运行过程中用户修改了里面的结果, 那会被覆盖掉
+        survey 会屏蔽原来的 make_seeds 和 item_pipeline 方法, 会使用用户传入的 seeds, 并且仅仅输出结果 (不会存储)
+
+        :param attrs: 属性
+        :param seeds: 需要调查的种子
+        :return:
+        """
+        collect = queue.Queue()
+
+        def mock_make_seeds(self):  # noqa
+            return seeds
+
+        def mock_on_request(self, context: Context):
+            collect.put(context)
+            return super(self.__class__, self).on_request(context)
+
+        def mock_item_pipeline(self, context: Context):  # noqa
+            logger.debug(context.items)
+            context.success()
+
+        attrs = attrs or {}
+        attrs.setdefault("task_queue", LocalQueue())
+        attrs.setdefault("queue_name", f"{cls.__module__}.{cls.__name__}:survey")
+        attrs.setdefault("make_seeds", mock_make_seeds)
+        attrs.setdefault("on_request", mock_on_request)
+        attrs.setdefault("item_pipeline", mock_item_pipeline)
+        clazz = type("Survey", (cls,), attrs)
+        survey: Spider = clazz()
+        survey.run()
+        return list(collect.queue)
