@@ -201,7 +201,6 @@ class Spider(air.Spider):
             kwargs = node.kwargs or {}
             layout = node.layout or Layout()
 
-
             if not callable(engine):
                 engine = pandora.load_objects(engine)
 
