@@ -10,6 +10,7 @@ from typing import Union
 from curl_cffi import requests
 
 from bricks.downloader import genesis
+from bricks.lib.cookies import Cookies
 from bricks.lib.request import Request
 from bricks.lib.response import Response
 
@@ -66,7 +67,7 @@ class Downloader(genesis.Downloader):
                     Response(
                         content=response.content,
                         headers=response.headers,
-                        cookies=response.cookies,
+                        cookies=Cookies.by_jar(response.cookies),
                         url=response.url,
                         status_code=response.status_code,
                         request=Request(
@@ -81,7 +82,7 @@ class Downloader(genesis.Downloader):
             else:
                 res.content = response.content
                 res.headers = response.headers
-                res.cookies = response.cookies
+                res.cookies = Cookies.by_jar(response.cookies)
                 res.url = response.url
                 res.status_code = response.status_code
                 res.request = request

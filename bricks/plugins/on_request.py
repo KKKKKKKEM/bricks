@@ -10,7 +10,7 @@ from loguru import logger
 
 from bricks.core import signals
 from bricks.lib import proxies
-from bricks.lib.context import Context
+from bricks.core.context import Context
 from bricks.utils import pandora
 from bricks.utils.fake import user_agent
 
@@ -91,7 +91,7 @@ class After:
                 F"\033[33m[{request.retry}]\033[0m",
                 F"\033[{response.ok and 32 or 31}m[{response.status_code or response.error}]\033[0m",
                 F"\033[37m[{request.proxies or threading.current_thread().name}]\033[0m",
-                F"\033[{response.ok and 35 or 31}m[{response.size}]\033[0m",
+                F"\033[{response.ok and 35 or 31}m[{response.max_count}]\033[0m",
                 F"{response.url or response.request.real_url}",
             ])
         else:

@@ -7,7 +7,7 @@ from typing import List
 from loguru import logger
 
 from bricks.core import signals
-from bricks.lib.context import Context
+from bricks.core.context import Context
 from bricks.utils import codes
 
 

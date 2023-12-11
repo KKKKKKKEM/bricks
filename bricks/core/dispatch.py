@@ -17,8 +17,7 @@ from asyncio import futures, ensure_future
 from concurrent.futures import Future
 from typing import Union, Dict, Optional
 
-from bricks.core import events
-from bricks.lib import context
+from bricks.core import events, context
 from bricks.state import const
 
 

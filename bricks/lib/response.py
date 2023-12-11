@@ -6,11 +6,11 @@ import re
 import sys
 from typing import Union, Callable, Any, List, Mapping
 
-from curl_cffi.requests import Cookies
 from lxml import etree
 from w3lib.encoding import http_content_type_encoding, html_body_declared_encoding
 
 from bricks.lib import extractors
+from bricks.lib.cookies import Cookies
 from bricks.lib.headers import Header
 from bricks.lib.request import Request
 from bricks.utils import pandora

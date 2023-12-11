@@ -10,7 +10,7 @@ from loguru import logger
 
 from bricks.core import signals, dispatch
 from bricks.core.events import EventManager, Task
-from bricks.lib.context import Flow, Context
+from bricks.core.context import Flow, Context
 from bricks.state import const
 from bricks.utils import pandora
 from bricks.utils.scheduler import BaseTrigger, Scheduler

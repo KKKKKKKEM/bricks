@@ -10,9 +10,8 @@ import urllib.parse
 import warnings
 from typing import Union
 
-from curl_cffi.requests import Cookies
-
 from bricks.downloader import genesis
+from bricks.lib.cookies import Cookies
 from bricks.lib.request import Request
 from bricks.lib.response import Response
 from bricks.utils import pandora
@@ -24,7 +23,6 @@ http.client._MAXHEADERS = 1000
 pandora.require("requests")
 
 import requests
-from requests.cookies import RequestsCookieJar
 
 
 class Downloader(genesis.Downloader):
@@ -72,7 +70,7 @@ class Downloader(genesis.Downloader):
                     Response(
                         content=response.content,
                         headers=response.headers,
-                        cookies=self.make_cookies(response.cookies),
+                        cookies=Cookies.by_jar(response.cookies),
                         url=response.url,
                         status_code=response.status_code,
                         request=Request(
@@ -87,19 +85,12 @@ class Downloader(genesis.Downloader):
             else:
                 res.content = response.content
                 res.headers = response.headers
-                res.cookies = self.make_cookies(response.cookies)
+                res.cookies = Cookies.by_jar(response.cookies)
                 res.url = response.url
                 res.status_code = response.status_code
                 res.request = request
 
                 return res
-
-    @staticmethod
-    def make_cookies(raw: RequestsCookieJar):
-        cookies = Cookies()
-        for cookie in raw:
-            cookies.set(name=cookie.name, value=cookie.value, domain=cookie.domain, path=cookie.path)
-        return cookies
 
 
 if __name__ == '__main__':

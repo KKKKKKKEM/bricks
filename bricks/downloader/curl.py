@@ -8,14 +8,10 @@ import io
 import os
 import random
 import urllib.parse
-from http.cookies import SimpleCookie
 from typing import Union
 
-import certifi
-import six
-from curl_cffi.requests import Cookies
-
 from bricks.downloader import genesis
+from bricks.lib.cookies import Cookies
 from bricks.lib.request import Request
 from bricks.lib.response import Response
 from bricks.utils import pandora
@@ -23,6 +19,8 @@ from bricks.utils import pandora
 pandora.require("pycurl")
 
 import pycurl
+import certifi
+import six
 
 
 class Downloader(genesis.Downloader):
@@ -68,7 +66,7 @@ class Downloader(genesis.Downloader):
             k, v = k.strip(), v.strip()
 
             if k.lower() == 'set-cookie':
-                simple_cookie.load(v)
+                cookies.load(v)
 
             headers[k] = v
 
@@ -107,7 +105,7 @@ class Downloader(genesis.Downloader):
 
             while True:
                 assert _redirect_count < 999, "已经超过最大重定向次数: 999"
-                body, headers, simple_cookie = io.BytesIO(), {}, SimpleCookie()
+                body, headers, cookies = io.BytesIO(), {}, Cookies()
                 curl.setopt(pycurl.URL, next_url)
                 curl.setopt(pycurl.WRITEFUNCTION, body.write)
                 curl.setopt(pycurl.HTTPHEADER, self.build_headers_options(request.headers)[pycurl.HTTPHEADER])
@@ -129,7 +127,7 @@ class Downloader(genesis.Downloader):
                                 method=request.method,
                                 headers=copy.deepcopy(request.headers)
                             ),
-                            cookies=self.make_cookies(simple_cookie)
+                            cookies=cookies
                         )
                     )
                     auto_referer and request.headers.update(Referer=options[pycurl.URL])
@@ -141,7 +139,7 @@ class Downloader(genesis.Downloader):
                     res.status_code = curl.getinfo(pycurl.HTTP_CODE)
                     res.headers = headers
                     res.url = curl.getinfo(pycurl.EFFECTIVE_URL)
-                    res.cookies = self.make_cookies(simple_cookie)
+                    res.cookies = cookies
                     res.request = request
                     return res
 
@@ -322,20 +320,8 @@ class Downloader(genesis.Downloader):
 
         return options
 
-    @staticmethod
-    def make_cookies(raw: SimpleCookie):
-        cookies = Cookies()
-        for k, v in raw.items():
-            cookies.set(
-                name=v.key,
-                value=v.value,
-                domain=v.get('domain'),
-                path=v.get('path'),
-            )
-        return cookies
-
 
 if __name__ == '__main__':
     downloader = Downloader()
     res = downloader.fetch({"url": "https://www.baidu.com"})
-    print(res)
+    print(res.cookies)

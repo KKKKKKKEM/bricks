@@ -19,7 +19,7 @@ from bricks import state
 from bricks.core import dispatch, signals, events
 from bricks.core.genesis import Pangu
 from bricks.downloader import genesis, cffi
-from bricks.lib.context import Flow
+from bricks.core.context import Flow
 from bricks.lib.counter import FastWriteCounter
 from bricks.lib.headers import Header
 from bricks.lib.items import Items

@@ -12,7 +12,7 @@ from typing import Optional, Union, Callable, Any, List
 
 from loguru import logger
 
-from bricks.lib.context import Context, Error
+from bricks.core.context import Context, Error
 from bricks.state import const
 from bricks.utils import pandora
 
