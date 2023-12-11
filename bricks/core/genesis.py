@@ -4,7 +4,7 @@
 # @Desc    :
 import functools
 import time
-from typing import Union
+from typing import Union, Literal, Callable
 
 from loguru import logger
 
@@ -13,6 +13,7 @@ from bricks.core.events import EventManager, Task
 from bricks.lib.context import Flow, Context
 from bricks.state import const
 from bricks.utils import pandora
+from bricks.utils.scheduler import BaseTrigger, Scheduler
 
 
 class MetaClass(type):
@@ -83,6 +84,27 @@ class Chaos(metaclass=MetaClass):
         else:
             logger.warning(f"Task {task_name} not found")
             return None
+
+    def launch(self, scheduler: dict, task_name: str = "all", args=None, kwargs=None, callback: Callable = None):
+        """
+        同 launch, 但是是提交给调度器运行的, 可以定时执行
+
+        :param scheduler:
+        :param task_name:
+        :param args:
+        :param kwargs:
+        :param callback:
+        :return:
+        """
+        def job():
+            self.run(task_name=task_name, args=args, kwargs=kwargs)
+            callback and pandora.invoke(callback, namespace={"spider": self}, annotations={type(self): self})
+
+        form: Union[Literal['cron', 'date', 'interval'], BaseTrigger] = scheduler.pop("form")
+        exprs: str = scheduler.pop("exprs")
+        scheduler_ = Scheduler()
+        scheduler_.add(form=form, exprs=exprs, **scheduler).do(job)
+        scheduler_.run()
 
     def _when_run(self, raw_method):
         @functools.wraps(raw_method)
@@ -248,8 +270,3 @@ class Pangu(Chaos):
         :return:
         """
         pass
-
-
-if __name__ == '__main__':
-    clazz = Chaos()
-    clazz.run('before_start')
