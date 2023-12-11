@@ -570,10 +570,24 @@ class LocalQueue(TaskQueue):
                 time.sleep(1)
                 logger.debug('等待初始化开始')
 
+        def release_init():
+            key = self.name2key(name, 'record')
+            os.environ.pop(key, None)
+            self._status[key].clear()
+
+        def get_record():
+            key = self.name2key(name, 'record')
+            record = json.loads(os.environ.get(key) or "{}")
+            if record.get('status') == 0:
+                os.environ.pop(key, None)
+                return {}
+            else:
+                return record
+
         actions = {
             self.COMMANDS.GET_PERMISSION: lambda: {"state": True, "msg": "success"},
 
-            self.COMMANDS.GET_RECORD: lambda: json.loads(os.environ.get(self.name2key(name, "record")) or "{}"),
+            self.COMMANDS.GET_RECORD: get_record,
             self.COMMANDS.CONTINUE_RECORD: lambda: self.reverse(name),
 
             self.COMMANDS.SET_RECORD: set_record,
@@ -583,7 +597,7 @@ class LocalQueue(TaskQueue):
             self.COMMANDS.WAIT_INIT: wait_for_init_start,
             self.COMMANDS.SET_INIT: lambda: self._status[self.name2key(name, "record")].set(),
             self.COMMANDS.IS_INIT: lambda: self._status[self.name2key(name, "record")].is_set(),
-            self.COMMANDS.RELEASE_INIT: lambda: self._status[self.name2key(name, "record")].clear(),
+            self.COMMANDS.RELEASE_INIT: release_init,
         }
         action = order['action']
         if action in actions:
@@ -1043,8 +1057,9 @@ end
             local tt = ARGV[3]
             local identifier = redis.call("HGET", record_key, "identifier")
             if machine_id == identifier then
-                redis.call("HSET", record_key, "status", 0, "time", tt)
+                redis.call("HSET", record_key, "status", 0)
                 redis.call("HDEL", record_key, "identifier")
+                redis.call("HDEL", record_key, "time")
                 if ttl ~= 0 then
                     redis.call("DEL", history_key)    
                     local dump = redis.call('DUMP', record_key)
@@ -1309,7 +1324,7 @@ end
                     return
 
                 t2 = self.redis_db.hget(key, "time")
-                if self.redis_db.exists(key) and (t2 and t2 >= t1):
+                if self.redis_db.exists(key) and (t2 and float(t2) >= t1):
                     return
 
                 logger.debug('等待初始化开始')
@@ -1331,7 +1346,7 @@ end
                 return True
 
             # record 存在, 并且 status 为 1 -> true
-            if self.redis_db.exists(key) and self.redis_db.hget(key, 'status') == 1:
+            if self.redis_db.exists(key) and self.redis_db.hget(key, 'status') == "1":
                 return True
 
             return False
@@ -1357,7 +1372,7 @@ end
         def get_record():
             key = self.name2key(name, 'record')
             record = self.redis_db.hgetall(key) or {}
-            if record.get(key, 'status') == 0:
+            if record.get('status') == "0":
                 self.redis_db.delete(key)
                 return {}
             else:
