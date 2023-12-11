@@ -140,10 +140,25 @@ class Dispatcher:
     def __init__(self, max_workers=1, trace=False):
         self.max_workers = max_workers
         self.trace = trace
+
+        self.loop: asyncio.AbstractEventLoop
+        self.tasks: queue.Queue
+        self.workers: Dict[str, Worker]
+
+        self._remain_workers: threading.Semaphore
+        self._running_tasks: threading.Semaphore
+        self._active_tasks: threading.Semaphore
+        self._shutdown: asyncio.Event
+        self._running: threading.Event
+        self._counter: itertools.count
+        self.thread: threading.Thread
+        self._lock: threading.Lock
+        self._set_env()
+
+    def _set_env(self):
+        self.loop = asyncio.get_event_loop()
         self.tasks = queue.Queue()
         self.workers: Dict[str, Worker] = {}
-        self.loop = asyncio.get_event_loop()
-
         self._remain_workers = threading.Semaphore(self.max_workers)
         self._running_tasks = threading.Semaphore(self.max_workers)
         self._active_tasks = threading.Semaphore(self.max_workers)
@@ -339,30 +354,23 @@ class Dispatcher:
 
     def run(self):
         async def main():
+            self._shutdown = asyncio.Event()
             self._running.set()
             await self._shutdown.wait()
+            self._set_env()
 
         asyncio.set_event_loop(self.loop)
-        self.loop.run_until_complete(main())
-        try:
-            self.loop.close()
-        except: # noqa
-            pass
+        asyncio.run(main())
 
     def stop(self):
+        self.loop.call_soon_threadsafe(self._shutdown.set)
         self.stop_worker(*self.workers.keys())
         # note: It must be called this way, otherwise the thread is unsafe and the write over there cannot be closed
-        self.loop.call_soon_threadsafe(self._shutdown.set)
-
-        self._running.clear()
 
     def start(self) -> None:
         with self._lock:
-            if not self.thread.is_alive():
-                if self.thread._started.is_set():  # noqa
-                    self.thread = threading.Thread(target=self.run, name="DisPatch", daemon=True)
+            if not self.is_running():
                 self.thread.start()
-
             self._running.wait()
 
     def __enter__(self):
