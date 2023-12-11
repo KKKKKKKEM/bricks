@@ -1,5 +1,6 @@
 from bricks.db.mongo import Mongo
 from bricks.db.sqllite import SqlLite
+from bricks.lib.queues import RedisQueue
 from bricks.plugins import scripts
 from bricks.spider import form
 
@@ -105,7 +106,12 @@ class MySpider(form.Spider):
 
 
 if __name__ == '__main__':
-    spider = MySpider()
-
-    r = spider.survey({"page": 5})
-    print(r)
+    spider = MySpider(
+        # task_queue=RedisQueue()
+    )
+    # 使用调度器运行
+    spider.launch({"form": "interval", "exprs": "seconds=1"})
+    # # 单次运行
+    # spider.run()
+    # # survey 运行 -> 可以获取到执行的 Context
+    # spider.survey({"page": 5})
