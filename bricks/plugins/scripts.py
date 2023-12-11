@@ -8,7 +8,7 @@ from loguru import logger
 
 from bricks.core import signals
 from bricks.lib.context import Context
-from bricks.utils import code
+from bricks.utils import codes
 
 
 def is_success(match: List[str], pre: List[str] = None, post: List[str] = None, flow: dict = None):
@@ -24,12 +24,12 @@ def is_success(match: List[str], pre: List[str] = None, post: List[str] = None, 
     flow = flow or {}
     flow.setdefault("not ISPASS", "raise signals.Retry")
     context: Context = Context.get_context()
-    obj = code.Genertor(
+    obj = codes.Genertor(
         flows=[
-            (code.Type.code, pre),
-            (code.Type.define, ("ISPASS", match)),
-            (code.Type.code, post),
-            (code.Type.condition, flow),
+            (codes.Type.code, pre),
+            (codes.Type.define, ("ISPASS", match)),
+            (codes.Type.code, post),
+            (codes.Type.condition, flow),
         ]
     )
     obj.run({**globals(), "context": context, "signals": signals})
@@ -69,14 +69,14 @@ def turn_page(
         f'logger.debug(f"[停止翻页] 当前页面: {{context.seeds[{key!r}]}}, 种子: {{context.seeds}}")',
     ])
 
-    obj = code.Genertor(
+    obj = codes.Genertor(
         flows=[
-            (code.Type.code, pre),
-            (code.Type.define, ("ISPASS", match)),
-            (code.Type.define, ("NEXT_SEEDS", f'{{**context.seeds, "page": context.seeds["{key}"] {action}}}')),
-            (code.Type.code, post),
-            (code.Type.condition, flow),
-            (code.Type.code, f'{success} and context.success()'),
+            (codes.Type.code, pre),
+            (codes.Type.define, ("ISPASS", match)),
+            (codes.Type.define, ("NEXT_SEEDS", f'{{**context.seeds, "page": context.seeds["{key}"] {action}}}')),
+            (codes.Type.code, post),
+            (codes.Type.condition, flow),
+            (codes.Type.code, f'{success} and context.success()'),
 
         ]
     )
@@ -92,9 +92,9 @@ def inject(flows: List[str]):
     """
     namespace = {**globals()}
     namespace.update({"signals": signals, "logger": logger, "Context": Context})
-    obj = code.Genertor(
+    obj = codes.Genertor(
         flows=[
-            (code.Type.code, flow) for flow in flows
+            (codes.Type.code, flow) for flow in flows
         ]
     )
     obj.run(namespace)
