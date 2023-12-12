@@ -2,11 +2,14 @@
 # @Time    : 2023-12-09 10:00
 # @Author  : Kem
 # @Desc    : 存储插件
-from typing import List, Union, Optional
+import json
+from typing import List, Union, Optional, Literal
 
+from bricks.db.redis_ import Redis
 from bricks.db.sqllite import SqlLite
 from bricks.lib.items import Items
 from bricks.utils.csv_ import Writer
+from bricks.utils.pandora import iterable
 
 
 def to_sqllite(
@@ -72,3 +75,69 @@ def to_csv(
     if not items: return
     conn = Writer(path, encoding=encoding, **kwargs)
     return conn.writerows(items)
+
+
+def to_redis(
+        path: str,
+        conn: Redis,
+        items: Union[List[dict], Items],
+        key_type: Literal["set", "list", "string"] = 'set',
+        row_keys: Optional[list] = None,
+        splice: str = '|',
+        ttl: int = 0,
+):
+    """
+    存入数据至 redis
+    :param path: 键值, 当 key_type 为 string 时, 此参数为无用
+    :param conn: Redis 实例
+    :param items: 数据
+    :param key_type: 存储类型
+    :param row_keys: 存储类型
+    :param splice: 分隔符
+    :param ttl: key 的过期时间
+    :return:
+    """
+
+    row_keys = row_keys or []
+
+    # 仅支持 set, list, string
+    assert key_type in ["set", "list", "string"], ValueError(f'不支持的存储类型-{key_type}')
+    # 当存储类型不为 string 时, path 不能为空且类型必须与预期一致
+    assert (path and conn.type(path) in [key_type, 'none']) or key_type == 'string', f'存储类型错误, 已存在-{path}:{conn.type(path)}, 存储类型-{key_type}'
+    # 当存储类型为 string 时, row_keys 不能为空
+    assert row_keys or key_type != 'string', ValueError(f'存储类型为 string 时必须存在 row_keys')
+
+    def generate_key(_row):
+        key = splice.join([str(_row.get(key, "")) for key in row_keys])
+        return key
+
+    def write(item):
+        nonlocal path
+
+        if key_type == 'string':
+            rows = {_.pop('$key'): json.dumps(_) for _ in item}
+            conn.mset(rows)
+            path = list(rows.keys())
+        else:
+            rows = [json.dumps(_) for _ in items]
+            conn.add(path, *rows, genre=key_type)
+        if ttl:
+            for key in iterable(path):
+                conn.expire(key, ttl)
+
+    if row_keys:
+        for row in items:
+            row['$key'] = generate_key(row)
+    write(items)
+
+
+if __name__ == '__main__':
+    from no_views.conn import redis
+    to_redis(
+        path="5",
+        conn=redis,
+        items=[{"a": 1, "b": 2}, {"a": 2, "b": 3}],
+        key_type="string",
+        row_keys=["a", "b"],
+        # ttl=60
+    )
