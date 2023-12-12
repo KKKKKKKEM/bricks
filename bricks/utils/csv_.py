@@ -9,7 +9,7 @@ import atexit
 import csv
 import os.path
 import re
-from typing import Optional, Callable
+from typing import Optional, Callable, Literal
 
 from loguru import logger
 
@@ -94,8 +94,15 @@ class Reader:
 
 
 class Writer:
-    def __init__(self, path: str, header: list, schema: str = "", mode: str = "a+", newline="",
-                 encoding: str = 'utf-8-sig'):
+    def __init__(
+            self,
+            path: str,
+            header: list,
+            schema: Literal["sqllite:storage", "sqllite:memory", ""] = "",
+            mode: str = "a+",
+            newline="",
+            encoding: str = 'utf-8-sig'
+    ):
         """
         csv writer
 

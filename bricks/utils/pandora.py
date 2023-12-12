@@ -5,6 +5,7 @@
 import ast
 import collections
 import importlib
+import importlib.metadata as importlib_metadata
 import importlib.util
 import inspect
 import json
@@ -15,7 +16,6 @@ import subprocess
 import sys
 from typing import Any, List, Union
 
-import importlib_metadata
 from loguru import logger
 
 JSONP_REGEX = re.compile(r'\S+?\((?P<obj>[\s\S]*)\)')
