@@ -67,7 +67,7 @@ class Context(Flow):
         self.flow({"next": self.target.on_retry})
 
     def failure(self, shutdown=False):
-        ret = self.task_queue.remove(self.queue_name, self.seeds, backup='failure')
+        ret = self.task_queue.remove(self.queue_name, self.seeds, backup='failure') if self.seeds else None
         shutdown and self.flow({"next": None})
         return ret
 
@@ -95,9 +95,47 @@ class Context(Flow):
         manager.clear_proxy(self.request.proxy or self.target.proxy)
         self.request.proxies = None
 
+    error = failure
+
+
+class InitContext(Flow):
+
+    def __init__(
+            self,
+            target: "Spider",
+            form: str = state.const.ON_INIT,
+            **kwargs
+
+    ) -> None:
+        self.seeds: List[Item] = kwargs.pop("seeds", None)
+        self.task_queue: TaskQueue = kwargs.pop("task_queue", None)
+        self.queue_name: str = kwargs.pop("queue_name", f'{self.__class__.__module__}.{self.__class__.__name__}')
+        super().__init__(form, target, **kwargs)
+        self.target: Spider = target
+
+    def success(self, shutdown=False):
+        if self.form == state.const.AFTER_PUT_SEEDS:
+            self.task_queue.remove(self.queue_name, self.seeds)
+
+        shutdown and self.flow({"next": None})
+
+    def failure(self, shutdown=False):
+        # 在种子投放之后, 如果收到失败信息, 就将种子移动至 failure 队列
+        if self.form == state.const.AFTER_PUT_SEEDS:
+            self.seeds and self.task_queue.remove(self.queue_name, self.seeds, backup='failure')
+
+        shutdown and self.flow({"next": None})
+
+    def retry(self):
+        pass
+
+    def error(self, shutdown=False):
+        shutdown and self.flow({"next": None})
+
 
 class Spider(Pangu):
     Context = Context
+    InitContext = InitContext
 
     def __init__(
             self,
@@ -196,25 +234,12 @@ class Spider(Pangu):
             "count_size": count_size,
         }
 
-        context_ = self.make_context(
+        context = self.make_context(
             task_queue=task_queue,
             queue_name=queue_name,
-            next=self.produce_seeds,
+            _Context=self.InitContext,
             settings=settings
         )
-        self.on_consume(context_)
-        record.update(finish=str(datetime.datetime.now()))
-        task_queue.command(queue_name, {"action": task_queue.COMMANDS.RELEASE_INIT, "time": int(time.time() * 1000)})
-        return record
-
-    def produce_seeds(self, context: Context):
-        """
-        生产种子
-
-        :param context:
-        :return:
-        """
-        settings: dict = context.obtain("settings", {})
         record: dict = settings.get("record") or {}
 
         gen = pandora.invoke(
@@ -228,53 +253,76 @@ class Spider(Pangu):
             gen = [gen]
 
         for seeds in gen:
-            seeds = pandora.iterable(seeds)
+            stuff: InitContext = context.copy()
+            stuff.seeds = seeds
+            stuff.flow({"next": self.produce_seeds})
+            self.on_consume(stuff)
 
-            seeds = seeds[0:min([
-                settings['count_size'] - settings['count'],
-                settings['total_size'] - settings['total'],
-                settings['success_size'] - settings['success'],
-                len(seeds)
-            ])]
-            context.seeds = seeds
-            fettle = pandora.invoke(
-                func=self.put_seeds,
-                kwargs={
-                    "seeds": seeds,
-                    "maxsize": settings['queue_size'],
-                    "where": "init",
-                    "task_queue": context.task_queue,
-                    "queue_name": context.queue_name,
+        record.update(finish=str(datetime.datetime.now()))
+        task_queue.command(queue_name, {"action": task_queue.COMMANDS.RELEASE_INIT, "time": int(time.time() * 1000)})
+        return record
 
-                },
-                annotations={Context: context},
-                namespace={"context": context},
-            )
+    def produce_seeds(self, context: InitContext):
+        """
+        生产种子
 
-            size = len(pandora.iterable(seeds))
-            settings['total'] += size
-            settings['success'] += fettle
-            settings['count'] += fettle
-            output = f"[投放成功] 总量: {settings['success']}/{settings['total']}; 当前: {fettle}/{size}; 目标: {context.queue_name}"
-            settings["record"].update({
-                "total": settings['total'],
-                "success": settings['success'],
-                "output": output,
-                "update": str(datetime.datetime.now()),
-            })
+        :param context:
+        :return:
+        """
+        settings: dict = context.obtain("settings")
 
-            context.task_queue.command(context.queue_name, {
-                "action": context.task_queue.COMMANDS.SET_RECORD,
-                "record": settings["record"]
-            })
-            logger.debug(output)
+        seeds = context.seeds
+        seeds = pandora.iterable(seeds)
 
-            if (
-                    settings['total'] >= settings['total_size'] or
-                    settings['count'] >= settings['count_size'] or
-                    settings['success'] >= settings['success_size']
-            ):
-                raise signals.Exit
+        seeds = seeds[0:min([
+            settings['count_size'] - settings['count'],
+            settings['total_size'] - settings['total'],
+            settings['success_size'] - settings['success'],
+            len(seeds)
+        ])]
+        context.seeds = seeds
+        context.form = state.const.BEFORE_PUT_SEEDS
+        events.EventManager.invoke(context)
+        fettle = pandora.invoke(
+            func=self.put_seeds,
+            kwargs={
+                "seeds": seeds,
+                "maxsize": settings['queue_size'],
+                "where": "init",
+                "task_queue": context.task_queue,
+                "queue_name": context.queue_name,
+
+            },
+            annotations={Context: context},
+            namespace={"context": context},
+        )
+        context.form = state.const.AFTER_PUT_SEEDS
+        events.EventManager.invoke(context)
+
+        size = len(pandora.iterable(seeds))
+        settings['total'] += size
+        settings['success'] += fettle
+        settings['count'] += fettle
+        output = f"[投放成功] 总量: {settings['success']}/{settings['total']}; 当前: {fettle}/{size}; 目标: {context.queue_name}"
+        settings["record"].update({
+            "total": settings['total'],
+            "success": settings['success'],
+            "output": output,
+            "update": str(datetime.datetime.now()),
+        })
+
+        context.task_queue.command(context.queue_name, {
+            "action": context.task_queue.COMMANDS.SET_RECORD,
+            "record": settings["record"]
+        })
+        logger.debug(output)
+
+        if (
+                settings['total'] >= settings['total_size'] or
+                settings['count'] >= settings['count_size'] or
+                settings['success'] >= settings['success_size']
+        ):
+            raise signals.Exit
         else:
             context.flow()
 

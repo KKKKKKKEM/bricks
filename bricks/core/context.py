@@ -197,6 +197,9 @@ class Flow(Context):
     def failure(self, shutdown=False):
         raise NotImplementedError
 
+    def error(self, shutdown=False):
+        raise NotImplementedError
+
     def __copy__(self):
         return self.__class__(**self.__dict__)
 

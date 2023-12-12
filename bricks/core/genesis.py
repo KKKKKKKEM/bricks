@@ -239,7 +239,7 @@ class Pangu(Chaos):
                         logger.error(
                             f"\n{pandora.get_simple_stack(e)} [{context.form}] {e.__class__.__name__}({e})"
                         )
-                        context.failure(shutdown=True)
+                        context.error(shutdown=True)
 
     def submit(self, task: dispatch.Task, timeout=None) -> dispatch.Task:
         return self.dispatcher.submit_task(task=task, timeout=timeout)
@@ -256,7 +256,8 @@ class Pangu(Chaos):
     def make_context(self, **kwargs):
         kwargs.setdefault("flows", self.flows)
         kwargs.setdefault("target", self)
-        context = self.Context(**kwargs)
+        _Context = kwargs.pop("_Context", self.Context)
+        context = _Context(**kwargs)
         return context
 
     @property
