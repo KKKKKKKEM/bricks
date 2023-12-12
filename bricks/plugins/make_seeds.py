@@ -6,12 +6,13 @@
 @Desc    : 生产种子插件
 """
 import re
-import time
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Literal
 from urllib.parse import urlencode
 
+from bricks.db.redis_ import Redis
 from bricks.db.sqllite import SqlLite
 from bricks.utils.csv_ import Reader
+from bricks.utils.pandora import json_or_eval
 
 LIMIT_PATTERN = re.compile(r"(LIMIT\s+)(\d+)", flags=re.IGNORECASE)
 OFFSET_PATTERN = re.compile(r"(OFFSET\s+)(\d+)", flags=re.IGNORECASE)
@@ -183,12 +184,43 @@ def by_sqllite(
         yield rows
 
 
+def by_redis(
+        path: str,
+        conn: Redis,
+        batch_size: int = 10000,
+        key_type: Literal["set", "list", "string"] = 'set',
+):
+    """
+    通过 redis 初始化种子, 仅支持小批量数据, 不支持断点续投
+
+    :param path: 键值, 当 key_type 为 string 时, 此参数为筛选条件, 如 *test*
+    :param conn: Redis 实例
+    :param batch_size: 一次获取多少条数据
+    :param key_type: 存储类型
+    :return:
+    """
+    assert key_type in ["set", "list", "string"], ValueError(f'不支持的存储类型-{key_type}')
+    assert conn.type(path) == key_type or key_type == 'string', f'读取类型错误, {path}:{conn.type(path)}, 读取类型-{key_type}'
+
+    def read():
+        if key_type == 'string':
+            keys: list = conn.keys(path)
+            if keys:
+                return conn.mget(keys)
+        elif key_type == 'list':
+            return conn.lrange(path, 0, -1)
+        else:
+            return list(conn.smembers(path))
+        return []
+
+    data = read()
+    for i in range(0, len(data), batch_size):
+        _data = data[i: i + batch_size]
+        _data = [json_or_eval(_, errors="ignore") for _ in _data]
+        yield _data
+
+
 if __name__ == '__main__':
-    st = time.time()
-    for d in by_csv(
-            path='/Users/Kem/Documents/bricks/bricks/utils/test.csv',
-            query="select cast(a as INTEGER) as a, b from <TABLE> where a =0",
-            # skip=1
-    ):
-        print(d)
-    print(time.time() - st)
+    from no_views.conn import redis
+    for _ in by_redis(path="*|*", conn=redis, key_type="string", batch_size=1):
+        print(_)
