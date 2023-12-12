@@ -10,6 +10,7 @@ import time
 from typing import Optional, Union, List
 from urllib.parse import urlencode
 
+from bricks.db.redis_ import Redis
 from bricks.db.sqllite import SqlLite
 from bricks.utils.csv_ import Reader
 
@@ -181,6 +182,24 @@ def by_sqllite(
         skip += len(rows)
         record.update({record_key: skip})
         yield rows
+
+def by_redis(
+        path: str,
+        conn: Redis,
+        batch_size: int = 10000,
+        skip: Union[str, int] = ...,
+        record: Optional[dict] = None,
+):
+    """
+
+    :param path:
+    :param conn:
+    :param batch_size:
+    :param skip:
+    :param record:
+    :return:
+    """
+
 
 
 if __name__ == '__main__':
