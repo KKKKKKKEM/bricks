@@ -2,6 +2,7 @@
 # @Time    : 2023-11-15 14:09
 # @Author  : Kem
 # @Desc    :
+import collections
 import datetime
 import functools
 import inspect
@@ -17,7 +18,7 @@ from bricks import state
 from bricks.core import dispatch, signals, events
 from bricks.core.context import Flow
 from bricks.core.genesis import Pangu
-from bricks.downloader import genesis, cffi
+from bricks.downloader import cffi, AbstractDownloader
 from bricks.lib.counter import FastWriteCounter
 from bricks.lib.items import Items
 from bricks.lib.proxies import manager
@@ -71,25 +72,35 @@ class Context(Flow):
         shutdown and self.flow({"next": None})
         return ret
 
-    def submit(self, obj: Union[Request, Item, dict], call_later=False) -> "Context":
+    def submit(self, obj: Union[Request, Item, dict], call_later=False, attrs: dict = None) -> List["Context"]:
         """
         专门为新请求分支封装的方法, 会自动将请求放入队列
         传入的对象可以是新的种子 / 新的 request
 
+        :param attrs:
         :param obj:
         :param call_later: 是否延迟调用, 如果延迟调用, 就是将种子放到当前队列, 等待其他机器获取消费, 否则
         :return:
         """
-        assert obj.__class__ in [Request, Item, dict], f"不支持的类型: {obj.__class__}"
-        if obj.__class__ in [Item, dict]:
-            if call_later:
-                self.task_queue.put(self.queue_name, obj)
-                return self
+        ret = []
+        attrs = attrs or {}
+        group = collections.defaultdict(list)
+        for o in obj:
+            assert o.__class__ in [Request, Item, dict], TypeError(f"不支持的类型: {o.__class__}")
+            group[o.__class__].append(o)
+
+        for cls, objs in group.items():
+            if cls in [Item, dict]:
+                if call_later:
+                    self.task_queue.put(self.queue_name, *objs)
+                else:
+                    self.task_queue.put(self.queue_name, *objs, qtypes="temp")
+                    ret.extend([self.branch({"seeds": o, "next": self.target.on_seeds, **attrs}) for o in objs])
             else:
-                self.task_queue.put(self.queue_name, obj, qtypes="temp")
-                return self.branch({"seeds": obj, "next": self.target.on_seeds})
+                ret.extend([self.branch({"request": o, "next": self.target.on_request, **attrs}) for o in objs ])
+
         else:
-            return self.branch({"request": obj, "next": self.target.on_request})
+            return ret
 
     def clear_proxy(self):
         manager.clear_proxy(self.request.proxy or self.target.proxy)
@@ -140,7 +151,7 @@ class Spider(Pangu):
     def __init__(
             self,
             concurrency: Optional[int] = 1,
-            downloader: Optional[Union[str, genesis.Downloader]] = None,
+            downloader: Optional[Union[str, AbstractDownloader]] = None,
             task_queue: Optional[TaskQueue] = None,
             queue_name: Optional[str] = "",
             proxy: Optional[dict] = None,
