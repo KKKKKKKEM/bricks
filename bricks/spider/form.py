@@ -2,6 +2,7 @@
 # @Time    : 2023-11-18 10:47
 # @Author  : Kem
 # @Desc    :
+import collections
 import copy
 import inspect
 from dataclasses import dataclass
@@ -30,23 +31,43 @@ class Context(air.Context):
         super().retry()
         self.signpost.action = "retry"
 
-    def submit(self, obj: Union[Request, Item, dict], call_later=False, signpost: SignPost = None) -> "Context":
-        assert obj.__class__ in [Request, Item, dict], f"不支持的类型: {obj.__class__}"
-        if obj.__class__ in [Item, dict]:
-            signpost = SignPost(cursor=Post(self.signpost.download.value)) if signpost is None else signpost
+    def submit(self, *obj: Union[Item, dict, Request], call_later=False, attrs: dict = None) -> List["Context"]:
+        ret = []
+        attrs = attrs or {}
+        group = collections.defaultdict(list)
+        for o in obj:
+            assert o.__class__ in [Request, Item, dict], TypeError(f"不支持的类型: {o.__class__}")
+            group[o.__class__].append(o)
 
-            if call_later:
-                self.task_queue.put(self.queue_name, obj)
-                return self
+        for cls, objs in group.items():
+
+            if cls in [Item, dict]:
+                # 将游标指向上一个下载节点
+                signpost = SignPost(cursor=Post(self.signpost.download.value))
+
+                if call_later:
+                    self.task_queue.put(self.queue_name, *objs)
+
+                else:
+                    self.task_queue.put(self.queue_name, *objs, qtypes="temp")
+                    # 交给 on flow 进行流程分配: on_flow -> make_request -> on_request
+                    ret.extend([
+                        self.branch({"seeds": o, "signpost": signpost, "next": self.target.on_flow, **attrs})
+                        for o in objs
+                    ])
+
             else:
-                self.task_queue.put(self.queue_name, obj, qtypes="temp")
-                return self.branch({
-                    "seeds": obj,
-                    "signpost": signpost
-                })
+                # 将游标指向下载节点后一个
+                signpost = SignPost(cursor=Post(self.signpost.download.value + 1))
+
+                # 自己进行流程分配: on_flow (省去) -> make_request (省去) -> on_request, 所以直接是 on_request
+                ret.extend([
+                    self.branch({"request": o, "signpost": signpost, "next": self.target.on_request, **attrs})
+                    for o in objs
+                ])
+
         else:
-            signpost = signpost or SignPost()
-            return self.branch({"request": obj, "next": self.target.on_request, "signpost": signpost})
+            return ret
 
 
 class Task(_events.Task, RenderNode):
@@ -144,6 +165,8 @@ class Spider(air.Spider):
     def flows(self):
         return {
             self.on_consume: self.on_flow,
+            # run spider 拿到种子后 -> self.on_seeds, 此时 signpost 都是 0
+            # 那么直接交给 on_flow 进行分配
             self.on_seeds: self.on_flow,
             self.make_request: self.on_request,
             self.on_request: self.on_flow,
