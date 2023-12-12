@@ -154,3 +154,13 @@ class Downloader(metaclass=genesis.MetaClass):
 
         else:
             raise ValueError(f"Unsupported Content-Type: {content_type}")
+
+    def fetch_curl(self, curl_cmd: str):
+        """
+        发送 curl 命令以获得一个响应
+
+        :param curl_cmd: curl 命令
+        :return:
+        """
+        request = Request.from_curl(curl_cmd)
+        return self.fetch(request)
