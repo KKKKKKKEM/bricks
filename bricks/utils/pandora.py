@@ -317,10 +317,10 @@ def clean_rows(*rows: dict, **layout):
             data.setdefault(key, default)
 
     flows = [
-        (layout.get("default"), _default),
-        (layout.get("show"), _show),
-        (layout.get("factory"), _factory),
-        (layout.get("rename"), _rename),
+        (layout.get("default") or {}, _default),
+        (layout.get("show") or {}, _show),
+        (layout.get("factory") or {}, _factory),
+        (layout.get("rename") or {}, _rename),
 
     ]
     for row in rows:
