@@ -11,11 +11,12 @@ from loguru import logger
 
 from bricks import Request, Response, state
 from bricks.core import signals, events as _events
+from bricks.lib.headers import Header
 from bricks.lib.items import Items
 from bricks.lib.nodes import RenderNode, SignPost, Post
 from bricks.lib.queues import Item
 from bricks.spider import air
-from bricks.utils import pandora
+from bricks.utils import pandora, convert
 
 
 class Context(air.Context):
@@ -62,6 +63,46 @@ class Layout(RenderNode):
 
 
 @dataclass
+class Download(RenderNode):
+    url: str
+    params: Optional[dict] = None
+    method: str = 'GET'
+    body: Union[str, dict] = None
+    headers: Union[Header, dict] = None
+    cookies: Dict[str, str] = None
+    options: dict = None
+    timeout: int = ...
+    allow_redirects: bool = True
+    proxies: Optional[str] = None
+    proxy: Optional[dict] = None
+    status_codes: Optional[dict] = ...
+    retry: int = 0
+    max_retry: int = 5
+    strict: str = "fix"
+
+    def to_request(self) -> Request:
+        return Request(
+            url=self.url,
+            params=self.params,
+            method=self.method,
+            body=self.body,
+            headers=self.headers,
+            cookies=self.cookies,
+            options=self.options,
+            timeout=self.timeout,
+            allow_redirects=self.allow_redirects,
+            proxies=self.proxies,
+            proxy=self.proxy,
+            status_codes=self.status_codes,
+            retry=self.retry,
+            max_retry=self.max_retry
+        )
+
+    def to_response(self, spider: "Spider" = None) -> Response:
+        return convert.req2resp(self.to_request(), spider)
+
+
+@dataclass
 class Parse(RenderNode):
     func: Union[str, Callable]
     args: Optional[list] = None
@@ -87,9 +128,6 @@ class Init(RenderNode):
     kwargs: Optional[dict] = None
     strict: str = "fix"
     layout: Optional[Layout] = None
-
-
-Download = air.Download
 
 
 @dataclass
@@ -356,3 +394,9 @@ class Spider(air.Spider):
 
         for form, events in (self.config.events or {}).items():
             self.use(form, *events)
+
+
+if __name__ == '__main__':
+    down = Download(url="http://www.baidu.com")
+    resp = down.to_response()
+    print(resp.text)

@@ -2,8 +2,6 @@
 # @Time    : 2023-11-15 14:09
 # @Author  : Kem
 # @Desc    :
-import contextlib
-import dataclasses
 import datetime
 import functools
 import inspect
@@ -11,19 +9,17 @@ import math
 import queue
 import re
 import time
-from typing import Optional, Union, Iterable, Callable, Dict, List
+from typing import Optional, Union, Iterable, Callable, List
 
 from loguru import logger
 
 from bricks import state
 from bricks.core import dispatch, signals, events
+from bricks.core.context import Flow
 from bricks.core.genesis import Pangu
 from bricks.downloader import genesis, cffi
-from bricks.core.context import Flow
 from bricks.lib.counter import FastWriteCounter
-from bricks.lib.headers import Header
 from bricks.lib.items import Items
-from bricks.lib.nodes import RenderNode
 from bricks.lib.proxies import manager
 from bricks.lib.queues import TaskQueue, LocalQueue, Item
 from bricks.lib.request import Request
@@ -32,65 +28,6 @@ from bricks.plugins import on_request
 from bricks.utils import pandora
 
 IP_REGEX = re.compile(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+')
-
-
-@dataclasses.dataclass
-class Download(RenderNode):
-    url: str
-    params: Optional[dict] = None
-    method: str = 'GET'
-    body: Union[str, dict] = None
-    headers: Union[Header, dict] = None
-    cookies: Dict[str, str] = None
-    options: dict = None
-    timeout: int = ...
-    allow_redirects: bool = True
-    proxies: Optional[str] = None
-    proxy: Optional[dict] = None
-    status_codes: Optional[dict] = ...
-    retry: int = 0
-    max_retry: int = 5
-    strict: str = "fix"
-
-    def to_request(self) -> Request:
-        return Request(
-            url=self.url,
-            params=self.params,
-            method=self.method,
-            body=self.body,
-            headers=self.headers,
-            cookies=self.cookies,
-            options=self.options,
-            timeout=self.timeout,
-            allow_redirects=self.allow_redirects,
-            proxies=self.proxies,
-            proxy=self.proxy,
-            status_codes=self.status_codes,
-            retry=self.retry,
-            max_retry=self.max_retry
-        )
-
-    def to_response(self, spider: "Spider" = None) -> Response:
-        dispatcher = contextlib.nullcontext()
-        if not spider:
-            spider = Spider()
-
-        if inspect.iscoroutinefunction(spider.downloader.fetch):
-            dispatcher = spider.dispatcher
-
-        with dispatcher:
-            request = self.to_request()
-            context = spider.make_context(
-                request=request,
-                next=spider.on_request,
-                flows={
-                    spider.on_request: None,
-                    spider.on_retry: spider.on_request
-                },
-            )
-            context.failure = lambda shutdown: context.flow({"next": None})
-            spider.on_consume(context=context)
-            return context.response
 
 
 class Context(Flow):
