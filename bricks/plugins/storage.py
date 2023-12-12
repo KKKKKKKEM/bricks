@@ -6,23 +6,23 @@ import json
 from typing import List, Union, Optional, Literal
 
 from bricks.db.redis_ import Redis
-from bricks.db.sqllite import SqlLite
+from bricks.db.sqlite import Sqlite
 from bricks.lib.items import Items
 from bricks.utils.csv_ import Writer
 from bricks.utils.pandora import iterable
 
 
-def to_sqllite(
+def to_sqlite(
         path: str,
-        conn: SqlLite,
+        conn: Sqlite,
         items: Union[List[dict], Items],
         row_keys: Optional[List[str]] = None,
 ):
     """
-    存入数据至 sqllite
+    存入数据至 sqlite
     
     :param path: 表名
-    :param conn: sqllite 实例
+    :param conn: sqlite 实例
     :param items: 数据
     :param row_keys: 主键
     :return: 

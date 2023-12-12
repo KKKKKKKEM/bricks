@@ -6,8 +6,11 @@ import time
 
 from bricks import const
 from bricks.core import signals
+from bricks.lib.queues import RedisQueue
+from bricks.plugins.make_seeds import by_redis
 from bricks.spider import template
 from bricks.spider.template import Config
+from no_views.conn import redis, redis_config
 
 
 class Spider(template.Spider):
@@ -21,12 +24,18 @@ class Spider(template.Spider):
         return Config(
             init=[
                 template.Init(
-                    func=lambda: {"page": 1},
+                    func=by_redis,
                     layout=template.Layout(
                         factory={
                             "time": lambda: time.time()
                         }
-                    )
+                    ),
+                    kwargs={
+                        "path": "test",
+                        "key_type": "test",
+                        "conn": redis,
+                        # "batch_size": 1000
+                    }
 
                 )
             ],
@@ -104,5 +113,11 @@ class Spider(template.Spider):
 
 
 if __name__ == '__main__':
-    spider = Spider()
-    spider.run()
+    spider = Spider(
+        task_queue=RedisQueue(
+            **redis_config
+        )
+    )
+    spider.run(
+        task_name='init',
+    )

@@ -13,7 +13,7 @@ from typing import Optional, Callable, Literal
 
 from loguru import logger
 
-from bricks.db.sqllite import SqlLite
+from bricks.db.sqlite import Sqlite
 
 TABLE_PATTERN = re.compile(r"<TABLE>", flags=re.IGNORECASE)
 NAME_PATTERN = re.compile(rf'{os.sep}|[.]', flags=re.IGNORECASE)
@@ -81,7 +81,7 @@ class Reader:
 
             try:
                 logger.debug(f'[加载数据] database: {database}, table: {table}, path: {path}')
-                conn = SqlLite.load_csv(
+                conn = Sqlite.load_csv(
                     database=database + ".db",
                     table=table,
                     path=path,
@@ -98,7 +98,7 @@ class Writer:
             self,
             path: str,
             header: list,
-            schema: Literal["sqllite:storage", "sqllite:memory", ""] = "",
+            schema: Literal["sqlite:storage", "sqlite:memory", ""] = "",
             mode: str = "a+",
             newline="",
             encoding: str = 'utf-8-sig'
@@ -108,7 +108,7 @@ class Writer:
 
         :param path: 文件路径
         :param header: csv 表头
-        :param schema: normal: 常规写文件(线程不安全) / sqllite:storage: 将数据先写入到 sqllite, 可持久化(慢), 然后再导出为 csv / sqllite:memory: 将数据先写入到 sqllite, 内存(数据库), 然后再导出为 csv
+        :param schema: normal: 常规写文件(线程不安全) / sqlite:storage: 将数据先写入到 sqlite, 可持久化(慢), 然后再导出为 csv / sqlite:memory: 将数据先写入到 sqlite, 内存(数据库), 然后再导出为 csv
         """
         if not path.endswith(".csv"):
             path = path + ".csv"
@@ -120,23 +120,23 @@ class Writer:
         self.newline = newline
         self.schema = schema
         self.table = NAME_PATTERN.sub("_", path[:-4])
-        self.conn: Optional[SqlLite] = None
+        self.conn: Optional[Sqlite] = None
         self.writer: Optional[csv.DictWriter] = None
         self.file = None
         self.writerows: Optional[Callable] = None
 
-        if self.schema == "sqllite:storage":
+        if self.schema == "sqlite:storage":
             self.database = NAME_PATTERN.sub("_", path)
-            self.install_sqllite()
-        elif self.schema == "sqllite:memory":
+            self.install_sqlite()
+        elif self.schema == "sqlite:memory":
             self.database = ":memory:"
-            self.install_sqllite()
+            self.install_sqlite()
         else:
             self.install_writer()
 
-    def install_sqllite(self):
-        self.writerows = self._by_sqllite
-        self.conn = SqlLite(self.database)
+    def install_sqlite(self):
+        self.writerows = self._by_sqlite
+        self.conn = Sqlite(self.database)
         if "w" in self.mode: self.conn.drop(self.table)
         self.init_table()
         atexit.register(lambda: self.flush(done=True))
@@ -156,7 +156,7 @@ class Writer:
     def writerows(self, *rows: dict):
         pass
 
-    def _by_sqllite(self, *rows: dict):
+    def _by_sqlite(self, *rows: dict):
         return self.conn.insert(self.table, *rows)
 
     def _by_writer(self, *rows: dict):
@@ -169,10 +169,10 @@ class Writer:
         """
         刷新缓存区, 将数据写入 csv 文件
 
-        :param done: 是否为最后一次, 最后一次, 如果是 sqllite 模式, 会将表删除
+        :param done: 是否为最后一次, 最后一次, 如果是 sqlite 模式, 会将表删除
         :return:
         """
-        if "sqllite" in self.schema:
+        if "sqlite" in self.schema:
             self.conn.to_csv(sql=f'select * from {self.table}', path=self.path)
             self.conn.drop(self.table)
             if done:
@@ -185,7 +185,7 @@ class Writer:
 
 
 if __name__ == '__main__':
-    writer = Writer("test.csv", header=["a", "b", "c"], schema="sqllite:storage")
+    writer = Writer("test.csv", header=["a", "b", "c"], schema="sqlite:storage")
     for _ in range(20000):
         # 生成一个随机数（这里以0到100之间的整数为例）
         writer.writerows({"a": _, "b": _, "c": _})

@@ -53,7 +53,7 @@ class Spider(air.Spider):
 
             seeds = pandora.invoke(
                 func=engine,
-                args=[context, *node_args],
+                args=node_args,
                 kwargs={**kwargs, **node_kwargs},
                 annotations={air.Context: context},
                 namespace={"context": context}

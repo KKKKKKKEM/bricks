@@ -315,7 +315,7 @@ class Downloader(genesis.Downloader):
                 pycurl.SSL_CERT_COMPRESSION: "brotli",  # noqa
                 pycurl.HTTP2_PSEUDO_HEADERS_ORDER: "masp",  # noqa
             })
-        except:
+        except:  # noqa
             pass
 
         return options
