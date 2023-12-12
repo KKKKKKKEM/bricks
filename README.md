@@ -23,5 +23,5 @@ pip install bricks-py
 ```
 
 # 使用文档
-具体文档请查看 [WIKI](https://github.com/KKKKKKKEM/bricks/wiki/1.0-%E7%AE%80%E4%BB%8B)
+具体文档请查看 [WIKI](https://github.com/KKKKKKKEM/bricks/wiki)
 
