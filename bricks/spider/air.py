@@ -107,7 +107,7 @@ class InitContext(Flow):
             **kwargs
 
     ) -> None:
-        self.seeds: Item = kwargs.pop("seeds", None)
+        self.seeds: List[Item] = kwargs.pop("seeds", None)
         self.task_queue: TaskQueue = kwargs.pop("task_queue", None)
         self.queue_name: str = kwargs.pop("queue_name", f'{self.__class__.__module__}.{self.__class__.__name__}')
         super().__init__(form, target, **kwargs)
@@ -122,7 +122,9 @@ class InitContext(Flow):
     def failure(self, shutdown=False):
         # 在种子投放之后, 如果收到失败信息, 就将种子移动至 failure 队列
         if self.form == state.const.AFTER_PUT_SEEDS:
-            self.task_queue.remove(self.queue_name, self.seeds, backup='failure')
+            self.seeds and self.task_queue.remove(self.queue_name, self.seeds, backup='failure')
+
+        shutdown and self.flow({"next": None})
 
     def retry(self):
         pass
