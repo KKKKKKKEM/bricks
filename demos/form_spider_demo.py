@@ -1,6 +1,7 @@
+from bricks import const
+from bricks.core import signals
 from bricks.db.mongo import Mongo
 from bricks.db.sqlite import Sqlite
-from bricks.lib.queues import RedisQueue
 from bricks.plugins import scripts
 from bricks.spider import form
 
@@ -22,7 +23,7 @@ class MySpider(form.Spider):
     def config(self) -> form.Config:
         return form.Config(
             init=[
-                form.Init(func=lambda: ({"page": i} for i in range(100)))
+                form.Init(func=lambda: {"page": 1})
             ],
             spider=[
                 form.Download(
@@ -59,50 +60,50 @@ class MySpider(form.Spider):
                         }
                     }
                 ),
-                form.Task(
-                    func=scripts.turn_page,
-                    kwargs={
-                        "match": [
-                            "context.response.get('data.hasNextPage') == 1"
-                        ],
-                        "call_later": True
-                    }
-                ),
-                form.Task(
-                    func=scripts.inject,
-                    kwargs={
-                        "flows": [
-                            "context = Context.get_context()",
-                            "logger.debug(context.seeds)"
-                        ]
-                    }
-                ),
-                # form.Pipeline(
-                #     func="bricks.plugins.storage.to_sqlite",
-                #     kwargs={
-                #         "conn": sqlite,
-                #         "path": "user_info"
-                #     },
-                #     success=True
-                # )
 
-                # form.Pipeline(
-                #     func="bricks.plugins.storage.to_mongo",
+                # form.Task(
+                #     func=scripts.turn_page,
                 #     kwargs={
-                #         "conn": mongo,
-                #         "path": "user_info",
-                #         "database": "live",
-                #         "row_keys": ['userId']
-                #     },
-                #     success=True
-                # )
+                #         "match": [
+                #             # "print(context.response.get('data.hasNextPage'))",
+                #             "context.response.get('data.hasNextPage') == 1"
+                #         ],
+                #         # "call_later": True
+                #     }
+                # ),
 
                 form.Pipeline(
-                    func=lambda context: print(context.items),
-                    success=True
+                    func=self.my_pipline,
+                    # success=True
                 )
-            ]
+            ],
+            events={
+                const.BEFORE_PIPELINE: [
+                    form.Task(
+                        func=scripts.turn_page,
+                        kwargs={
+                            "match": [
+                                # "print(context.response.get('data.hasNextPage'))",
+                                "context.response.get('data.hasNextPage') == 1"
+                            ],
+                            # "call_later": True
+                        }
+                    ),
+
+                ]
+            }
         )
+
+    def my_pipline(self, context: form.Context):
+        print(context.items)
+        raise signals.Success
+
+    # def tu(self, context: form.Context):
+    #     if context.response.get('data.hasNextPage') == 1:
+    #         download: form.Download = context.obtain('download')
+    #         seeds = {"page": context.seeds["page"] + 1}
+    #         req = download.render(seeds).to_request()
+    #         context.submit(req, attrs={"seeds": seeds})
 
 
 if __name__ == '__main__':
