@@ -18,7 +18,7 @@ Parse = form.Parse
 Pipeline = form.Pipeline
 Init = form.Init
 Layout = form.Layout
-Download = air.Download
+Download = form.Download
 Context = air.Context
 
 

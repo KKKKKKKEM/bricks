@@ -35,7 +35,7 @@ class Response:
     ):
         self.content: Union[str, bytes] = content
         self.status_code = status_code
-        self._headers = Header(headers, _dtype=str)
+        self._headers = Header(headers)
         self.url = url
         self.encoding = encoding or self.guess_encoding()
         self.reason = reason
@@ -48,8 +48,8 @@ class Response:
 
     headers: Header = property(
         fget=lambda self: self._headers,
-        fset=lambda self, v: setattr(self, "_headers", Header(v, _dtype=str)),
-        fdel=lambda self: setattr(self, "_headers", Header({}, _dtype=str)),
+        fset=lambda self, v: setattr(self, "_headers", Header(v)),
+        fdel=lambda self: setattr(self, "_headers", Header({})),
         doc="请求头"
     )
 

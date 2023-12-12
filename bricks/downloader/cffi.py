@@ -67,7 +67,7 @@ class Downloader(genesis.Downloader):
                     Response(
                         content=response.content,
                         headers=response.headers,
-                        cookies=Cookies.by_jar(response.cookies),
+                        cookies=Cookies.by_jar(response.cookies.jar),
                         url=response.url,
                         status_code=response.status_code,
                         request=Request(
@@ -82,7 +82,7 @@ class Downloader(genesis.Downloader):
             else:
                 res.content = response.content
                 res.headers = response.headers
-                res.cookies = Cookies.by_jar(response.cookies)
+                res.cookies = Cookies.by_jar(response.cookies.jar)
                 res.url = response.url
                 res.status_code = response.status_code
                 res.request = request
