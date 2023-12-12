@@ -38,7 +38,7 @@ class Request:
         self.cookies = cookies
         self.method = method.upper()
         self.body = body
-        self._headers = Header(headers, _dtype=str)
+        self._headers = Header(headers)
         self.options = options or {}
         self.timeout = timeout
         self.allow_redirects = allow_redirects
@@ -50,8 +50,8 @@ class Request:
 
     headers: Header = property(
         fget=lambda self: self._headers,
-        fset=lambda self, v: setattr(self, "_headers", Header(v, _dtype=str)),
-        fdel=lambda self: setattr(self, "_headers", Header({}, _dtype=str)),
+        fset=lambda self, v: setattr(self, "_headers", Header(v)),
+        fdel=lambda self: setattr(self, "_headers", Header({})),
         doc="请求头"
     )
 
