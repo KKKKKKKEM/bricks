@@ -10,7 +10,7 @@ from typing import Optional, Union, List, Literal
 from urllib.parse import urlencode
 
 from bricks.db.redis_ import Redis
-from bricks.db.sqllite import SqlLite
+from bricks.db.sqlite import Sqlite
 from bricks.utils.csv_ import Reader
 from bricks.utils.pandora import json_or_eval
 
@@ -128,15 +128,15 @@ def by_mongo(
         yield rows
 
 
-def by_sqllite(
+def by_sqlite(
         path: str,
-        conn: SqlLite,
+        conn: Sqlite,
         batch_size: int = 10000,
         skip: Union[str, int] = ...,
         record: Optional[dict] = None,
 ):
     """
-    通过 sqllite 初始化
+    通过 sqlite 初始化
 
     :param path: 查询 sql
     :param conn: SqlLite 连接
@@ -200,7 +200,7 @@ def by_redis(
     :return:
     """
     assert key_type in ["set", "list", "string"], ValueError(f'不支持的存储类型-{key_type}')
-    assert conn.type(path) == key_type or key_type == 'string', f'读取类型错误, {path}:{conn.type(path)}, 读取类型-{key_type}'
+    assert conn.type(path) == key_type or key_type == 'string', f'读取类型错误-{path}:{conn.type(path)}, 读取类型-{key_type}'
 
     def read():
         if key_type == 'string':

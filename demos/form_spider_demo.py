@@ -1,11 +1,11 @@
 from bricks.db.mongo import Mongo
-from bricks.db.sqllite import SqlLite
+from bricks.db.sqlite import Sqlite
 from bricks.lib.queues import RedisQueue
 from bricks.plugins import scripts
 from bricks.spider import form
 
-sqllite = SqlLite("test")
-sqllite.create_table("user_info", structure={
+sqlite = Sqlite("test")
+sqlite.create_table("user_info", structure={
     "userId": int,
     "roomId": int,
     "score": float,
@@ -78,9 +78,9 @@ class MySpider(form.Spider):
                     }
                 ),
                 # form.Pipeline(
-                #     func="bricks.plugins.storage.to_sqllite",
+                #     func="bricks.plugins.storage.to_sqlite",
                 #     kwargs={
-                #         "conn": sqllite,
+                #         "conn": sqlite,
                 #         "path": "user_info"
                 #     },
                 #     success=True

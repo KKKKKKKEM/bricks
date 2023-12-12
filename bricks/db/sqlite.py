@@ -10,7 +10,7 @@ import subprocess
 from typing import List, Optional
 
 
-class SqlLite:
+class Sqlite:
 
     def __init__(self, database=":memory:", **kwargs):
         sqlite3.register_adapter(bool, int)
@@ -231,7 +231,7 @@ if __name__ == '__main__':
     #     debug=True
     # )
 
-    sqlite = SqlLite()
+    sqlite = Sqlite()
     # sqlite.create_table("test", {"id": int, "name": str})
     sqlite.execute("create table test (id INTEGER PRIMARY KEY, name TEXT)")
     # sqlite.insert("test", {"id": 1, "name": "kem"})
