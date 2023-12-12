@@ -112,6 +112,6 @@ if __name__ == '__main__':
     # 使用调度器运行
     # spider.launch({"form": "interval", "exprs": "seconds=1"})
     # # 单次运行
-    spider.run(task_name="init")
+    spider.run()
     # # survey 运行 -> 可以获取到执行的 Context
     # spider.survey({"page": 5})

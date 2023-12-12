@@ -219,12 +219,12 @@ if __name__ == '__main__':
         __repr__ = __str__
 
 
-    # sqlite = SqlLite()
+    # sqlite = Sqlite()
     # sqlite.register_adapter(People, pickle.dumps)
     # sqlite.create_table("test", {"a": object})
     # sqlite.insert("test", {"a": People("xxx")})
     # print(list(sqlite.find("select * from test")))
-    # sqlite = SqlLite(database="/Users/Kem/Documents/bricks/bricks/utils/test_csv")
+    # sqlite = Sqlite(database="/Users/Kem/Documents/bricks/bricks/utils/test_csv")
     # sqlite.to_csv(
     #     sql="select * from test where a< 100",
     #     path="xxx.csv",

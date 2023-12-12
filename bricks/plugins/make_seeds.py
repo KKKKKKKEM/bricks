@@ -139,7 +139,7 @@ def by_sqlite(
     通过 sqlite 初始化
 
     :param path: 查询 sql
-    :param conn: SqlLite 连接
+    :param conn: Sqlite 连接
     :param batch_size: 一次获取多少条
     :param skip: 要跳过多少条
     :param record: 历史记录, 用于断点续投
