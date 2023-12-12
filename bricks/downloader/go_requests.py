@@ -10,7 +10,7 @@ import urllib.parse
 import warnings
 from typing import Union
 
-from bricks.downloader import genesis
+from bricks.downloader import AbstractDownloader
 from bricks.lib.cookies import Cookies
 from bricks.lib.request import Request
 from bricks.lib.response import Response
@@ -19,10 +19,10 @@ from bricks.utils import pandora
 warnings.filterwarnings("ignore")
 pandora.require("requests-go")
 
-import requests_go
+import requests_go  # noqa: E402
 
 
-class Downloader(genesis.Downloader):
+class Downloader(AbstractDownloader):
     """
     对 requests-go 进行的一层包装, 支持手动设置 tls
     兼容 Windows / Mac / Linux
@@ -100,5 +100,5 @@ class Downloader(genesis.Downloader):
 
 if __name__ == '__main__':
     downloader = Downloader()
-    res = downloader.fetch({"url": "https://www.baidu.com"})
-    print(res)
+    resp = downloader.fetch({"url": "https://www.baidu.com"})
+    print(resp)

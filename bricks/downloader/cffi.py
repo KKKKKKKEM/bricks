@@ -9,13 +9,13 @@ from typing import Union
 
 from curl_cffi import requests
 
-from bricks.downloader import genesis
+from bricks.downloader import AbstractDownloader
 from bricks.lib.cookies import Cookies
 from bricks.lib.request import Request
 from bricks.lib.response import Response
 
 
-class Downloader(genesis.Downloader):
+class Downloader(AbstractDownloader):
     """
     对 cffi 进行的一层包装, 类似 requests, tls 与浏览器保持一致
     兼容 Windows / Mac / Linux

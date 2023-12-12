@@ -103,7 +103,8 @@ def to_redis(
     # 仅支持 set, list, string
     assert key_type in ["set", "list", "string"], ValueError(f'不支持的存储类型-{key_type}')
     # 当存储类型不为 string 时, path 不能为空且类型必须与预期一致
-    assert (path and conn.type(path) in [key_type, 'none']) or key_type == 'string', f'存储类型错误, 已存在-{path}:{conn.type(path)}, 存储类型-{key_type}'
+    assert (path and conn.type(path) in [key_type,
+                                         'none']) or key_type == 'string', f'存储类型错误, 已存在-{path}:{conn.type(path)}, 存储类型-{key_type}'
     # 当存储类型为 string 时, row_keys 不能为空
     assert row_keys or key_type != 'string', ValueError(f'存储类型为 string 时必须存在 row_keys')
 
@@ -129,15 +130,3 @@ def to_redis(
         for row in items:
             row['$key'] = generate_key(row)
     write(items)
-
-
-if __name__ == '__main__':
-    from no_views.conn import redis
-    to_redis(
-        path="5",
-        conn=redis,
-        items=[{"a": 1, "b": 2}, {"a": 2, "b": 3}],
-        key_type="string",
-        row_keys=["a", "b"],
-        # ttl=60
-    )

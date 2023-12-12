@@ -10,7 +10,7 @@ from loguru import logger
 
 from bricks import state
 from bricks.db.redis_ import Redis
-from bricks.lib.queues.genesis import TaskQueue
+from bricks.lib.queues import TaskQueue
 from bricks.utils import pandora
 
 

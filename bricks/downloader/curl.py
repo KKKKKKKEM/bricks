@@ -10,7 +10,7 @@ import random
 import urllib.parse
 from typing import Union
 
-from bricks.downloader import genesis
+from bricks.downloader import AbstractDownloader
 from bricks.lib.cookies import Cookies
 from bricks.lib.request import Request
 from bricks.lib.response import Response
@@ -18,12 +18,12 @@ from bricks.utils import pandora
 
 pandora.require("pycurl")
 
-import pycurl
-import certifi
-import six
+import pycurl  # noqa: E402
+import certifi  # noqa: E402
+import six  # noqa: E402
 
 
-class Downloader(genesis.Downloader):
+class Downloader(AbstractDownloader):
     """
     对 pycurl 进行的一层包装, pycurl 太难装了, 不推荐用
 
@@ -323,5 +323,5 @@ class Downloader(genesis.Downloader):
 
 if __name__ == '__main__':
     downloader = Downloader()
-    res = downloader.fetch({"url": "https://www.baidu.com"})
-    print(res.cookies)
+    resp = downloader.fetch({"url": "https://www.baidu.com"})
+    print(resp.cookies)

@@ -10,7 +10,7 @@ import urllib.parse
 import warnings
 from typing import Union
 
-from bricks.downloader import genesis
+from bricks.downloader import AbstractDownloader
 from bricks.lib.cookies import Cookies
 from bricks.lib.request import Request
 from bricks.lib.response import Response
@@ -22,10 +22,10 @@ http.client._MAXHEADERS = 1000
 
 pandora.require("requests")
 
-import requests
+import requests  # noqa: E402
 
 
-class Downloader(genesis.Downloader):
+class Downloader(AbstractDownloader):
     """
     对 requests 进行的一层包装
     兼容 Windows / Mac / Linux
