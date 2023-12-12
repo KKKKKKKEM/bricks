@@ -15,7 +15,7 @@ import subprocess
 import sys
 from typing import Any, List, Union
 
-import importlib_metadata
+from importlib import metadata as importlib_metadata
 from loguru import logger
 
 JSONP_REGEX = re.compile(r'\S+?\((?P<obj>[\s\S]*)\)')
