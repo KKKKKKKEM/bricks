@@ -11,7 +11,7 @@ import re
 import threading
 import time
 import urllib.parse
-from typing import Optional, Callable
+from typing import Optional, Callable, Type
 
 from loguru import logger
 
@@ -32,6 +32,9 @@ URL_MATCH_RULE = re.compile(
 
 
 class MetaClass(type):
+    _instances = {}
+    _lock = threading.Lock()
+
     def __new__(cls, name, bases, dct):  # noqa
         def wrapper(raw_method):
             def inner(self, *args, **kwargs):
@@ -50,6 +53,13 @@ class MetaClass(type):
         dct['get'] = wrapper(dct['get'])
         # 创建并返回新的类
         return super(MetaClass, cls).__new__(cls, name, bases, dct)
+
+    def __call__(cls, *args, **kwargs):
+        with cls._lock:
+            if cls not in cls._instances:
+                instance = super().__call__(*args, **kwargs)
+                cls._instances[cls] = instance
+        return cls._instances[cls]
 
 
 class Proxy:
@@ -147,6 +157,10 @@ class BaseProxy(metaclass=MetaClass):
             proxy = f'{self.scheme}://{parsed.username}:{parsed.password}@{parsed.hostname}"{parsed.port}'
 
         return proxy
+
+    @classmethod
+    def build(cls, **options):
+        return pandora.invoke(cls, kwargs=options)
 
 
 class ApiProxy(BaseProxy):
@@ -322,12 +336,14 @@ class Manager:
         """
         with self._context:
             for config in configs:
-                config["ref"] = pandora.load_objects(config["ref"])
+                ref = config["ref"] = pandora.load_objects(config["ref"])
+                ref: Type[BaseProxy]
+
                 rkey = self.get_rkey(config)
 
                 if not hasattr(self._local, rkey):
                     if rkey not in self.container:
-                        self.container[rkey] = pandora.invoke(config["ref"], kwargs=config)
+                        self.container[rkey] = ref.build(**config)
 
                     # 获取代理模型
                     ins: BaseProxy = self.container[rkey]
@@ -424,5 +440,4 @@ manager = Manager()
 
 if __name__ == '__main__':
     p = CustomProxy("127.0.0.1:7890")
-    print(p.get())
     print(pandora.prepare(CustomProxy))
