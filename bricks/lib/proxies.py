@@ -55,11 +55,12 @@ class MetaClass(type):
         return super(MetaClass, cls).__new__(cls, name, bases, dct)
 
     def __call__(cls, *args, **kwargs):
+        key = (cls, args, tuple(kwargs.items()))
         with cls._lock:
             if cls not in cls._instances:
                 instance = super().__call__(*args, **kwargs)
-                cls._instances[cls] = instance
-        return cls._instances[cls]
+                cls._instances[key] = instance
+        return cls._instances[key]
 
 
 class Proxy:
@@ -439,5 +440,5 @@ class Manager:
 manager = Manager()
 
 if __name__ == '__main__':
-    p = CustomProxy("127.0.0.1:7890")
-    print(pandora.prepare(CustomProxy))
+    p = CustomProxy("127.0.0.1:7890", scheme="socks5")
+    print(p.get())
