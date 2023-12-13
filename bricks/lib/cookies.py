@@ -179,7 +179,10 @@ class Cookies(typing.MutableMapping[str, str]):
     def by_jar(cls, jar):
         cookies = cls()
         for cookie in jar:
-            cookies.set(name=cookie.name, value=cookie.value, domain=cookie.domain, path=cookie.path)
+            if isinstance(cookie, dict):
+                cookies.set(name=cookie["name"], value=cookie["value"], domain=cookie.get('domain'), path=cookie.get('path'))
+            else:
+                cookies.set(name=cookie.name, value=cookie.value, domain=cookie.domain, path=cookie.path)
         return cookies
 
     def load(self, set_cookie_string: str):
