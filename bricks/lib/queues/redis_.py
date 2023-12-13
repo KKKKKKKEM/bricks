@@ -485,10 +485,11 @@ end
             """)
         }
 
-    def get(self, name, **kwargs):
+    def get(self, name, count: int = 1, **kwargs):
         """
         从 `name` 中获取种子
 
+        :param count:
         :param name:
         :param kwargs:
         :return:
@@ -499,7 +500,7 @@ end
         action = kwargs.pop('action', 'zpopmin')
         db_num = kwargs.get('db_num', self.database)
         keys = [pop_key, add_key]
-        args = [db_num, kwargs.get('count', 1), action, self.genre]
+        args = [db_num, count, action, self.genre]
         items = self.scripts["get"](keys=keys, args=args)
         return items
 
