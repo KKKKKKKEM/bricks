@@ -14,29 +14,46 @@ from bricks.spider.air import Spider
 from bricks.utils import pandora
 
 
-def curl2resp(curl_cmd: str, spider: Spider = None) -> Response:
+def curl2resp(curl_cmd: str, options: dict = None) -> Response:
     """
     curl 转响应
 
     :param curl_cmd:
-    :param spider:
+    :param options:
     :return:
     """
     request = Request.from_curl(curl_cmd)
-    return req2resp(request, spider)
+    return req2resp(request, options)
 
 
-def req2resp(request: Request, spider: Spider = None) -> Response:
+def req2resp(request: Request, options: dict = None) -> Response:
     """
     请求转响应
 
     :param request:
-    :param spider:
+    :param options:
     :return:
     """
     dispatcher = contextlib.nullcontext()
-    if not spider:
-        spider = Spider()
+    options = options or {}
+    plugins: Union[dict, type(...), None] = options.pop("plugins", ...)
+
+    spider = Spider(**options)
+
+    # 不需要任何插件
+    if not plugins:
+        for plugin in spider.plugins:
+            plugin.unregister()
+
+    # 使用默认插件
+    elif plugins is ...:
+        pass
+
+    else:
+        for plugin in spider.plugins:
+            plugin.unregister()
+        for form, plugin in plugins:
+            spider.use(form, *pandora.iterable(plugin))
 
     if inspect.iscoroutinefunction(spider.downloader.fetch):
         dispatcher = spider.dispatcher
@@ -100,10 +117,10 @@ def source2items(
         encoding = "utf-8"
     else:
         encoding = None
-    resp = Response(content=ensure_bytes(obj), encoding=encoding)
+    res = Response(content=ensure_bytes(obj), encoding=encoding)
 
     return resp2items(
-        response=resp,
+        response=res,
         engine=engine,
         rules=rules,
         rename=rename,
@@ -133,5 +150,5 @@ if __name__ == '__main__':
   -H 'sec-ch-ua-mobile: ?0' \
   -H 'sec-ch-ua-platform: "macOS"' \
   --compressed"""
-    resp = curl2resp(cmd)
+    resp = curl2resp(cmd, options={"proxy": {"ref": "bricks.lib.proxies.CustomProxy", "key": "127.0.0.1:7890"}})
     print(resp.text)
