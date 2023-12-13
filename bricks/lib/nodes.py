@@ -158,3 +158,12 @@ class SignPost:
                 continue
             else:
                 setattr(self, name, v.prev)
+
+    def copy(self):
+        return SignPost(
+            cursor=copy.deepcopy(self.cursor),
+            download=copy.deepcopy(self.download),
+            parse=copy.deepcopy(self.parse),
+            pipeline=copy.deepcopy(self.pipeline),
+            action=copy.deepcopy(self.action)
+        )
