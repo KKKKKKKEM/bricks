@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 import os.path
 import subprocess
@@ -28,16 +29,20 @@ class BrowserContext(async_api.PlaywrightContextManager):
         self.driver = driver
         self.reuse = reuse
         self.options = options or {}
+        self._lock: asyncio.Lock = ...
+
         super().__init__()
 
     async def __aenter__(self) -> async_api.Browser:
+        if self._lock is ...: self._lock = asyncio.Lock()
 
-        if self.browser is ...:
-            manager = await super().__aenter__()
-            browser_driver: async_api.BrowserType = getattr(manager, self.driver)
-            self.browser = await browser_driver.launch(**self.options)
+        async with self._lock:
+            if self.browser is ...:
+                manager = await super().__aenter__()
+                browser_driver: async_api.BrowserType = getattr(manager, self.driver)
+                self.browser = await browser_driver.launch(**self.options)
 
-        return self.browser
+            return self.browser
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if not self.reuse:
@@ -329,9 +334,7 @@ class Downloader(AbstractDownloader):
 
 
 if __name__ == '__main__':
-    import asyncio
-
-    downloader = Downloader(mode="api", headless=False, reuse=False)
+    downloader = Downloader(headless=False, reuse=False)
 
 
     async def main():
