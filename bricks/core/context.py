@@ -63,14 +63,14 @@ class Context:
         """
         return cls._stack.top()
 
-    def set_context(self, context: "Context"):
-        self._stack.push(context)
+    def set_context(self):
+        self._stack.push(self)
 
     def clear_context(self):
         return self._stack.pop()
 
     def __enter__(self):
-        self.set_context(self)
+        self.set_context()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.clear_context()
