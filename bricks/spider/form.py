@@ -25,7 +25,11 @@ class Context(air.Context):
 
     def __init__(self, target: "Spider", form: str = state.const.ON_CONSUME, **kwargs) -> None:
         super().__init__(target, form, **kwargs)
-        self.signpost: SignPost = kwargs.get("signpost") or SignPost()
+        signpost: SignPost = kwargs.get("signpost")
+        if signpost:
+            self.signpost = signpost.copy()
+        else:
+            self.signpost = SignPost()
 
     def retry(self):
         super().retry()
