@@ -107,7 +107,10 @@ class MySpider(form.Spider):
 
 
 if __name__ == '__main__':
+    from bricks.downloader import playwright_
+
     spider = MySpider(
+        downloader=playwright_.Downloader(),
         # task_queue=RedisQueue()
     )
     # 使用调度器运行

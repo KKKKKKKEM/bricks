@@ -353,12 +353,12 @@ class Dispatcher:
 
     def run(self):
         async def main():
+            self.loop = asyncio.get_event_loop()
             self._shutdown = asyncio.Event()
             self._running.set()
             await self._shutdown.wait()
             self._set_env()
 
-        asyncio.set_event_loop(self.loop)
         asyncio.run(main())
 
     def stop(self):
