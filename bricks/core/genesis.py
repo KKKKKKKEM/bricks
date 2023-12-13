@@ -4,13 +4,13 @@
 # @Desc    :
 import functools
 import time
-from typing import Union, Literal, Callable
+from typing import Union, Literal, Callable, List
 
 from loguru import logger
 
 from bricks.core import signals, dispatch
-from bricks.core.events import EventManager, Task
 from bricks.core.context import Flow, Context
+from bricks.core.events import EventManager, Task, Register
 from bricks.state import const
 from bricks.utils import pandora
 from bricks.utils.scheduler import BaseTrigger, Scheduler
@@ -96,6 +96,7 @@ class Chaos(metaclass=MetaClass):
         :param callback:
         :return:
         """
+
         def job():
             self.run(task_name=task_name, args=args, kwargs=kwargs)
             callback and pandora.invoke(callback, namespace={"spider": self}, annotations={type(self): self})
@@ -178,7 +179,7 @@ class Pangu(Chaos):
             self.set(k, v, nx=True)
 
         self.dispatcher = dispatch.Dispatcher(max_workers=self.get("concurrency", 1))
-        self.plugins = []
+        self.plugins: List[Register] = []
 
     def on_consume(self, context: Flow):
         context.next.root == self.on_consume and context.flow()
