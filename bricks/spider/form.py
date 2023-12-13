@@ -80,12 +80,11 @@ class Layout(RenderNode):
     show: dict = None
     factory: dict = None
     default: dict = None
-    strict: str = "fix"
 
 
 @dataclass
 class Download(RenderNode):
-    url: str
+    url: str = ...
     params: Optional[dict] = None
     method: str = 'GET'
     body: Union[str, dict] = None
@@ -99,7 +98,6 @@ class Download(RenderNode):
     status_codes: Optional[dict] = ...
     retry: int = 0
     max_retry: int = 5
-    strict: str = "fix"
 
     def to_request(self) -> Request:
         return Request(
@@ -125,29 +123,26 @@ class Download(RenderNode):
 
 @dataclass
 class Parse(RenderNode):
-    func: Union[str, Callable]
+    func: Union[str, Callable] = ...
     args: Optional[list] = None
     kwargs: Optional[dict] = None
-    strict: str = "fix"
     layout: Optional[Layout] = None
 
 
 @dataclass
 class Pipeline(RenderNode):
-    func: Union[str, Callable]
+    func: Union[str, Callable] = ...
     args: Optional[list] = None
     kwargs: Optional[dict] = None
-    strict: str = "fix"
     success: bool = False
     layout: Optional[Layout] = None
 
 
 @dataclass
 class Init(RenderNode):
-    func: Union[str, Callable]
+    func: Union[str, Callable] = ...
     args: Optional[list] = None
     kwargs: Optional[dict] = None
-    strict: str = "fix"
     layout: Optional[Layout] = None
 
 
@@ -420,6 +415,7 @@ class Spider(air.Spider):
 
 
 if __name__ == '__main__':
-    down = Download(url="http://www.baidu.com")
-    resp = down.to_response()
-    print(resp.text)
+    down = Download(url="http://www.baidu.com", params={"skus": '{sku:allsku}'})
+    down.register_adapter("allsku", lambda has_sku, miss_sku: has_sku + miss_sku)
+    rendered = down.render({"has_sku": [1, 2, 3], "miss_sku": [4, 5, 6]})
+    print(rendered.params)

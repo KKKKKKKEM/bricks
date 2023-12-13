@@ -5,7 +5,7 @@
 import copy
 import dataclasses
 import re
-from typing import Any, Union, Callable, Optional
+from typing import Any, Union, Callable, Optional, Literal
 
 from bricks.utils import pandora
 
@@ -14,9 +14,20 @@ FORMAT_REGEX = re.compile(r'{(\w+)(?::(\w+))?}')
 
 @dataclasses.dataclass
 class RenderNode:
+    errors: Literal["fix", "raise", "ignore"] = "fix"
+    adapters: dict = dataclasses.field(default_factory=lambda: {
+        "int": int,
+        int: int,
+        "str": str,
+        str: str,
+        "float": float,
+        float: float,
+        "json": pandora.json_or_eval,
+        list: pandora.json_or_eval,
+        dict: pandora.json_or_eval,
+    })
 
-    @classmethod
-    def format(cls, value, base: dict, errors: str = "raise"):
+    def format(self, value, base: dict):
         if isinstance(value, str):
             while True:
                 try:
@@ -29,99 +40,67 @@ class RenderNode:
                     for placeholder, type_str in placeholders:
 
                         if placeholder not in base:
-                            if errors == 'raise':
+                            if self.errors == 'raise':
                                 raise ValueError(f"Missing key in base: {placeholder}")
-                            elif errors == 'ignore':
+                            elif self.errors == 'ignore':
                                 return value
                             else:
                                 base.setdefault(placeholder, "")
 
                         placeholder_value = base[placeholder]
                         if type_str:
-                            placeholder_value = cls.convert(placeholder_value, type_str)
+                            placeholder_value = self.run_adapter(placeholder_value, type_str, base=base)
                             value = value.replace(f"{{{placeholder}:{type_str}}}", str(placeholder_value))
                         else:
                             value = value.replace(f"{{{placeholder}}}", str(placeholder_value))
 
                         if convert_value:
-                            value = cls.convert(value, type(placeholder_value))
+                            value = self.run_adapter(value, type(placeholder_value), base=base)
 
                     return value
 
                 except KeyError as e:
-                    if errors == "raise":
+                    if self.errors == "raise":
                         raise ValueError(f"Missing key in base: {e}")
 
-                    elif errors == 'ignore':
+                    elif self.errors == 'ignore':
                         return value
 
                     else:
                         base.setdefault(e.args[0], "")
 
         elif isinstance(value, list):
-            return [cls.format(item, base, errors=errors) for item in value]
+            return [self.format(item, base) for item in value]
         elif isinstance(value, dict):
-            return {k: cls.format(v, base, errors=errors) for k, v in value.items()}
+            return {k: self.format(v, base) for k, v in value.items()}
         elif dataclasses.is_dataclass(value):
             return value.render(base)
         return value
 
-    @staticmethod
-    def convert(value, type_str):
-        maps = {
-            "int": {
-                "action": int,
-                "default": 0
-            },
-            int: {
-                "action": int,
-                "default": 0
-            },
-            "str": {
-                "action": str,
-                "default": ""
-            },
-            str: {
-                "action": str,
-                "default": ""
-            },
-            "float": {
-                "action": str,
-                "default": 0.0
-            },
-            float: {
-                "action": str,
-                "default": 0.0
-            },
-            "json": {
-                "action": pandora.json_or_eval,
-                "default": None
-            },
-            list: {
-                "action": pandora.json_or_eval,
-                "default": None
-            },
-            dict: {
-                "action": pandora.json_or_eval,
-                "default": None
-            },
-        }
-        if type_str in maps:
-            try:
-                return maps[type_str]['action'](value)
-            except ValueError:
-                return maps[type_str]['default']
-        else:
-            return value
-
-    def render(self, base: dict):
+    def render(self, base: dict = None):
         # 创建一个新的实例，避免修改原始实例
+        base = base or {}
         node = copy.deepcopy(self)
         for field in dataclasses.fields(self):
             value = getattr(node, field.name)
-            new_value = self.format(value, base, errors=getattr(self, "strict", "fix"))
+            new_value = self.format(value, base)
             setattr(node, field.name, new_value)
         return node
+
+    def register_adapter(self, form: Any, action: Callable):
+        self.adapters[form] = action
+
+    def run_adapter(self, value, form: Any, base: dict = None):
+        print(value)
+        if form in self.adapters:
+            adapter = self.adapters[form]
+            try:
+                assert callable(adapter), f"Invalid adapter action: {adapter}"
+                return pandora.invoke(adapter, args=[value], namespace=base)
+            except (ValueError, AssertionError):
+                return value
+        else:
+            return value
 
 
 @dataclasses.dataclass
