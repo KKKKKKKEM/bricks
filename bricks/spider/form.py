@@ -119,8 +119,8 @@ class Download(RenderNode):
             max_retry=self.max_retry
         )
 
-    def to_response(self, spider: "Spider" = None) -> Response:
-        return convert.req2resp(self.to_request(), spider)
+    def to_response(self, options: dict = None) -> Response:
+        return convert.req2resp(self.to_request(), options)
 
 
 @dataclass
