@@ -97,7 +97,7 @@ class Context(Flow):
                     self.task_queue.put(self.queue_name, *objs, qtypes="temp")
                     ret.extend([self.branch({"seeds": o, "next": self.target.on_seeds, **attrs}) for o in objs])
             else:
-                ret.extend([self.branch({"request": o, "next": self.target.on_request, **attrs}) for o in objs ])
+                ret.extend([self.branch({"request": o, "next": self.target.on_request, **attrs}) for o in objs])
 
         else:
             return ret
@@ -166,8 +166,8 @@ class Spider(Pangu):
         self.queue_name = queue_name or self.__class__.__name__
         self.forever = forever
         super().__init__(**kwargs)
-        self._total_number_of_requests = FastWriteCounter()  # 发起请求总数量
-        self._number_of_failure_requests = FastWriteCounter()  # 发起请求失败数量
+        self.number_of_total_requests = FastWriteCounter()  # 发起请求总数量
+        self.number_of_failure_requests = FastWriteCounter()  # 发起请求失败数量
 
     @property
     def flows(self):
@@ -292,8 +292,6 @@ class Spider(Pangu):
             len(seeds)
         ])]
         context.seeds = seeds
-        context.form = state.const.BEFORE_PUT_SEEDS
-        events.EventManager.invoke(context)
         fettle = pandora.invoke(
             func=self.put_seeds,
             kwargs={
@@ -304,11 +302,9 @@ class Spider(Pangu):
                 "queue_name": context.queue_name,
 
             },
-            annotations={Context: context},
+            annotations={InitContext: context},
             namespace={"context": context},
         )
-        context.form = state.const.AFTER_PUT_SEEDS
-        events.EventManager.invoke(context)
 
         size = len(pandora.iterable(seeds))
         settings['total'] += size
@@ -353,6 +349,26 @@ class Spider(Pangu):
         task_queue.continue_(queue_name, maxsize=maxsize, interval=1)
         return task_queue.put(queue_name, *pandora.iterable(seeds), priority=priority, **kwargs)
 
+    def _when_put_seeds(self, raw_method):  # noqa
+        @functools.wraps(raw_method)
+        def wrapper(*args, **kwargs):
+            context: InitContext = InitContext.get_context()
+            context.form = state.const.BEFORE_PUT_SEEDS
+            events.EventManager.invoke(context)
+            prepared = pandora.prepare(
+                func=raw_method,
+                args=args,
+                kwargs=kwargs,
+                annotations={InitContext: context},
+                namespace={"context": context}
+            )
+            ret = prepared.func(*prepared.args, **prepared.kwargs)
+            context.form = state.const.AFTER_PUT_SEEDS
+            events.EventManager.invoke(context)
+            return ret
+
+        return wrapper
+
     def run_spider(self):
         """
         start run spider
@@ -366,76 +382,76 @@ class Spider(Pangu):
         output = time.time()
 
         while True:
-            context = self.make_context(
+            context: Context = self.make_context(
                 task_queue=task_queue,
                 queue_name=queue_name
             )
+            with context:
+                prepared = pandora.prepare(
+                    func=self.get_seeds,
+                    annotations={Context: context},
+                    namespace={"context": context}
+                )
 
-            prepared = pandora.prepare(
-                func=self.get_seeds,
-                annotations={Context: context},
-                namespace={"context": context}
-            )
-            try:
-                fettle = prepared.func(*prepared.args, **prepared.kwargs)
+                try:
+                    fettle = prepared.func(*prepared.args, **prepared.kwargs)
 
-            except signals.Wait as sig:
-                time.sleep(sig.duration)
+                except signals.Wait as sig:
+                    time.sleep(sig.duration)
 
-            except signals.Success:
+                except signals.Success:
 
-                if context.form == state.const.BEFORE_GET_SEEDS:
-                    time.sleep(1)
-
-                elif context.form == state.const.AFTER_GET_SEEDS:
-                    context.success()
-
-                else:
-                    raise
-
-            except signals.Failure:
-
-                if context.form == state.const.BEFORE_GET_SEEDS:
-                    time.sleep(1)
-
-                elif context.form == state.const.AFTER_GET_SEEDS:
-                    pass
-
-                else:
-                    raise
-
-            except signals.Empty:
-                # 判断是否应该停止爬虫
-                #  没有初始化 + 本地没有运行的任务 + 任务队列为空 -> 退出
-                if (
-                        not task_queue.command(queue_name, {"action": task_queue.COMMANDS.IS_INIT}) and
-                        not self.forever and
-                        task_queue.is_empty(queue_name, threshold=self.get("spider.threshold", default=0))
-                ):
-                    if self.dispatcher.running == 0:
-                        return count
-                    else:
+                    if context.form == state.const.BEFORE_GET_SEEDS:
                         time.sleep(1)
 
-                else:
-
-                    if task_queue.smart_reverse(queue_name, status=self.dispatcher.running):
-                        logger.debug(f"[翻转队列] 队列名称: {self.queue_name}")
+                    elif context.form == state.const.AFTER_GET_SEEDS:
+                        context.success()
 
                     else:
-                        if time.time() - output > 60:
-                            logger.debug(f"[等待任务] 队列名称: {self.queue_name}")
-                            output = time.time()
+                        raise
 
+                except signals.Failure:
+
+                    if context.form == state.const.BEFORE_GET_SEEDS:
                         time.sleep(1)
 
-            else:
-                for seeds in pandora.iterable(fettle):
-                    stuff = context.copy()
-                    stuff.seeds = seeds
-                    stuff.flow({"next": self.on_consume})
-                    self.submit(dispatch.Task(stuff.next.root, [stuff]))
-                    count += 1
+                    elif context.form == state.const.AFTER_GET_SEEDS:
+                        pass
+
+                    else:
+                        raise
+
+                except signals.Empty:
+                    # 判断是否应该停止爬虫
+                    #  没有初始化 + 本地没有运行的任务 + 任务队列为空 -> 退出
+                    if (
+                            not task_queue.command(queue_name, {"action": task_queue.COMMANDS.IS_INIT}) and
+                            not self.forever and
+                            task_queue.is_empty(queue_name, threshold=self.get("spider.threshold", default=0))
+                    ):
+                        if self.dispatcher.running == 0:
+                            return count
+                        else:
+                            time.sleep(1)
+
+                    else:
+
+                        if task_queue.smart_reverse(queue_name, status=self.dispatcher.running):
+                            logger.debug(f"[翻转队列] 队列名称: {self.queue_name}")
+
+                        else:
+                            if time.time() - output > 60:
+                                logger.debug(f"[等待任务] 队列名称: {self.queue_name}")
+                                output = time.time()
+
+                            time.sleep(1)
+
+                else:
+                    for seeds in pandora.iterable(fettle):
+                        stuff = context.copy()
+                        stuff.flow({"next": self.on_consume, "seeds": seeds})
+                        self.submit(dispatch.Task(stuff.next.root, [stuff]))
+                        count += 1
 
     def _when_run_spider(self, raw_method):
         @functools.wraps(raw_method)
@@ -466,36 +482,35 @@ class Spider(Pangu):
             self.run_spider()
 
     @staticmethod
-    def get_seeds(context: Context) -> Union[Iterable[Item], Item]:
+    def get_seeds(**kwargs) -> Union[Iterable[Item], Item]:
         """
         获取种子的真实方法
 
-        :param context:
         :return:
         """
-        task_queue: TaskQueue = context.task_queue
-        queue_name: str = context.queue_name
-        return task_queue.get(queue_name)
+        context: Context = Context.get_context()
+        task_queue: TaskQueue = kwargs.pop('task_queue', None) or context.task_queue
+        queue_name: str = kwargs.pop('queue_name', None) or context.queue_name
+        return task_queue.get(name=queue_name, **kwargs)
 
     def _when_get_seeds(self, raw_method):
         @functools.wraps(raw_method)
-        def wrapper(context: Context, *args, **kwargs):
+        def wrapper(**kwargs):
+            context: Context = Context.get_context()
             context.form = state.const.BEFORE_GET_SEEDS
             events.EventManager.invoke(context)
             count = self.dispatcher.max_workers - self.dispatcher.running
             kwargs.setdefault('count', 1 if count <= 0 else count)
             prepared = pandora.prepare(
                 func=raw_method,
-                args=args,
                 kwargs=kwargs,
                 annotations={Context: context},
                 namespace={"context": context}
             )
             ret = prepared.func(*prepared.args, **prepared.kwargs)
-
             # 没有种子返回空信号
             if ret is None: raise signals.Empty
-
+            context.seeds = ret
             context.form = state.const.AFTER_GET_SEEDS
             events.EventManager.invoke(context)
 
@@ -513,7 +528,7 @@ class Spider(Pangu):
 
         :return:
         """
-        self._number_of_failure_requests.increment()
+        self.number_of_failure_requests.increment()
         request: Request = context.request
         response: Response = context.response
 
@@ -549,6 +564,7 @@ class Spider(Pangu):
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = state.const.BEFORE_RETRY
+            self.number_of_failure_requests.increment()
             prepared = pandora.prepare(
                 func=raw_method,
                 args=args,
@@ -596,6 +612,7 @@ class Spider(Pangu):
             context.form = state.const.BEFORE_REQUEST
             events.EventManager.invoke(context)
             context.form = state.const.ON_REQUEST
+            self.number_of_total_requests.increment()
             prepared = pandora.prepare(
                 func=raw_method,
                 args=args,
