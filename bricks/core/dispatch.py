@@ -9,7 +9,6 @@ __all__ = (
 
 import asyncio
 import ctypes
-import itertools
 import queue
 import sys
 import threading
@@ -149,7 +148,6 @@ class Dispatcher:
         self._active_tasks: threading.Semaphore
         self._shutdown: asyncio.Event
         self._running: threading.Event
-        self._counter: itertools.count
         self.thread: threading.Thread
         self._lock: threading.Lock
         self._set_env()
@@ -163,7 +161,6 @@ class Dispatcher:
         self._active_tasks = threading.Semaphore(self.max_workers)
         self._shutdown = asyncio.Event()
         self._running = threading.Event()
-        self._counter = itertools.count()
         self.thread = threading.Thread(target=self.run, name="DisPatch", daemon=True)
         self._lock = threading.Lock()
 
@@ -176,7 +173,8 @@ class Dispatcher:
         """
         for _ in range(size):
             self._remain_workers.acquire()
-            worker = Worker(self, name=f"Worker-{next(self._counter)}", trace=self.trace)
+            iden = self.max_workers - self._remain_workers._value  # noqa
+            worker = Worker(self, name=f"Worker-{iden}", trace=self.trace)
             self.workers[worker.name] = worker
             worker.start()
 
