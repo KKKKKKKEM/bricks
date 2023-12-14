@@ -2,7 +2,6 @@
 # @Time    : 2023-11-18 10:47
 # @Author  : Kem
 # @Desc    :
-import collections
 import copy
 import inspect
 from dataclasses import dataclass
@@ -14,7 +13,7 @@ from bricks import Request, Response, state
 from bricks.core import signals, events as _events
 from bricks.lib.headers import Header
 from bricks.lib.items import Items
-from bricks.lib.nodes import RenderNode, SignPost, Post
+from bricks.lib.nodes import RenderNode
 from bricks.lib.queues import Item
 from bricks.spider import air
 from bricks.utils import pandora, convert
@@ -25,53 +24,16 @@ class Context(air.Context):
 
     def __init__(self, target: "Spider", form: str = state.const.ON_CONSUME, **kwargs) -> None:
         super().__init__(target, form, **kwargs)
-        signpost: SignPost = kwargs.get("signpost")
-        if signpost:
-            self.signpost = signpost.copy()
-        else:
-            self.signpost = SignPost()
 
     def retry(self):
         super().retry()
-        self.signpost.action = "retry"
+        # $bookmark -> 指向 当前下载节点的位置
+        bookmark = self.seeds.get("$bookmark", 0)
+        self.seeds["$signpost"] = bookmark
 
-    def submit(self, *obj: Union[Item, dict, Request], call_later=False, attrs: dict = None) -> List["Context"]:
-        ret = []
-        attrs = attrs or {}
-        group = collections.defaultdict(list)
-        for o in obj:
-            assert o.__class__ in [Request, Item, dict], TypeError(f"不支持的类型: {o.__class__}")
-            group[o.__class__].append(o)
-
-        for cls, objs in group.items():
-
-            if cls in [Item, dict]:
-                # 将游标指向上一个下载节点
-                signpost = SignPost(cursor=Post(self.signpost.download.value))
-
-                if call_later:
-                    self.task_queue.put(self.queue_name, *objs)
-
-                else:
-                    self.task_queue.put(self.queue_name, *objs, qtypes="temp")
-                    # 交给 on flow 进行流程分配: on_flow -> make_request -> on_request
-                    ret.extend([
-                        self.branch({"seeds": o, "signpost": signpost, "next": self.target.on_flow, **attrs})
-                        for o in objs
-                    ])
-
-            else:
-                # 将游标指向下载节点后一个
-                signpost = SignPost(cursor=Post(self.signpost.download.value + 1))
-
-                # 自己进行流程分配: on_flow (省去) -> make_request (省去) -> on_request, 所以直接是 on_request
-                ret.extend([
-                    self.branch({"request": o, "signpost": signpost, "next": self.target.on_request, **attrs})
-                    for o in objs
-                ])
-
-        else:
-            return ret
+    def submit(self, *obj: Union[Item, dict], call_later=False, attrs: dict = None) -> List["Context"]:
+        signpost = self.seeds.get('$signpost', 0)
+        return super().submit(*[{**o, "$signpost": signpost} for o in obj], call_later=call_later, attrs=attrs)
 
 
 class Task(_events.Task, RenderNode):
@@ -102,6 +64,7 @@ class Download(RenderNode):
     status_codes: Optional[dict] = ...
     retry: int = 0
     max_retry: int = 5
+    archive: bool = False
 
     def to_request(self) -> Request:
         return Request(
@@ -183,51 +146,44 @@ class Spider(air.Spider):
             logger.warning('没有配置 Spider 节点流程..')
             raise signals.Exit
 
-        # 这是重试回来了
-        if context.signpost.action.value == "retry":
-            # 找到下载节点前面不是 Task 的节点
-            for i in range(context.signpost.download.value - 1, -1, -1):
-                node = self.config.spider[i]
-                if not isinstance(node, Task):
-                    context.signpost.cursor = i + 1
-                    break
-            else:
-                context.signpost.cursor = context.signpost.download.value
-
-            context.signpost.action = ""
-
         while True:
+            signpost: int = context.seeds.setdefault('$signpost', 0)
+            context.seeds.setdefault('$bookmark', 0)
+
             try:
-                node: Union[Download, Task, Parse, Pipeline] = self.config.spider[context.signpost.cursor.value]
+                node: Union[Download, Task, Parse, Pipeline] = self.config.spider[signpost]
             except IndexError:
                 context.flow({"next": None})
+
                 raise signals.Switch
             else:
-                context.signpost.cursor = context.signpost.cursor.value + 1
+                context.seeds['$signpost'] += 1
 
                 # 种子 -> Request
                 if isinstance(node, Download):
-                    # 记录下载节点的位置
-                    context.signpost.download = context.signpost.cursor.value - 1
-                    context.download = node
-                    context.flow({"next": self.make_request})
+                    if context.next.prev and context.next.prev.root == self.on_retry:
+                        # 这是需要重试的
+                        context.flow({"next": self.on_request})
+                    else:
+                        # 这是新的请求
+                        context.seeds['$bookmark'] = signpost
+                        context.node = node
+                        node.archive and context.replace({**context.seeds, "$signpost": signpost})
+                        context.flow({"next": self.make_request})
                     raise signals.Switch
 
                 # Request -> Response
                 elif isinstance(node, Parse):
-                    context.signpost.parse = context.signpost.cursor.value - 1
-                    context.parse = node
+                    context.node = node
                     context.flow({"next": self.on_response})
                     raise signals.Switch
 
                 elif isinstance(node, Pipeline):
-                    context.signpost.pipeline = context.signpost.cursor.value - 1
-                    context.pipeline = node
+                    context.node = node
                     context.flow({"next": self.on_pipeline})
                     raise signals.Switch
 
                 elif isinstance(node, Task):
-                    context.task = node
                     pandora.invoke(
                         func=node.func,
                         args=node.args,
@@ -247,6 +203,7 @@ class Spider(air.Spider):
                             "items": context.items
                         }
                     )
+
                 else:
                     raise TypeError(f"Unknown node type: {type(node)}")
 
@@ -293,14 +250,14 @@ class Spider(air.Spider):
                 yield seeds or []
 
     def make_request(self, context: Context) -> Request:
-        node: Download = context.obtain("download")
+        node: Download = context.obtain("node")
         s = node.render(context.seeds)
         request = s.to_request()
         context.flow({"request": request})
         return request
 
     def parse(self, context: Context):
-        node: Parse = context.obtain("parse")
+        node: Parse = context.obtain("node")
         engine = node.func
         args = node.args or []
         kwargs = node.kwargs or {}
@@ -368,7 +325,7 @@ class Spider(air.Spider):
             yield items or []
 
     def item_pipeline(self, context: Context):
-        node: Pipeline = context.obtain("pipeline")
+        node: Pipeline = context.obtain("node")
         engine = node.func
         args = node.args or []
         kwargs = node.kwargs or {}
