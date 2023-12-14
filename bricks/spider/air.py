@@ -2,7 +2,6 @@
 # @Time    : 2023-11-15 14:09
 # @Author  : Kem
 # @Desc    :
-import collections
 import datetime
 import functools
 import inspect
@@ -28,7 +27,7 @@ from bricks.lib.response import Response
 from bricks.plugins import on_request
 from bricks.utils import pandora
 
-IP_REGEX = re.compile(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+')
+IGNORE_RETRY_PATTERN = re.compile("ProxyError", re.IGNORECASE)
 
 
 class Context(Flow):
@@ -41,7 +40,7 @@ class Context(Flow):
     ) -> None:
         self.request: Request = kwargs.pop("request", None)
         self.response: Response = kwargs.pop("response", None)
-        self.seeds: Item = kwargs.pop("seeds", None)
+        self.seeds: Union[Item, List[Item]] = kwargs.pop("seeds", None)
         self.items: Items = kwargs.pop("items", None)
         self.task_queue: TaskQueue = kwargs.pop("task_queue", None)
         self.queue_name: str = kwargs.pop("queue_name", f'{self.__class__.__module__}.{self.__class__.__name__}')
@@ -49,18 +48,19 @@ class Context(Flow):
         self.target: Spider = target
 
     def __setattr__(self, key, value):
-        maps = {
-            "seeds": Item,
-            "items": Items,
-        }
+        if key == "seeds" and type(value) is not Item:
+            if isinstance(value, list):
+                value = [Item(i) for i in value]
+            else:
+                value = Item(value)
 
-        if key in maps and type(value) is not maps[key]:
-            value = maps[key](value)
+        elif key == "items" and type(value) is not Items:
+            value = Items(value)
 
         super().__setattr__(key, value)
 
     def success(self, shutdown=False):
-        ret = self.task_queue.remove(self.queue_name, self.seeds)
+        ret = self.task_queue.remove(self.queue_name, *pandora.iterable(self.seeds))
         shutdown and self.flow({"next": None})
         return ret
 
@@ -68,11 +68,24 @@ class Context(Flow):
         self.flow({"next": self.target.on_retry})
 
     def failure(self, shutdown=False):
-        ret = self.task_queue.remove(self.queue_name, self.seeds, backup='failure') if self.seeds else None
+        if self.seeds:
+            ret = self.task_queue.remove(self.queue_name, *pandora.iterable(self.seeds), backup='failure')
+        else:
+            ret = 0
         shutdown and self.flow({"next": None})
         return ret
 
-    def submit(self, obj: Union[Request, Item, dict], call_later=False, attrs: dict = None) -> List["Context"]:
+    def replace(self, new: dict, qtypes=("current", "temp", "failure")):
+        """
+        替换种子
+
+        :return:
+        """
+        ret = self.task_queue.replace(self.queue_name, self.seeds, new, qtypes=qtypes)
+        self.seeds.fingerprint = new
+        return ret
+
+    def submit(self, obj: Union[Item, dict], call_later=False, attrs: dict = None) -> List["Context"]:
         """
         专门为新请求分支封装的方法, 会自动将请求放入队列
         传入的对象可以是新的种子 / 新的 request
@@ -84,23 +97,19 @@ class Context(Flow):
         """
         ret = []
         attrs = attrs or {}
-        group = collections.defaultdict(list)
         for o in obj:
-            assert o.__class__ in [Request, Item, dict], TypeError(f"不支持的类型: {o.__class__}")
-            group[o.__class__].append(o)
+            assert o.__class__ in [Item, dict], TypeError(f"不支持的类型: {o.__class__}")
 
-        for cls, objs in group.items():
-            if cls in [Item, dict]:
-                if call_later:
-                    self.task_queue.put(self.queue_name, *objs)
-                else:
-                    self.task_queue.put(self.queue_name, *objs, qtypes="temp")
-                    ret.extend([self.branch({"seeds": o, "next": self.target.on_seeds, **attrs}) for o in objs])
-            else:
-                ret.extend([self.branch({"request": o, "next": self.target.on_request, **attrs}) for o in objs])
-
+            if not call_later:
+                stuff = self.branch({"seeds": o, "next": self.target.on_seeds, **attrs})
+                ret.append(stuff)
         else:
-            return ret
+            if call_later:
+                self.task_queue.put(self.queue_name, *obj)
+            else:
+                self.task_queue.put(self.queue_name, *obj, qtypes="temp")
+
+        return ret
 
     def clear_proxy(self):
         manager.clear_proxy(self.request.proxy or self.target.proxy)
@@ -532,29 +541,24 @@ class Spider(Pangu):
         request: Request = context.request
         response: Response = context.response
 
-        options: dict = request.options
         if request.retry < request.max_retry - 1:
 
-            if '$requestId' in options:
+            # 如果是代理错误, 则不计算重试次数
+            if not IGNORE_RETRY_PATTERN.search(response.error):
                 request.retry += 1
 
-            elif "proxyerror" not in str(response.error).lower():
-                request.retry += 1
-
-            if '$retry' not in options:
+            # 保留代理标志
+            retain_proxy = request.get_options("$retainProxy", 0)
+            if retain_proxy > 0:
+                request.put_options("$retainProxy", retain_proxy - 1)
+            else:
                 context.clear_proxy()
 
-            else:
-                options.pop('$retry', None)
-
-            if IP_REGEX.match((str(request.proxy) or "")):
-                request.proxy = ""
-
         else:
-            logger.warning(
-                f'[超过重试次数] {f"SEEDS: {context.seeds}, " if context.seeds else ""} URL: {request.real_url}')
+            msg = f'[超过重试次数] {f"SEEDS: {context.seeds}, " if context.seeds else ""} URL: {request.real_url}'
+            logger.warning(msg)
 
-            if request.retry > options.get('$requestRetry', math.inf):
+            if request.retry > request.get_options("$maxRetry", math.inf):
                 raise signals.Success
 
             else:
