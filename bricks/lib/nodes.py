@@ -5,7 +5,8 @@
 import copy
 import dataclasses
 import re
-from typing import Any, Union, Callable, Optional, Literal
+from collections import UserDict
+from typing import Any, Callable, Optional, Literal, Mapping
 
 from bricks.utils import pandora
 
@@ -77,7 +78,7 @@ class RenderNode:
             return value.render(base)
         return value
 
-    def render(self, base: dict = None):
+    def render(self, base: (dict, Mapping, UserDict) = None):
         # 创建一个新的实例，避免修改原始实例
         base = base or {}
         node = copy.deepcopy(self)
@@ -120,50 +121,3 @@ class LinkNode:
 
     def __str__(self):
         return f'LinkNode({self.root})'
-
-
-@dataclasses.dataclass
-class Post:
-    value: Any = None
-    prev: "Post" = None
-
-
-@dataclasses.dataclass
-class SignPost:
-    """
-    流程游标
-
-    """
-
-    cursor: Union[Post, int] = Post(0)
-    download: Union[Post, int] = Post(0)
-    parse: Union[Post, int] = Post(0)
-    pipeline: Union[Post, int] = Post(0)
-    action: Union[Post, str] = Post("")
-
-    def __setattr__(self, key, value):
-        if not isinstance(value, Post):
-            value = Post(value)
-            value.prev = getattr(self, key, Post())
-
-        return super().__setattr__(key, value)
-
-    def rollback(self, names: list = None):
-
-        names = names or [field.name for field in dataclasses.fields(self)]
-
-        for name in names:
-            v = getattr(self, name, None)
-            if v is None:
-                continue
-            else:
-                setattr(self, name, v.prev)
-
-    def copy(self):
-        return SignPost(
-            cursor=copy.deepcopy(self.cursor),
-            download=copy.deepcopy(self.download),
-            parse=copy.deepcopy(self.parse),
-            pipeline=copy.deepcopy(self.pipeline),
-            action=copy.deepcopy(self.action)
-        )
