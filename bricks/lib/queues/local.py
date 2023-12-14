@@ -81,9 +81,13 @@ class LocalQueue(TaskQueue):
         return True
 
     def replace(self, name: str, old, new, **kwargs):
-        kwargs.setdefault('qtypes', 'current')
-        self.remove(name, *pandora.iterable(old), **kwargs)
-        return self.put(name, *pandora.iterable(new), **kwargs)
+        names = [self.name2key(name, qtype) for qtype in pandora.iterable(kwargs.setdefault('qtypes', 'current'))]
+        count = 0
+        for name in pandora.iterable(names):
+            if self._container[name].remove(old):
+                count += self.put(name, new, **kwargs)
+
+        return count
 
     def remove(self, name: str, *values, **kwargs):
         backup = kwargs.pop('backup', None)
