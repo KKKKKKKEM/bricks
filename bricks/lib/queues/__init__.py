@@ -10,7 +10,7 @@ import copy
 import functools
 import json
 import time
-from typing import Optional, Union
+from collections import UserDict
 
 from loguru import logger
 
@@ -18,38 +18,47 @@ from bricks.core import genesis
 from bricks.utils import pandora
 
 
-class Item(dict):
+class Item(UserDict):
 
-    def __init__(self, __dict: Optional[Union[dict, str]] = ..., **kwargs) -> None:
-        if isinstance(__dict, self.__class__):
-            self.fingerprint = __dict.fingerprint
+    def __init__(self, data=None, **kwargs) -> None:
+        if data is None:
+            data = {}
 
-        elif isinstance(__dict, str):
-            self.fingerprint = __dict
-            __dict = pandora.json_or_eval(__dict)
+        if isinstance(data, self.__class__):
+            self.fingerprint = data.fingerprint
+            data = data.data
 
-        elif isinstance(__dict, dict):
-            self.fingerprint = copy.deepcopy(__dict)
-            __dict = copy.deepcopy(__dict)
+        elif isinstance(data, str):
+            self.fingerprint = data
+            data = TaskQueue.str2py(data)[0]
+
+        elif isinstance(data, dict):
+            self.fingerprint = data
+            data = copy.deepcopy(data)
 
         else:
-            self.fingerprint = None
-        try:
-            super().__init__(__dict, **kwargs)
-        except:  # noqa
-            self.fingerprint = __dict
+            self.fingerprint = ""
 
-    fingerprint = property(
-        fget=lambda self: getattr(self, "_fingerprint", None) or self,
-        fset=lambda self, v: setattr(self, "_fingerprint", v),
-        fdel=lambda self: setattr(self, "_fingerprint", None)
-    )
+        super().__init__({**data, **kwargs})
 
-    def __str__(self):
-        if self:
-            return repr(self)
-        else:
-            return repr(self.fingerprint)
+    @property
+    def fingerprint(self) -> str:
+        return getattr(self, "_fingerprint", "") or self
+
+    @fingerprint.setter
+    def fingerprint(self, value):
+
+        if isinstance(value, Item):
+            value = value.fingerprint
+
+        elif not isinstance(value, str):
+            value = TaskQueue.py2str(value)[0]
+
+        setattr(self, "_fingerprint", value)
+
+    @fingerprint.deleter
+    def fingerprint(self):
+        setattr(self, "_fingerprint", "")
 
 
 class TaskQueue(metaclass=genesis.MetaClass):
@@ -77,12 +86,16 @@ class TaskQueue(metaclass=genesis.MetaClass):
     )
 
     @staticmethod
-    def _to_str(*args):
+    def py2str(*args):
         return [
             json.dumps(value, default=str, sort_keys=True, ensure_ascii=False)
             if not isinstance(value, (bytes, str, int, float)) else value
             for value in args
         ]
+
+    @staticmethod
+    def str2py(*args: str):
+        return [pandora.json_or_eval(value) if isinstance(value, str) else value for value in args]
 
     def continue_(self, name: str, maxsize=None, interval=1, **kwargs):
         """
@@ -184,8 +197,11 @@ class TaskQueue(metaclass=genesis.MetaClass):
 
     def _when_replace(self, func):  # noqa
         def inner(name, old, new, **kwargs):
-            if isinstance(old, Item): old = old.fingerprint
-            if isinstance(new, Item): new = new.fingerprint
+            if isinstance(old, Item):
+                old = self.py2str(old.fingerprint)[0]
+
+            if isinstance(new, Item):
+                new = self.py2str(new.fingerprint)[0]
 
             return func(name, old, new, **kwargs)
 
@@ -217,14 +233,8 @@ class TaskQueue(metaclass=genesis.MetaClass):
             ret = func(*args, **kwargs)
             if ret in [None, []]:
                 return None
-
-            elif isinstance(ret, list) and len(ret) != 1:
-                return [Item(i) for i in ret]
-
             else:
-                if isinstance(ret, list):
-                    ret = ret[0]
-                return Item(ret)
+                return [Item(i) for i in pandora.iterable(ret)]
 
         return inner
 
@@ -241,7 +251,7 @@ class TaskQueue(metaclass=genesis.MetaClass):
 
     def _when_put(self, func):  # noqa
         def inner(name, *values, **kwargs):
-            return func(name, *[i.fingerprint if isinstance(i, Item) else i for i in values], **kwargs)
+            return func(name, *self.py2str(*[i.fingerprint if isinstance(i, Item) else i for i in values]), **kwargs)
 
         return inner
 
@@ -258,7 +268,7 @@ class TaskQueue(metaclass=genesis.MetaClass):
 
     def _when_remove(self, func):  # noqa
         def inner(name, *values, **kwargs):
-            return func(name, *[i.fingerprint if isinstance(i, Item) else i for i in values], **kwargs)
+            return func(name, *self.py2str(*[i.fingerprint if isinstance(i, Item) else i for i in values]), **kwargs)
 
         return inner
 
