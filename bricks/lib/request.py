@@ -205,6 +205,13 @@ class Request:
             cookies=cookie_dict,
         )
 
+    def put_options(self, key, value):
+        self.options[key] = value
+
+    def get_options(self, key, default=None, action="get"):
+        func = getattr(self.options, action)
+        return func(key, default)
+
     def __str__(self):
         return f'<Request [{self.real_url}]>'
 
