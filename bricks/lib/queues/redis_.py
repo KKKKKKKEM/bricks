@@ -154,43 +154,58 @@ for index = 1, #KEYS, 1 do
 
     if key_type == "set" then
         -- 删除
-        redis.call("srem", KEYS[index], unpack(need_remove))
-        -- 添加
-        local r = redis.call("sadd", KEYS[index], unpack(need_add))
-        ret = ret + r
+        local is_replace = redis.call("srem", KEYS[index], unpack(need_remove))
+        
+        if (is_replace == 1) then
+            -- 添加
+            local r = redis.call("sadd", KEYS[index], unpack(need_add))
+            ret = ret + r
+        end
 
 
     elseif key_type == "zset" then
         -- 删除
-        redis.call("zrem", KEYS[index], unpack(need_remove))
-
-        -- 计算初试分数
-        local v = redis.call("zrevrangebyscore", KEYS[index], "+inf", "-inf", "LIMIT", 0, 1, "withscores")[2]
-        if v == nil then v = 0 end
-        local values = {}
-
-        for i = 1, #need_add, 1 do
-            table.insert(values, v + i+1)
-            table.insert(values, need_add[i])
+        local is_replace = redis.call("zrem", KEYS[index], unpack(need_remove))
+        if (is_replace == 1) then
+            -- 计算初试分数
+            local v = redis.call("zrevrangebyscore", KEYS[index], "+inf", "-inf", "LIMIT", 0, 1, "withscores")[2]
+            if v == nil then v = 0 end
+            local values = {}
+    
+            for i = 1, #need_add, 1 do
+                table.insert(values, v + i+1)
+                table.insert(values, need_add[i])
+            end
+    
+            -- 添加
+            local r = redis.call("zadd", KEYS[index], unpack(values))
+            ret = ret + r
+        
         end
+        
 
-        -- 添加
-        local r = redis.call("zadd", KEYS[index], unpack(values))
-        ret = ret + r
 
     elseif key_type == "list" then
         -- 删除
-        redis.call("lrem", KEYS[index], 0, unpack(need_remove))
-        -- 添加
-        local r = redis.call("lpush", KEYS[index], unpack(need_add))
-        ret = ret + r
+        local is_replace = redis.call("lrem", KEYS[index], 0, unpack(need_remove))
+        if is_replace then 
+            -- 添加
+            local r = redis.call("lpush", KEYS[index], unpack(need_add))
+            ret = ret + r 
+        
+        end
+        
+
 
     else
         -- 删除
-        redis.call("srem", KEYS[index], unpack(need_remove))
-        -- 添加
-        local r = redis.call("sadd", KEYS[index], unpack(need_add))
-        ret = ret + r
+        local is_replace = redis.call("srem", KEYS[index], unpack(need_remove))
+        
+        if is_replace then
+             -- 添加
+            local r = redis.call("sadd", KEYS[index], unpack(need_add))
+            ret = ret + r       
+        end
 
     end
 
@@ -208,10 +223,10 @@ redis.call("select", KEYS[1])
 local key_type = redis.call("TYPE", KEYS[2]).ok
 if key_type == "zset" then
     local success = redis.call("zrem", KEYS[2], unpack(ARGV))
-    if KEYS[3] ~= '' then
+    if success and KEYS[3] ~= '' then
         local v = redis.call("zrevrangebyscore", KEYS[2], "+inf", "-inf", "LIMIT", 0, 1, "withscores")[2]
         if v == nil then v = 0 end
-        local values = {{}}
+        local values = {}
 
         for i = 1, #ARGV, 1 do
             table.insert(values, v + i+1)
@@ -226,7 +241,7 @@ if key_type == "zset" then
 
 else
     local success = redis.call("srem", KEYS[2], unpack(ARGV))
-    if KEYS[3] ~= '' then
+    if success and KEYS[3] ~= '' then
         redis.call("sadd", KEYS[3], unpack(ARGV))
     end
 
@@ -411,52 +426,39 @@ end
             end
 
             local queue_size = get_queue_info(current_key).size + get_queue_info(failure_key).size + get_queue_info(temp_key).size
-            if queue_size > 0 then
-                -- 1. 存在种子 
-                local is_record_key_exists = redis.call("EXISTS", record_key)
-                if is_record_key_exists == 1 then
-                    -- 1.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 + record.status = 1 -> true
-                    local identifier = redis.call("HGET", record_key, "identifier")
-                    local status = redis.call("HGET", record_key, "status")
-                    if not identifier or (machine_id == identifier and status == "1") then
-                        redis.call("HSET", record_key, "identifier", machine_id)
-                        return true
-                    else
-                        return "非初始化机器/初始化状态不为 0"
-                    end
-                else
-                    -- 1.2 不存在 record -> false
-                    return "存在未消耗完毕的种子"
-                end
-
-            else
-                -- 2. 不存在种子
-                -- 2.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 -> true
-                local is_record_key_exists = redis.call("EXISTS", record_key)
-                if is_record_key_exists == 1 then
-                    -- 1.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 -> 判断 record.status
-                    local identifier = redis.call("HGET", record_key, "identifier")
-                    local status = redis.call("HGET", record_key, "status")
-                    if not identifier or machine_id == identifier then
-                        -- record.status == 0, 表示曾经跑过 -> 重新初始化
-                        if status == "0" then
-                            redis.call("DEL", record_key)
-                        end
-
-                        redis.call("HSET", record_key, "identifier", machine_id)
-                        return true
-                    else
-                        return "非初始化机器/初始化状态不为 0"
-                    end
-                else
-                    -- 不存在 record -> true
+            local is_record_key_exists = redis.call("EXISTS", record_key)
+            local status = '0'
+            local identifier = ''
+            if is_record_key_exists == 1 then
+                status = redis.call("HGET", record_key, "status")
+                identifier = redis.call("HGET", record_key, "identifier")
+            end
+            
+            
+            if status == '1' then
+                -- 没投完
+                
+                if not identifier or identifier == machine_id then
+                    -- 不存在 identifier / identifier == machine_id -> 继续投放
                     redis.call("HSET", record_key, "identifier", machine_id)
                     return true
+                else
+                    -- 存在 identifier / identifier != machine_id
+                    return "非初始化机器, 初始化机器 ID 为" .. identifier
                 end
-
-
+            else
+                -- 投完了
+                
+                if queue_size > 0 then
+                    -- 没消费完
+                    return "存在种子没有消费完毕"
+                else
+                    -- 消费完了 -> 重新投放
+                    redis.call("DEL", record_key)
+                    redis.call("HSET", record_key, "identifier", machine_id)
+                    return true
+                end           
             end
-
             """),
             "release_init": self.redis_db.register_script("""
             redis.replicate_commands()
@@ -526,7 +528,7 @@ end
             return 0
 
         name = name['current'] if isinstance(name, dict) else name
-        values = self._to_str(*values)
+        values = self.py2str(*values)
 
         if db_num is None:
             return self.redis_db.sadd(name, *values)
@@ -550,11 +552,14 @@ end
             return
 
         db_num = kwargs.get('db_num', self.database)
-        name = self.name2key(name, kwargs.pop('qtypes', "current"))
+        names = [
+            self.name2key(name, qtype) for qtype in
+            pandora.iterable(kwargs.pop('qtypes', ["current", "temp", "failure"]))
+        ]
 
         db_num = self.database if db_num is None else db_num
-        keys = [name]
-        args = [db_num, *[j for i in zip(pandora.iterable(old), pandora.iterable(new)) for j in self._to_str(*i)]]
+        keys = names
+        args = [db_num, *[j for i in zip(pandora.iterable(old), pandora.iterable(new)) for j in self.py2str(*i)]]
         return self.scripts["replace"](keys=keys, args=args)
 
     def remove(self, name, *values, **kwargs):
@@ -570,7 +575,7 @@ end
 
         name = self.name2key(name, kwargs.pop('qtypes', "temp"))
         keys = [kwargs.pop('db_num', self.database), name, backup]
-        args = self._to_str(*values)
+        args = self.py2str(*values)
         return self.scripts["remove"](keys=keys, args=args)
 
     def clear(self, *names, qtypes=('current', 'temp', "lock", "record", "failure"), **kwargs):
@@ -643,9 +648,14 @@ end
         """
 
         # 告诉其他机器开始上报状态
-        self.redis_db.publish(f'{name}-subscribe', "collect-status")
-        # 等在上报完成
-        time.sleep(timeout)
+        self.publish(
+            chanel=f'{name}-subscribe',
+            msg={
+                "action": "collect-status",
+                "key": self.name2key(name, "report")
+            },
+            timeout=timeout
+        )
 
         db_num = kwargs.pop('db_num', self.database)
         keys = [self.name2key(name, i) for i in ('current', 'temp', 'failure', 'status', 'report')]
@@ -656,6 +666,12 @@ end
 
         ret = self.scripts["smart_reverse"](keys=keys, args=args)
         return ret == 1
+
+    def publish(self, chanel: str, msg: dict, timeout=0):
+        # 告诉其他机器开始上报状态
+        self.redis_db.publish(chanel, json.dumps(msg))
+        # 等待回复
+        timeout and time.sleep(timeout)
 
     def is_empty(self, name, threshold=0, **kwargs):
         """
@@ -682,21 +698,26 @@ end
 
     def command(self, name: str, order: dict):
 
-        def run_subscribe(channel, target):
+        def run_subscribe(chanel, target):
             """
-            订阅
+            订阅消息
             """
 
             def main(message):
-                # 上报状态
-                if message['data'] == "collect-status":
-                    self.redis_db.hset(
-                        self.name2key(name, 'report'),
-                        mapping={state.MACHINE_ID: target.dispatcher.running}
-                    )
+                msg: dict = json.loads(message['data'])
+                _action = msg['action']
+                recv: str = msg.get('recv', state.MACHINE_ID)
+                if recv != state.MACHINE_ID:
+                    return
+
+                    # 上报状态
+                if _action == "collect-status":
+                    key = msg["key"]
+                    self.redis_db.hset(key, mapping={state.MACHINE_ID: target.dispatcher.running})
+                    self.redis_db.expire(key, 5)
 
             pubsub = self.redis_db.pubsub()
-            pubsub.subscribe(**{channel: main})
+            pubsub.subscribe(**{chanel: main})
             pubsub.run_in_thread(sleep_time=0.001, daemon=True)
 
         def get_permission():
