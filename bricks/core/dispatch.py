@@ -108,7 +108,7 @@ class Worker(threading.Thread):
     def awake(self) -> None:
         self._awaken.set()
 
-    def _trace(self, frame, event, arg):  # noqa
+    def _trace(self, frame, event, arg): # noqa
         if event == 'call':
             return self._localtrace
         else:
@@ -143,7 +143,7 @@ class Dispatcher:
         self.tasks: queue.Queue
         self.workers: Dict[str, Worker]
 
-        self._remain_workers: threading.Semaphore
+        self._remain_workers: queue.Queue
         self._running_tasks: threading.Semaphore
         self._active_tasks: threading.Semaphore
         self._shutdown: asyncio.Event
@@ -156,7 +156,8 @@ class Dispatcher:
         self.loop = asyncio.get_event_loop()
         self.tasks = queue.Queue()
         self.workers: Dict[str, Worker] = {}
-        self._remain_workers = threading.Semaphore(self.max_workers)
+        self._remain_workers = queue.Queue()
+        for i in range(self.max_workers): self._remain_workers.put(f"Worker-{i}")
         self._running_tasks = threading.Semaphore(self.max_workers)
         self._active_tasks = threading.Semaphore(self.max_workers)
         self._shutdown = asyncio.Event()
@@ -172,9 +173,8 @@ class Dispatcher:
         :return:
         """
         for _ in range(size):
-            self._remain_workers.acquire()
-            iden = self.max_workers - self._remain_workers._value  # noqa
-            worker = Worker(self, name=f"Worker-{iden}", trace=self.trace)
+            ident = self._remain_workers.get()
+            worker = Worker(self, name=ident, trace=self.trace)
             self.workers[worker.name] = worker
             worker.start()
 
@@ -187,7 +187,7 @@ class Dispatcher:
         """
         for ident in idents:
             worker = self.workers.pop(ident, None)
-            worker and self._remain_workers.release()
+            worker and self._remain_workers.put(worker.name)
             worker and worker.stop()
 
     def pause_worker(self, *idents: str):
@@ -289,7 +289,7 @@ class Dispatcher:
         return task
 
     def adjust_workers(self):
-        remain_workers = self._remain_workers._value  # noqa
+        remain_workers = self._remain_workers.qsize()
         remain_tasks = self.tasks.qsize()
         if remain_workers > 0 and remain_tasks > 0:
             self.create_worker(min(remain_workers, remain_tasks))
@@ -347,7 +347,7 @@ class Dispatcher:
 
     @property
     def running(self):
-        return self.max_workers - self._remain_workers._value + self.tasks.qsize()  # noqa
+        return self.max_workers - self._remain_workers.qsize() + self.tasks.qsize()
 
     def run(self):
         async def main():
