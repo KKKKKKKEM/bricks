@@ -14,7 +14,7 @@ import os
 import re
 import subprocess
 import sys
-from typing import Any, List, Union
+from typing import Any, List, Union, Mapping
 
 from loguru import logger
 
@@ -183,7 +183,12 @@ def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, name
     return prepared(func=func, args=new_args, kwargs=new_kwargs)
 
 
-def iterable(_object: Any, enforce=(dict, str, bytes), exclude=(), convert_null=True) -> List[Any]:
+def iterable(
+        _object: Any,
+        enforce=(dict, str, bytes, collections.UserDict, Mapping),
+        exclude=(),
+        convert_null=True
+) -> List[Any]:
     """
     用列表将 `exclude` 类型中的其他类型包装起来
 
