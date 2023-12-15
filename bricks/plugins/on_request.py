@@ -4,14 +4,15 @@
 # @Desc    : 针对于 on request 的插件
 
 import threading
+import time
 from typing import Callable
 
 from loguru import logger
 
 from bricks.core import signals
-from bricks.lib import proxies
 from bricks.core.context import Context
-from bricks.utils import pandora
+from bricks.lib import proxies
+from bricks.utils import pandora, codes
 from bricks.utils.fake import user_agent
 
 
@@ -126,3 +127,32 @@ class After:
         response = context.obtain("response")
         if not response.ok:
             raise signals.Retry
+
+    @classmethod
+    def conditional_scripts(cls):
+        """
+        插入条件脚本
+
+        :return:
+        """
+        context: Context = Context.get_context()
+        request = context.obtain("request")
+        response = context.obtain("response")
+        scripts: dict = request.get_options("$scripts") or {}
+        if not scripts:
+            return
+
+        obj = codes.Genertor(
+            flows=[
+                (codes.Type.condition, scripts),
+            ]
+        )
+        obj.run({
+            **globals(),
+            "context": context,
+            "time": time,
+            "signals": signals,
+            "request": request,
+            "response": response,
+            "logger": logger
+        })
