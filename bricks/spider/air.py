@@ -85,7 +85,7 @@ class Context(Flow):
         self.seeds.fingerprint = new
         return ret
 
-    def submit(self, obj: Union[Item, dict], call_later=False, attrs: dict = None) -> List["Context"]:
+    def submit(self, *obj: Union[Item, dict], call_later=False, attrs: dict = None) -> List["Context"]:
         """
         专门为新请求分支封装的方法, 会自动将请求放入队列
         传入的对象可以是新的种子 / 新的 request
@@ -811,6 +811,7 @@ class Spider(Pangu):
         self.use(
             state.const.AFTER_REQUEST,
             {"func": on_request.After.show_response},
+            {"func": on_request.After.conditional_scripts},
             {"func": on_request.After.is_success}
         )
 
