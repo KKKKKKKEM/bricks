@@ -2,7 +2,7 @@
 # @Time    : 2023-12-10 11:52
 # @Author  : Kem
 # @Desc    :
-from typing import List
+from typing import List, Tuple, Any
 
 from loguru import logger
 
@@ -24,15 +24,24 @@ def is_success(match: List[str], pre: List[str] = None, post: List[str] = None, 
     flow = flow or {}
     flow.setdefault("not ISPASS", "raise signals.Retry")
     context: Context = Context.get_context()
+    request = context.obtain("request")
+    response = context.obtain("response")
     obj = codes.Genertor(
         flows=[
             (codes.Type.code, pre),
             (codes.Type.define, ("ISPASS", match)),
             (codes.Type.code, post),
-            (codes.Type.condition, flow),
+            (codes.Type.choice, flow),
         ]
     )
-    obj.run({**globals(), "context": context, "signals": signals})
+    obj.run({
+        **globals(),
+        "context": context,
+        "signals": signals,
+        "request": request,
+        "response": response,
+        "logger": logger
+    })
 
 
 def turn_page(
@@ -60,6 +69,9 @@ def turn_page(
     """
     flow = flow or {}
     context: Context = Context.get_context()
+    request = context.obtain("request")
+    response = context.obtain("response")
+    items = context.obtain("items")
     flow.setdefault("ISPASS", [
         f'context.submit(NEXT_SEEDS, call_later={call_later})',
         f'logger.debug(f"[开始翻页] 当前页面: {{context.seeds[{key!r}]}}, 种子: {{context.seeds}}")',
@@ -75,26 +87,37 @@ def turn_page(
             (codes.Type.define, ("ISPASS", match)),
             (codes.Type.define, ("NEXT_SEEDS", f'{{**context.seeds, "page": context.seeds["{key}"] {action}}}')),
             (codes.Type.code, post),
-            (codes.Type.condition, flow),
+            (codes.Type.choice, flow),
             (codes.Type.code, f'{success} and context.success()'),
 
         ]
     )
-    obj.run({**globals(), "context": context, "signals": signals, "logger": logger})
+    obj.run({
+        **globals(),
+        "context": context,
+        "signals": signals,
+        "request": request,
+        "response": response,
+        "items": items,
+        "logger": logger
+    })
 
 
-def inject(flows: List[str]):
+def inject(flows: List[Tuple[codes.Type, Any]]):
     """
     注入 flows
 
     :param flows: 里面写片段式代码, 注意缩进
     :return:
     """
-    namespace = {**globals()}
-    namespace.update({"signals": signals, "logger": logger, "Context": Context})
+
     obj = codes.Genertor(
-        flows=[
-            (codes.Type.code, flow) for flow in flows
-        ]
+        flows=flows
     )
-    obj.run(namespace)
+    obj.run({
+        **globals(),
+        "Context": Context,
+        "context": Context.get_context(),
+        "signals": signals,
+        "logger": logger
+    })
