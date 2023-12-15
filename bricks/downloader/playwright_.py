@@ -97,18 +97,15 @@ class Downloader(AbstractDownloader):
 
         res = Response.make_response(request=request)
 
-        # 获取下载器配置
-        extra: dict = request.options
-
         # 获取驱动
-        driver: Literal["chromium", "firefox", "webkit"] = extra.get('driver') or self.driver
+        driver: Literal["chromium", "firefox", "webkit"] = request.get_options('driver') or self.driver
 
         # 获取浏览器 launch 配置
-        browser_options: dict = extra.setdefault('browser', {})
-        context_options: dict = extra.setdefault('context', {})
+        browser_options: dict = request.get_options('browser', {})
+        context_options: dict = request.get_options('context', {})
         browser_options.setdefault("headless", self.headless)
 
-        interceptors: dict = extra.setdefault('interceptors', {})
+        interceptors: dict = request.get_options('interceptors', {})
 
         # 可用拦截器
         request_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get('request') or []
@@ -123,7 +120,7 @@ class Downloader(AbstractDownloader):
             options = {
                 "timeout": timeout,
                 "url": request.real_url,
-                "wait_until": extra.get("wait_until") or "networkidle",
+                "wait_until": request.get_options("wait_until") or "networkidle",
                 "referer": request.headers.get("referer") or None,
 
             }
@@ -189,7 +186,7 @@ class Downloader(AbstractDownloader):
                     }
                 )
 
-            scripts = extra.setdefault("scripts", [])
+            scripts = request.get_options("scripts", [])
             # 为 context 注入脚本
             await self.injection_scripts(context, scripts=scripts)
 
