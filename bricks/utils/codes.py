@@ -3,15 +3,17 @@
 # @Author  : Kem
 # @Desc    : 动态 code 生成
 import dataclasses
+import enum
 from typing import List, Tuple, Any, Union
 
 from bricks.utils.pandora import iterable
 
 
-class Type:
-    define: str = "define"
-    condition: str = "condition"
-    code: str = "code"
+class Type(enum.StrEnum):
+    define: str = "define"  # 变量定义
+    choice: str = "choice"  # 只选择一个
+    condition: str = "condition"  # 只要满足条件都会走
+    code: str = "code"  # 直接拼接的代码
 
 
 @dataclasses.dataclass
@@ -25,16 +27,23 @@ class Genertor:
             if ctype == Type.code:
                 value: Union[str, list]
                 value and tpls.append(";".join(iterable(value)))
+
             elif ctype == Type.define:
                 value: Union[tuple, list]
                 value and tpls.append(f"{value[0]} = " + (" and ".join(iterable(value[1])) or "1"))
-            elif ctype == Type.condition:
+
+            elif ctype == Type.choice:
                 value: dict = value or {}
                 for i, (cond, action) in enumerate(value.items()):
                     if i == 0:
                         tpls.append(f"if {cond}:\n    {';'.join(iterable(action)) or 'pass'}")
                     else:
                         tpls.append(f"elif {cond}:\n    {';'.join(iterable(action)) or 'pass'}")
+
+            elif ctype == Type.condition:
+                value: dict = value or {}
+                for cond, action in value.items():
+                    tpls.append(f"if {cond}:\n    {';'.join(iterable(action)) or 'pass'}")
 
             self.code = "\n".join(tpls)
 
