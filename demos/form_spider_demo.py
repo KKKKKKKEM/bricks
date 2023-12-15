@@ -36,6 +36,13 @@ class MySpider(form.Spider):
                         "User-Agent": "Mozilla/5.0 (Linux; Android 10; Redmi K30 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Mobile Safari/537.36",
                         "Content-Type": "application/json;charset=UTF-8",
                     },
+                    options={
+                        "$scripts": {
+                            "response.ok and request.retry <3": [
+                                "raise signals.Retry",
+                            ]
+                        }
+                    }
                 ),
                 form.Task(
                     func=scripts.is_success,
@@ -107,10 +114,8 @@ class MySpider(form.Spider):
 
 
 if __name__ == '__main__':
-    from bricks.downloader import playwright_
-
     spider = MySpider(
-        downloader=playwright_.Downloader(),
+        # downloader=playwright_.Downloader(),
         # task_queue=RedisQueue()
     )
     # 使用调度器运行
