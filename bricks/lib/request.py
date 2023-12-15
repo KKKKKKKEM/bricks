@@ -205,10 +205,11 @@ class Request:
             cookies=cookie_dict,
         )
 
-    def put_options(self, key, value):
-        self.options[key] = value
+    def put_options(self, key: str, value, action="update"):
+        func = getattr(self.options, action)
+        return func(**{key: value})
 
-    def get_options(self, key, default=None, action="get"):
+    def get_options(self, key: str, default=None, action="get"):
         func = getattr(self.options, action)
         return func(key, default)
 
