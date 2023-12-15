@@ -9,7 +9,7 @@ from typing import List, Tuple, Any, Union
 from bricks.utils.pandora import iterable
 
 
-class Type(enum.StrEnum):
+class Type(str, enum.Enum):
     define: str = "define"  # 变量定义
     choice: str = "choice"  # 只选择一个
     condition: str = "condition"  # 只要满足条件都会走
@@ -18,7 +18,7 @@ class Type(enum.StrEnum):
 
 @dataclasses.dataclass
 class Genertor:
-    flows: List[Tuple[str, Any]]
+    flows: List[Tuple[Type, Any]]
     code: str = ""
 
     def make(self):

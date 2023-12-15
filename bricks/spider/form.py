@@ -32,8 +32,16 @@ class Context(air.Context):
         self.seeds["$signpost"] = bookmark
 
     def submit(self, *obj: Union[Item, dict], call_later=False, attrs: dict = None) -> List["Context"]:
-        signpost = self.seeds.get('$signpost', 0)
+        signpost = self.seeds.get('$bookmark', 0)
         return super().submit(*[{**o, "$signpost": signpost} for o in obj], call_later=call_later, attrs=attrs)
+
+    def get_node(self, signpost=None):
+        if signpost is None:
+            cursor = max(0, self.seeds.setdefault('$signpost', 0) - 1)
+        else:
+            cursor = signpost
+
+        return self.target.config.spider[cursor]
 
 
 class Task(_events.Task, RenderNode):
@@ -151,7 +159,7 @@ class Spider(air.Spider):
             context.seeds.setdefault('$bookmark', 0)
 
             try:
-                node: Union[Download, Task, Parse, Pipeline] = self.config.spider[signpost]
+                node: Union[Download, Task, Parse, Pipeline] = context.get_node(signpost)
             except IndexError:
                 context.flow({"next": None})
 
@@ -167,19 +175,16 @@ class Spider(air.Spider):
                     else:
                         # 这是新的请求
                         context.seeds['$bookmark'] = signpost
-                        context.node = node
                         node.archive and context.replace({**context.seeds, "$signpost": signpost})
                         context.flow({"next": self.make_request})
                     raise signals.Switch
 
                 # Request -> Response
                 elif isinstance(node, Parse):
-                    context.node = node
                     context.flow({"next": self.on_response})
                     raise signals.Switch
 
                 elif isinstance(node, Pipeline):
-                    context.node = node
                     context.flow({"next": self.on_pipeline})
                     raise signals.Switch
 
@@ -250,14 +255,14 @@ class Spider(air.Spider):
                 yield seeds or []
 
     def make_request(self, context: Context) -> Request:
-        node: Download = context.obtain("node")
+        node: Download = context.get_node()
         s = node.render(context.seeds)
         request = s.to_request()
         context.flow({"request": request})
         return request
 
     def parse(self, context: Context):
-        node: Parse = context.obtain("node")
+        node: Parse = context.get_node()
         engine = node.func
         args = node.args or []
         kwargs = node.kwargs or {}
@@ -325,7 +330,7 @@ class Spider(air.Spider):
             yield items or []
 
     def item_pipeline(self, context: Context):
-        node: Pipeline = context.obtain("node")
+        node: Pipeline = context.get_node()
         engine = node.func
         args = node.args or []
         kwargs = node.kwargs or {}
