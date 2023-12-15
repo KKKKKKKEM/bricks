@@ -554,6 +554,8 @@ class Spider(Pangu):
             else:
                 context.clear_proxy()
 
+            context.flow()
+
         else:
             msg = f'[超过重试次数] {f"SEEDS: {context.seeds}, " if context.seeds else ""} URL: {request.real_url}'
             logger.warning(msg)
@@ -585,7 +587,6 @@ class Spider(Pangu):
                 }
             )
             ret = prepared.func(*prepared.args, **prepared.kwargs)
-            context.flow()
             return ret
 
         return wrapper
@@ -608,6 +609,7 @@ class Spider(Pangu):
         else:
             response: Response = self.downloader.fetch(context.request)
 
+        context.flow({"response": response})
         return response
 
     def _when_on_request(self, raw_method):  # noqa
@@ -617,7 +619,7 @@ class Spider(Pangu):
             events.EventManager.invoke(context)
             context.form = state.const.ON_REQUEST
             self.number_of_total_requests.increment()
-            prepared = pandora.prepare(
+            pandora.invoke(
                 func=raw_method,
                 args=args,
                 kwargs=kwargs,
@@ -632,13 +634,8 @@ class Spider(Pangu):
                     "request": context.request
                 }
             )
-            response: Response = prepared.func(*prepared.args, **prepared.kwargs)
-
             context.form = state.const.AFTER_REQUEST
-            context.response = response
-
             events.EventManager.invoke(context)
-            context.flow()
 
         return wrapper
 
@@ -680,13 +677,14 @@ class Spider(Pangu):
         else:
             items = prepared.func(*prepared.args, **prepared.kwargs)
 
+        context.flow({"items": items})
         return items
 
     def _when_on_response(self, raw_method):  # noqa
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = state.const.ON_PARSE
-            prepared = pandora.prepare(
+            pandora.invoke(
                 func=raw_method,
                 args=args,
                 kwargs=kwargs,
@@ -703,17 +701,6 @@ class Spider(Pangu):
                     "seeds": context.seeds,
                 }
             )
-            products = prepared.func(*prepared.args, **prepared.kwargs)
-            if not inspect.isgenerator(products):
-                products = [products]
-
-            for index, product in enumerate(products):
-
-                if index == 0:
-                    context.flow({"items": product})
-                else:
-                    # 有多个 items, 直接开一个新 branch
-                    context.branch({"items": product})
 
         return wrapper
 
@@ -757,6 +744,9 @@ class Spider(Pangu):
         else:
             prepared.func(*prepared.args, **prepared.kwargs)
 
+        context.flow()
+
+
     def _when_on_pipeline(self, raw_method):  # noqa
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
@@ -785,7 +775,6 @@ class Spider(Pangu):
             prepared.func(*prepared.args, **prepared.kwargs)
             context.form = state.const.AFTER_PIPELINE
             events.EventManager.invoke(context)
-            context.flow()
 
         return wrapper
 
