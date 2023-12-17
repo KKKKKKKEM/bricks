@@ -98,10 +98,11 @@ def require(package_spec: str) -> str:
         return importlib_metadata.version(package)
 
 
-def invoke(func, args=None, kwargs: dict = None, annotations: dict = None, namespace: dict = None):
+def invoke(func, args=None, kwargs: dict = None, annotations: dict = None, namespace: dict = None, ignore: list = None):
     """
     调用函数, 自动修正参数
 
+    :param ignore:
     :param func:
     :param args:
     :param kwargs:
@@ -109,11 +110,12 @@ def invoke(func, args=None, kwargs: dict = None, annotations: dict = None, names
     :param namespace:
     :return:
     """
-    prepared = prepare(func, args, kwargs, annotations, namespace)
+    prepared = prepare(func, args, kwargs, annotations, namespace, ignore)
     return prepared.func(*prepared.args, **prepared.kwargs)
 
 
-def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, namespace: dict = None):
+def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, namespace: dict = None,
+            ignore: list = None):
     assert callable(func), ValueError(f"func must be callable, but got {type(func)}")
     prepared = collections.namedtuple("prepared", ["func", "args", "kwargs"])
 
@@ -124,7 +126,7 @@ def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, name
     new_kwargs = {}
     annotations = annotations or {}
     namespace = namespace or {}
-
+    ignore = ignore or []
     try:
         parameters = inspect.signature(func).parameters
     except:  # noqa
@@ -134,7 +136,9 @@ def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, name
 
     index = 0
 
-    for name, param in parameters.items():
+    for i, (name, param) in enumerate(parameters.items()):
+        if i in ignore:
+            continue
 
         if param.kind == inspect.Parameter.VAR_POSITIONAL:
             new_args.extend(args[index:])
