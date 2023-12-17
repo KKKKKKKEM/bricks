@@ -33,6 +33,9 @@ class Context(air.Context):
 
     def submit(self, *obj: Union[Item, dict], call_later=False, attrs: dict = None) -> List["Context"]:
         signpost = self.seeds.get('$bookmark', 0)
+        attrs = attrs or {}
+        if not call_later:
+            attrs.setdefault('next', self.target.on_flow)
         return super().submit(*[{**o, "$signpost": signpost} for o in obj], call_later=call_later, attrs=attrs)
 
     def get_node(self, signpost=None):
