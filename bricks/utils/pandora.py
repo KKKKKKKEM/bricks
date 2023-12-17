@@ -336,6 +336,19 @@ def clean_rows(*rows: dict, **layout):
         return list(rows)
 
 
+class Method:
+    def __init__(self, func):
+        self.func = func
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            # 当作为类方法调用
+            return lambda *args, **kwargs: self.func(objtype, *args, **kwargs)
+        else:
+            # 当作为实例方法调用
+            return lambda *args, **kwargs: self.func(obj, *args, **kwargs)
+
+
 if __name__ == '__main__':
     # print(require("pandas"))
     my_data = [{"id": i, "name": i} for i in range(100)]
