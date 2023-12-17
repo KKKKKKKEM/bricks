@@ -746,7 +746,6 @@ class Spider(Pangu):
 
         context.flow()
 
-
     def _when_on_pipeline(self, raw_method):  # noqa
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
@@ -804,8 +803,8 @@ class Spider(Pangu):
             {"func": on_request.After.is_success}
         )
 
-    @classmethod
-    def survey(cls, *seeds: dict, attrs: dict = None, modded: dict = None) -> List[Context]:
+    @pandora.Method
+    def survey(self_or_cls, *seeds: dict, attrs: dict = None, modded: dict = None) -> List[Context]:  # noqa
         """
         调查种子, collect 会收集产生的 Context
         用户可以从 collect 的结果中根据 Context 获取到当时的 response, items, request, seeds 等等
@@ -818,6 +817,17 @@ class Spider(Pangu):
         :param seeds: 需要调查的种子
         :return:
         """
+        attrs = attrs or {}
+        modded = modded or {}
+
+        if isinstance(self_or_cls, type):
+            cls = self_or_cls
+        else:
+            cls = self_or_cls.__class__
+            attrs.setdefault("proxy", self_or_cls.proxy)
+            attrs.setdefault("concurrency", self_or_cls.concurrency)
+            attrs.setdefault("downloader", self_or_cls.downloader)
+
         collect = queue.Queue()
 
         def mock_make_seeds(self):  # noqa
@@ -831,14 +841,16 @@ class Spider(Pangu):
             logger.debug(context.items)
             context.success()
 
-        attrs = attrs or {}
-        modded = modded or {}
         modded.setdefault("make_seeds", mock_make_seeds)
         modded.setdefault("on_request", mock_on_request)
         modded.setdefault("item_pipeline", mock_item_pipeline)
         attrs.setdefault("task_queue", LocalQueue())
         attrs.setdefault("queue_name", f"{cls.__module__}.{cls.__name__}:survey")
-        clazz = type("Survey", (cls,), modded)
+        clazz = type("Survey", (cls.__class__,), modded)
         survey: Spider = clazz(**attrs)
         survey.run()
         return list(collect.queue)
+
+
+if __name__ == '__main__':
+    Spider().survey({"id": 1})
