@@ -218,7 +218,7 @@ class Pangu(Chaos):
                         return
 
                     except signals.Switch:
-                        pass
+                        continue
 
                     except signals.Retry:
                         context.retry()
