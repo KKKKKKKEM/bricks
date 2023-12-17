@@ -55,7 +55,7 @@ class MetaClass(type):
         return super(MetaClass, cls).__new__(cls, name, bases, dct)
 
     def __call__(cls, *args, **kwargs):
-        key = (cls, args, tuple(kwargs.items()))
+        key = hash(json.dumps({"cls": cls, "args": args, "kwargs": kwargs}, default=str))
         with cls._lock:
             if cls not in cls._instances:
                 instance = super().__call__(*args, **kwargs)
@@ -161,7 +161,8 @@ class BaseProxy(metaclass=MetaClass):
 
     @classmethod
     def build(cls, **options):
-        return pandora.invoke(cls, kwargs=options)
+        prepared = pandora.prepare(cls.__init__, kwargs=options, ignore=[0])
+        return cls(**prepared.kwargs)
 
 
 class ApiProxy(BaseProxy):
@@ -438,7 +439,3 @@ class Manager:
 
 
 manager = Manager()
-
-if __name__ == '__main__':
-    p = CustomProxy("127.0.0.1:7890", scheme="socks5")
-    print(p.get())
