@@ -53,7 +53,7 @@ class Worker(threading.Thread):
 
     """
 
-    def __init__(self, dispatcher: 'Dispatcher', name: str, timeout=0, daemon=True, trace=False, **kwargs):
+    def __init__(self, dispatcher: 'Dispatcher', name: str, timeout=5, daemon=True, trace=False, **kwargs):
         self.dispatcher = dispatcher
         self._shutdown = False
         self.timeout = timeout
