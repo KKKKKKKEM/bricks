@@ -67,7 +67,7 @@ class Worker(threading.Thread):
         while self.dispatcher.is_running() and not self._shutdown:
             not self.trace and self._awaken.wait()
             try:
-                task: Task = self.dispatcher.tasks.get(timeout=self.timeout)
+                task: Task = self.dispatcher.doing.get(timeout=self.timeout)
                 task.worker = self
 
             except queue.Empty:
@@ -84,6 +84,9 @@ class Worker(threading.Thread):
             except Exception as e:
                 task.set_exception(e)
                 events.EventManager.invoke(context.Error(error=e, form=const.ERROR_OCCURRED))
+
+            finally:
+                self.dispatcher.doing.task_done()
 
     def stop(self) -> None:
 
@@ -108,7 +111,7 @@ class Worker(threading.Thread):
     def awake(self) -> None:
         self._awaken.set()
 
-    def _trace(self, frame, event, arg): # noqa
+    def _trace(self, frame, event, arg):  # noqa
         if event == 'call':
             return self._localtrace
         else:
@@ -140,7 +143,7 @@ class Dispatcher:
         self.trace = trace
 
         self.loop: asyncio.AbstractEventLoop
-        self.tasks: queue.Queue
+        self.doing: queue.Queue
         self.workers: Dict[str, Worker]
 
         self._remain_workers: queue.Queue
@@ -154,7 +157,7 @@ class Dispatcher:
 
     def _set_env(self):
         self.loop = asyncio.get_event_loop()
-        self.tasks = queue.Queue()
+        self.doing = queue.Queue()
         self.workers: Dict[str, Worker] = {}
         self._remain_workers = queue.Queue()
         for i in range(self.max_workers): self._remain_workers.put(f"Worker-{i}")
@@ -227,7 +230,7 @@ class Dispatcher:
             if task.is_async:
                 self.active_task(task)
             else:
-                self.tasks.put(task)
+                self.doing.put(task)
 
         timeout != -1 and self._running_tasks.acquire(timeout=timeout)
         submit()
@@ -290,7 +293,7 @@ class Dispatcher:
 
     def adjust_workers(self):
         remain_workers = self._remain_workers.qsize()
-        remain_tasks = self.tasks.qsize()
+        remain_tasks = self.doing.qsize()
         if remain_workers > 0 and remain_tasks > 0:
             self.create_worker(min(remain_workers, remain_tasks))
 
@@ -301,11 +304,11 @@ class Dispatcher:
         :param task:
         :return:
         """
-        with self.tasks.not_empty:
+        with self.doing.not_empty:
             # If the task is still in the task queue and has not been retrieved for use, it will be deleted from the task queue
-            if task in self.tasks.queue:
-                self.tasks.queue.remove(task)
-                self.tasks.not_full.notify()
+            if task in self.doing.queue:
+                self.doing.queue.remove(task)
+                self.doing.not_full.notify()
             else:
                 # If there is a worker and the task is running, shut down the worker
                 task.worker and not task.done() and self.stop_worker(task.worker.name)
@@ -347,7 +350,7 @@ class Dispatcher:
 
     @property
     def running(self):
-        return self.max_workers - self._remain_workers.qsize() + self.tasks.qsize()
+        return self.doing.unfinished_tasks
 
     def run(self):
         async def main():
