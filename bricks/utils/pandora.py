@@ -4,6 +4,7 @@
 # @Desc    :
 import ast
 import collections
+import functools
 import importlib
 import importlib.metadata as importlib_metadata
 import importlib.util
@@ -14,7 +15,7 @@ import os
 import re
 import subprocess
 import sys
-from typing import Any, List, Union, Mapping
+from typing import Any, List, Union, Mapping, Callable, Literal
 
 from loguru import logger
 
@@ -68,10 +69,14 @@ def load_objects(path_or_reference, reload=False):
         raise ImportError(f"无法导入指定路径或引用: {path_or_reference}")
 
 
-def require(package_spec: str) -> str:
+def require(
+        package_spec: str,
+        action: Literal["raise", "fix"] = "fix"
+) -> str:
     """
     依赖 python 包
 
+    :param action:
     :param package_spec: pymongo==4.6.0 / pymongo
     :return: 安装的包版本号
     """
@@ -91,6 +96,9 @@ def require(package_spec: str) -> str:
             return installed_version
 
     except importlib_metadata.PackageNotFoundError:
+        if action == "raise":
+            raise importlib_metadata.PackageNotFoundError(f"缺少依赖包: {package_spec}")
+
         # 包没有安装或版本不符合要求
         install_command = package_spec if required_version else package
         subprocess.check_call([sys.executable, "-m", "pip", "install", install_command])
@@ -102,20 +110,37 @@ def invoke(func, args=None, kwargs: dict = None, annotations: dict = None, names
     """
     调用函数, 自动修正参数
 
-    :param ignore:
-    :param func:
-    :param args:
-    :param kwargs:
-    :param annotations:
-    :param namespace:
+    :param func: 函数
+    :param args: 位置参数
+    :param kwargs: 关键字参数
+    :param annotations: 类型空间
+    :param namespace: 命名空间
+    :param ignore: 忽略第几个参数
     :return:
     """
     prepared = prepare(func, args, kwargs, annotations, namespace, ignore)
     return prepared.func(*prepared.args, **prepared.kwargs)
 
 
-def prepare(func, args=None, kwargs: dict = None, annotations: dict = None, namespace: dict = None,
-            ignore: list = None):
+def prepare(
+        func: Callable,
+        args=None,
+        kwargs: dict = None,
+        annotations: dict = None,
+        namespace: dict = None,
+        ignore: list = None
+):
+    """
+    筛选出函数的相关参数
+
+    :param func: 函数
+    :param args: 位置参数
+    :param kwargs: 关键字参数
+    :param annotations: 类型空间
+    :param namespace: 命名空间
+    :param ignore: 忽略第几个参数
+    :return:
+    """
     assert callable(func), ValueError(f"func must be callable, but got {type(func)}")
     prepared = collections.namedtuple("prepared", ["func", "args", "kwargs"])
 
@@ -227,7 +252,13 @@ def single(_object, default=None):
     return next((i for i in iterable(_object)), default)
 
 
-def json_or_eval(text, jsonp=False, errors="strict", _step=0, **kwargs) -> Union[dict, list, str]:
+def json_or_eval(
+        text,
+        jsonp=False,
+        errors: Literal["strict", "ignore"] = "strict",
+        _step=0,
+        **kwargs
+) -> Union[dict, list, str]:
     """
     通过字符串获取 python 对象，支持json类字符串和jsonp字符串
 
@@ -345,21 +376,18 @@ class Method:
         self.func = func
 
     def __get__(self, obj, objtype=None):
-        if obj is None:
-            # 当作为类方法调用
-            return lambda *args, **kwargs: self.func(objtype, *args, **kwargs)
-        else:
-            # 当作为实例方法调用
-            return lambda *args, **kwargs: self.func(obj, *args, **kwargs)
+        @functools.wraps(self.func)
+        def inner(*args, **kwargs):
+            return self.func(obj or objtype, *args, **kwargs)
+
+        return inner
 
 
 if __name__ == '__main__':
-    # print(require("pandas"))
-    my_data = [{"id": i, "name": i} for i in range(100)]
-    print(clean_rows(
-        *my_data,
-        default={"hobby": "nothing"},
-        rename={"id": "uid"},
-        factory={"name": lambda x: "name: " + str(x)}
-    ))
-    print(my_data)
+    class Main:
+        @Method
+        def xxx(self):
+            print(self)
+
+
+    Main.xxx()
