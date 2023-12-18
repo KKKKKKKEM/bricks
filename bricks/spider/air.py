@@ -172,7 +172,7 @@ class Spider(Pangu):
         self.downloader = downloader or cffi.Downloader()
         self.task_queue = LocalQueue() if not task_queue else task_queue
         self.proxy = proxy
-        self.queue_name = queue_name or self.__class__.__name__
+        self.queue_name = queue_name or f'{self.__class__.__module__}.{self.__class__.__name__}'
         self.forever = forever
         super().__init__(**kwargs)
         self.number_of_total_requests = FastWriteCounter()  # 发起请求总数量
@@ -436,19 +436,21 @@ class Spider(Pangu):
                     if (
                             not task_queue.command(queue_name, {"action": task_queue.COMMANDS.IS_INIT}) and
                             not self.forever and
+                            self.dispatcher.running == 0 and
                             task_queue.is_empty(queue_name, threshold=self.get("spider.threshold", default=0))
                     ):
-                        logger.debug(f'[停止爬虫] 队列名称: {queue_name}, spider.threshold: {self.get("spider.threshold", default=0)}')
+                        logger.debug(
+                            f'[爬取完毕] 队列名称: {queue_name}, 关闭阈值: {self.get("spider.threshold", default=0)}, 提交种子的数量: {count}')
                         return count
 
                     else:
 
                         if task_queue.smart_reverse(queue_name, status=self.dispatcher.running):
-                            logger.debug(f"[翻转队列] 队列名称: {self.queue_name}")
+                            logger.debug(f"[翻转队列] 队列名称: {queue_name}")
 
                         else:
                             if time.time() - output > 60:
-                                logger.debug(f"[等待任务] 队列名称: {self.queue_name}")
+                                logger.debug(f"[等待任务] 队列名称: {queue_name}")
                                 output = time.time()
 
                             time.sleep(1)
