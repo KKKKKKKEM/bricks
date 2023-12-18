@@ -438,10 +438,8 @@ class Spider(Pangu):
                             not self.forever and
                             task_queue.is_empty(queue_name, threshold=self.get("spider.threshold", default=0))
                     ):
-                        if self.dispatcher.running == 0:
-                            return count
-                        else:
-                            time.sleep(1)
+                        logger.debug(f'[停止爬虫] 队列名称: {queue_name}, spider.threshold: {self.get("spider.threshold", default=0)}')
+                        return count
 
                     else:
 
