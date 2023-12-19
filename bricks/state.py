@@ -3,6 +3,7 @@
 # @Author  : Kem
 # @Desc    :
 import hashlib
+import os.path
 import uuid
 
 from bricks.lib import variable
@@ -18,8 +19,9 @@ __all__ = (
 # 当前 机器 ID
 MACHINE_ID = hashlib.sha256(uuid.UUID(int=uuid.getnode()).hex[-12:].encode()).hexdigest()
 
-# 当前框架版本
-VERSION = "0.0.12.4"
+with open(os.path.join(os.path.dirname(__file__), "VERSION"), "r") as f:
+    # 当前框架版本
+    VERSION = f.read().strip()
 
 # 全局变量
 G = variable.VariableG()

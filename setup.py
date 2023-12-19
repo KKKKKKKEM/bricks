@@ -1,10 +1,11 @@
+import os
 from os import path as os_path
 
 from setuptools import setup, find_packages
 
-from bricks import state
-
 this_directory = os_path.abspath(os_path.dirname(__file__))
+with open(os.path.join(os.path.dirname(__file__), 'bricks/VERSION'), 'r') as f:
+    version = f.read().strip()
 
 
 # 读取文件内容
@@ -25,7 +26,10 @@ def read_requirements(filename):
 setup(
     name='bricks-py',  # 包名
     python_requires='>=3.8.0',  # python环境
-    version=state.VERSION,  # 包的版本
+    url='https://github.com/KKKKKKKEM/bricks.git',
+    long_description_content_type="text/markdown",
+    long_description=open('README.md', encoding='utf-8').read(),
+    version=version,  # 包的版本
     description="quickly build your crawler",  # 包简介，显示在PyPI上
     author="Kem",  # 作者相关信息
     author_email='531144129@qq.com',
