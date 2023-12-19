@@ -35,7 +35,7 @@ def num(length, start=0, end=None):
     return f'{random_.randint(start, end):0{length}d}'
 
 
-def token(length, base_str: str = ""):
+def letters(length, base_str: str = ""):
     """
     生成一个随机的字符串
 
