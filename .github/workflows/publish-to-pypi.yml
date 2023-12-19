@@ -2,6 +2,8 @@ name: Publish Python 🐍 distributions 📦 to PyPI and TestPyPI
 
 on:
   push:
+    branches:
+      - main
     paths:
       - bricks/VERSION  # 每次更改 VERSION 时发布到 TestPyPI
   release:
