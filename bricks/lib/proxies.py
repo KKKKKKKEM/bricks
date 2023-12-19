@@ -31,38 +31,6 @@ URL_MATCH_RULE = re.compile(
 )
 
 
-class MetaClass(type):
-    _instances = {}
-    _lock = threading.Lock()
-
-    def __new__(cls, name, bases, dct):  # noqa
-        def wrapper(raw_method):
-            def inner(self, *args, **kwargs):
-                self: BaseProxy
-                proxy = raw_method(self, *args, **kwargs)
-                proxy.proxy = self.fmt(proxy=proxy.proxy)
-                proxy.auth = self.auth
-                proxy.recover = self.recover
-                proxy.threshold = self.threshold
-                proxy.derive = self
-                return proxy
-
-            return inner
-
-        # 在这里可以修改类的定义
-        dct['get'] = wrapper(dct['get'])
-        # 创建并返回新的类
-        return super(MetaClass, cls).__new__(cls, name, bases, dct)
-
-    def __call__(cls, *args, **kwargs):
-        key = hash(json.dumps({"cls": cls, "args": args, "kwargs": kwargs}, default=str))
-        with cls._lock:
-            if cls not in cls._instances:
-                instance = super().__call__(*args, **kwargs)
-                cls._instances[key] = instance
-        return cls._instances[key]
-
-
 class Proxy:
     def __init__(
             self,
@@ -112,7 +80,8 @@ class Proxy:
         return self.proxy
 
 
-class BaseProxy(metaclass=MetaClass):
+@pandora.with_metaclass(singleton=True)
+class BaseProxy:
 
     def __init__(
             self,
@@ -163,6 +132,20 @@ class BaseProxy(metaclass=MetaClass):
     def build(cls, **options):
         prepared = pandora.prepare(cls.__init__, kwargs=options, ignore=[0])
         return cls(**prepared.kwargs)
+
+    def _when_get(self, raw_method):
+        def inner(*args, **kwargs):
+            proxy = raw_method(*args, **kwargs)
+            if not isinstance(proxy, Proxy):
+                proxy = Proxy(proxy, auth=self.auth, recover=self.recover, threshold=self.threshold, derive=self)
+            proxy.proxy = self.fmt(proxy=proxy.proxy)
+            proxy.auth = self.auth
+            proxy.recover = self.recover
+            proxy.threshold = self.threshold
+            proxy.derive = self
+            return proxy
+
+        return inner
 
 
 class ApiProxy(BaseProxy):
@@ -439,3 +422,6 @@ class Manager:
 
 
 manager = Manager()
+if __name__ == '__main__':
+    p = CustomProxy("www.baidu.com", scheme="socks5")
+    print(p.get())

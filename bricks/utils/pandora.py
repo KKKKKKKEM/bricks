@@ -4,6 +4,7 @@
 # @Desc    :
 import ast
 import collections
+import contextlib
 import functools
 import importlib
 import importlib.metadata as importlib_metadata
@@ -15,7 +16,8 @@ import os
 import re
 import subprocess
 import sys
-from typing import Any, List, Union, Mapping, Callable, Literal
+import threading
+from typing import Any, List, Union, Mapping, Callable, Literal, Tuple
 
 from loguru import logger
 
@@ -371,6 +373,84 @@ def clean_rows(*rows: dict, **layout):
         return list(rows)
 
 
+def with_metaclass(
+        singleton: bool = False,
+        thread_safe: bool = True,
+        key_maker: Callable = None,
+        autonomous: (Tuple[str, Callable], List[str, Callable]) = (),
+        wrappers: Union[dict, str] = None,
+        modded: dict = None
+):
+    """
+    魔改 class
+
+    :param modded: 魔改属性 / 方法
+    :param key_maker: 单例模式的 key 创建器, 接受参数为: cls, *args, **kwargs
+    :param thread_safe: 单例模式是否线程安全
+    :param wrappers: 装饰器, 用于动态修改实例的方法, 不写的时候, 默认会使用实例的 _when_xxx 作为 xxx 的装饰器
+    :param autonomous: 自执行函数, 在实例化后自动执行
+    :param singleton: 单例模式
+    :return:
+    """
+    key_maker = key_maker or (
+        lambda cls, *args, **kwargs: hash(json.dumps({"cls": cls, "args": args, "kwargs": kwargs}, default=str))
+    )
+
+    def outer(clazz):
+        assert inspect.isclass(clazz), ValueError(f"clazz must be class, but got {type(clazz)}")
+
+        _instance = {}
+        if thread_safe:
+            _lock = threading.Lock()
+        else:
+            _lock = contextlib.nullcontext()
+
+        class CustomMeta(type):
+
+            def __call__(cls, *args, **kwargs):
+                if singleton:
+                    with _lock:
+                        key = key_maker(cls, *args, **kwargs)
+                        if key not in _instance:
+                            _instance[key] = type.__call__(cls, *args, **kwargs)
+                        else:
+                            return _instance[key]
+
+                    ins = _instance[key]
+                else:
+                    ins = type.__call__(cls, *args, **kwargs)
+
+                if wrappers is None:
+                    interceptors = {
+                        i.replace("_when_", ""): i
+                        for i in filter(lambda x: x.startswith('_when_'), dir(ins))
+                    }
+                else:
+                    interceptors = wrappers
+
+                for raw_method_name, wrapper in interceptors.items():
+                    raw_method = getattr(ins, raw_method_name, None)
+                    if not raw_method:
+                        continue
+
+                    if isinstance(wrapper, str):
+                        wrapper = getattr(ins, wrapper)
+
+                    raw_method and setattr(ins, raw_method_name, wrapper(raw_method))
+
+                for func in iterable(autonomous):
+                    if isinstance(func, str):
+                        func = getattr(ins, func)
+
+                    invoke(func, namespace={"self": ins})
+
+                return ins
+
+        return CustomMeta(clazz.__name__, (clazz,), modded or {})
+
+    return outer
+
+
 class Method:
     def __init__(self, func):
         self.func = func
@@ -382,12 +462,13 @@ class Method:
 
         return inner
 
+    def install(self):
+        print('install...')
+
 
 if __name__ == '__main__':
-    class Main:
-        @Method
-        def xxx(self):
-            print(self)
-
-
-    Main.xxx()
+    # print(Method("sss"))
+    # print(Method("sss"))
+    # print(Method("sss"))
+    # print(Method("sss"))
+    print(inspect.signature(Method))
