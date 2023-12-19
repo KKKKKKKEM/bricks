@@ -42,8 +42,8 @@ setup(
     },
     license="MIT",
     keywords=['bricks'],
-    script_name="setup.py",
-    script_args="sdist bdist_wheel".split(" "),
+    # script_name="setup.py",
+    # script_args="sdist bdist_wheel".split(" "),
 
 )
 
