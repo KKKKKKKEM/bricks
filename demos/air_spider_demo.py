@@ -17,7 +17,7 @@ class MySpider(air.Spider):
         # 如果有多个, 你有两种方案
         # 1. 将种子全部放置在一个列表里面, yield 出去, 如 return [{"page":1}, {"page":2}, {"page":3}]
         # 2. 使用生成器, 每次生产一部分, 如 yield {"page":1}, yield {"page":2}, yield {"page":3}
-        return [{"page":1}, {"page":2}, {"page":3}]
+        return [{"page": 1}]
 
     def make_request(self, context: Context) -> Request:
         # 之前定义的种子会被投放至任务队列, 之后会被取出来, 迁入至 context 对象内
@@ -87,7 +87,7 @@ class MySpider(air.Spider):
 
 if __name__ == '__main__':
     spider = MySpider(
-        concurrency=3
+        concurrency=1,
         # # 设置代理模式 1, 该模式适用于: 你已经将代理提取至 Redis 的 proxy 里面
         # # 这样设置的话就会自动去取
         # proxy={
@@ -105,12 +105,12 @@ if __name__ == '__main__':
 
         # # 设置代理模式 2, 该模式适用于: 指向固定代理, 如 http://127.0.0.1:7890
         # # 这样设置的话就会自动去取
-        # proxy={
-        #     "ref": "bricks.lib.proxies.CustomProxy",  # 指向 Redis
-        #     "key": "127.0.0.1:7890",  # 指向代理 Key
-        #     "threshold": 100,  # 一个代理最多使用多少次, 到这个次数之后就会归还到Redis, 然后重新拿, 默认不归还
-        #     # "scheme": "http"  # 代理协议, 默认是 http
-        # },
+        proxy={
+            "ref": "bricks.lib.proxies.CustomProxy",  # 指向 Redis
+            "key": "127.0.0.1:7890",  # 指向代理 Key
+            "threshold": 100,  # 一个代理最多使用多少次, 到这个次数之后就会归还到Redis, 然后重新拿, 默认不归还
+            # "scheme": "http"  # 代理协议, 默认是 http
+        },
 
         # # 设置代理模式 3, 该模式适用于: 你有一个提取 api,访问就会获取代理
         # # 这样设置的话就会自动去取

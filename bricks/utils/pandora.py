@@ -377,7 +377,7 @@ def with_metaclass(
         singleton: bool = False,
         thread_safe: bool = True,
         key_maker: Callable = None,
-        autonomous: (Tuple[str, Callable], List[str, Callable]) = (),
+        autonomous: (Tuple[Union[str, Callable]], List[Union[str, Callable]]) = (),
         wrappers: Union[dict, str] = None,
         modded: dict = None
 ):
