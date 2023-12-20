@@ -29,7 +29,7 @@ class Request:
             allow_redirects: bool = True,
             proxies: Optional[str] = None,
             proxy: Optional[dict] = None,
-            status_codes: Optional[dict] = ...,
+            is_success: Optional[str] = ...,
             retry: int = 0,
             max_retry: int = 5,
     ) -> None:
@@ -44,7 +44,7 @@ class Request:
         self.allow_redirects = allow_redirects
         self.proxies = proxies
         self.proxy = proxy
-        self.status_codes = status_codes
+        self.is_success = is_success
         self.retry = retry
         self.max_retry = max_retry
 

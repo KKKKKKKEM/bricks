@@ -72,7 +72,7 @@ class Download(RenderNode):
     allow_redirects: bool = True
     proxies: Optional[str] = None
     proxy: Optional[dict] = None
-    status_codes: Optional[dict] = ...
+    is_success: Optional[str] = ...
     retry: int = 0
     max_retry: int = 5
     archive: bool = False
@@ -90,7 +90,7 @@ class Download(RenderNode):
             allow_redirects=self.allow_redirects,
             proxies=self.proxies,
             proxy=self.proxy,
-            status_codes=self.status_codes,
+            is_success=self.is_success,
             retry=self.retry,
             max_retry=self.max_retry
         )
