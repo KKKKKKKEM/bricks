@@ -168,7 +168,9 @@ class Downloader(AbstractDownloader):
                 "proxy": proxies,
                 "user_agent": request.headers.get("user-agent"),
             })
-            await context.clear_cookies()
+            if not request.get_options("$session"):
+                await context.clear_cookies()
+
             for interceptor in context_interceptors:
                 assert inspect.isasyncgenfunction(interceptor)
                 await pandora.invoke(
@@ -328,6 +330,9 @@ class Downloader(AbstractDownloader):
             else:
                 _script = {'script': script}
             await conn.add_init_script(**_script)
+
+    def make_session(self):
+        raise NotImplementedError("请设置 reuse 模式为 True 来实现会话复用")
 
 
 if __name__ == '__main__':

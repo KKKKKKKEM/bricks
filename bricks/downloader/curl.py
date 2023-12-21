@@ -10,6 +10,8 @@ import random
 import urllib.parse
 from typing import Union
 
+import curl
+
 from bricks.downloader import AbstractDownloader
 from bricks.lib.cookies import Cookies
 from bricks.lib.request import Request
@@ -70,7 +72,7 @@ class Downloader(AbstractDownloader):
 
             headers[k] = v
 
-        curl = pycurl.Curl()
+        curl = requests.get_options("$session") or pycurl.Curl()
         next_url = request.real_url
 
         options = {
@@ -144,7 +146,7 @@ class Downloader(AbstractDownloader):
                     return res
 
         finally:
-            curl.close()
+            not requests.get_options("$session") and curl.close()
 
     @property
     def set_cipher(self):
@@ -319,6 +321,9 @@ class Downloader(AbstractDownloader):
             pass
 
         return options
+
+    def make_session(self):
+        return pycurl.Curl()
 
 
 if __name__ == '__main__':

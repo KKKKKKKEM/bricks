@@ -164,3 +164,11 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
         """
         request = Request.from_curl(curl_cmd)
         return self.fetch(request)
+
+    def make_session(self):
+        """
+        创建一个会话
+
+        :return:
+        """
+        raise NotImplementedError
