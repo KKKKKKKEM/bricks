@@ -40,15 +40,18 @@ class Context(air.Context):
 
     def get_node(self, signpost=None):
         if signpost is None:
-            cursor = max(0, self.seeds.setdefault('$signpost', 0) - 1)
+            cursor = max(0, self.signpost - 1)
         else:
             cursor = signpost
 
         return self.target.config.spider[cursor]
 
+    def archive(self, signpost: int, **kwargs):
+        return self.replace({**self.seeds, "$signpost": signpost, **kwargs})
 
-class Task(_events.Task, RenderNode):
-    ...
+    @property
+    def signpost(self):
+        return self.seeds.setdefault("$signpost", 0)
 
 
 @dataclass
@@ -57,6 +60,10 @@ class Layout(RenderNode):
     show: dict = None
     factory: dict = None
     default: dict = None
+
+
+class Task(_events.Task, RenderNode):
+    archive: bool = False
 
 
 @dataclass
@@ -105,6 +112,7 @@ class Parse(RenderNode):
     args: Optional[list] = None
     kwargs: Optional[dict] = None
     layout: Optional[Layout] = None
+    archive: bool = False
 
 
 @dataclass
@@ -114,6 +122,7 @@ class Pipeline(RenderNode):
     kwargs: Optional[dict] = None
     success: bool = False
     layout: Optional[Layout] = None
+    archive: bool = False
 
 
 @dataclass
@@ -158,7 +167,7 @@ class Spider(air.Spider):
             raise signals.Exit
 
         while True:
-            signpost: int = context.seeds.setdefault('$signpost', 0)
+            signpost: int = context.signpost
             context.seeds.setdefault('$bookmark', 0)
 
             try:
@@ -178,20 +187,23 @@ class Spider(air.Spider):
                     else:
                         # 这是新的请求
                         context.seeds['$bookmark'] = signpost
-                        node.archive and context.replace({**context.seeds, "$signpost": signpost})
+                        node.archive and context.archive(signpost)
                         context.flow({"next": self.make_request})
                     raise signals.Switch
 
                 # Request -> Response
                 elif isinstance(node, Parse):
+                    node.archive and context.archive(signpost)
                     context.flow({"next": self.on_response})
                     raise signals.Switch
 
                 elif isinstance(node, Pipeline):
+                    node.archive and context.archive(signpost)
                     context.flow({"next": self.on_pipeline})
                     raise signals.Switch
 
                 elif isinstance(node, Task):
+                    node.archive and context.archive(signpost)
                     pandora.invoke(
                         func=node.func,
                         args=node.args,
@@ -264,7 +276,7 @@ class Spider(air.Spider):
         context.flow({"request": request})
         return request
 
-    def parse(self, context: Context):
+    def parse(self, context: Context) -> Union[List[dict], Items]:
         node: Parse = context.get_node()
         engine = node.func
         args = node.args or []
@@ -312,25 +324,14 @@ class Spider(air.Spider):
                 }
             )
 
-        if inspect.isgenerator(items):
-            for item in items:
-                pandora.clean_rows(
-                    *pandora.iterable(item),
-                    rename=layout.rename,
-                    default=layout.default,
-                    factory=layout.factory,
-                    show=layout.show,
-                )
-                yield item
-        else:
-            pandora.clean_rows(
-                *pandora.iterable(items),
-                rename=layout.rename,
-                default=layout.default,
-                factory=layout.factory,
-                show=layout.show,
-            )
-            yield items or []
+        pandora.clean_rows(
+            *pandora.iterable(items),
+            rename=layout.rename,
+            default=layout.default,
+            factory=layout.factory,
+            show=layout.show,
+        )
+        return Items(items or [])
 
     def item_pipeline(self, context: Context):
         node: Pipeline = context.get_node()
@@ -342,7 +343,8 @@ class Spider(air.Spider):
 
         if not callable(engine):
             engine = pandora.load_objects(engine)
-        back = context.items
+
+        backup = context.items
         try:
             context.items = pandora.clean_rows(
                 *copy.deepcopy(context.items),
@@ -372,7 +374,7 @@ class Spider(air.Spider):
                 }
             )
         finally:
-            context.items = back
+            context.items = backup
 
         node.success and context.success()
 
