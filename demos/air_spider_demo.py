@@ -1,12 +1,9 @@
 from loguru import logger
 
-import bricks
 from bricks import Request, const
 from bricks.core import signals
 from bricks.spider import air
 from bricks.spider.air import Context
-
-bricks.T.set("name", "kem")
 
 
 class MySpider(air.Spider):
@@ -22,33 +19,55 @@ class MySpider(air.Spider):
     def make_request(self, context: Context) -> Request:
         # 之前定义的种子会被投放至任务队列, 之后会被取出来, 迁入至 context 对象内
         seeds = context.seeds
-        return Request(
-            url="https://fx1.service.kugou.com/mfanxing-home/h5/cdn/room/index/list_v2",
-            params={
-                "page": seeds["page"],
-                "cid": 6000
-            },
-            headers={
-                "User-Agent": "Mozilla/5.0 (Linux; Android 10; Redmi K30 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Mobile Safari/537.36",
-                "Content-Type": "application/json;charset=UTF-8",
-            },
-        )
+        if seeds.get('$config', 0) == 0:
+            return Request(
+                url="https://fx1.service.kugou.com/mfanxing-home/h5/cdn/room/index/list_v2",
+                params={
+                    "page": seeds["page"],
+                    "cid": 6000
+                },
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Linux; Android 10; Redmi K30 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Mobile Safari/537.36",
+                    "Content-Type": "application/json;charset=UTF-8",
+                },
+            )
+        else:
+            return Request(
+                url="https://www.baidu.com/sugrec?pre=1&p=3&ie=utf-8&json=1&prod=pc&from=pc_web&wd=1&req=2&csor=1&_=1703142848459",
+                headers={
+                    "User-Agent": "@chrome",
+                    "Content-Type": "application/json;charset=UTF-8",
+                },
+            )
 
     def parse(self, context: Context):
         response = context.response
-        return response.extract(
-            engine="json",
-            rules={
-                "data.list": {
-                    "userId": "userId",
-                    "roomId": "roomId",
-                    "score": "score",
-                    "startTime": "startTime",
-                    "kugouId": "kugouId",
-                    "status": "status",
+        if context.seeds.get('$config', 0) == 0:
+            return response.extract(
+                engine="json",
+                rules={
+                    "data.list": {
+                        "userId": "userId",
+                        "roomId": "roomId",
+                        "score": "score",
+                        "startTime": "startTime",
+                        "kugouId": "kugouId",
+                        "status": "status",
+                    }
                 }
-            }
-        )
+            )
+        else:
+
+            return response.extract(
+                engine="json",
+                rules={
+                    "g": {
+                        "type": "type",
+                        "sa": "sa",
+                        "q": "q",
+                    }
+                }
+            )
 
     def item_pipeline(self, context: Context):
         items = context.items
@@ -63,6 +82,7 @@ class MySpider(air.Spider):
         # 判断是否存在下一页
         has_next = context.response.get('data.hasNextPage')
         if has_next == 1:
+            context.submit({**context.seeds, "$config": 1})
             # 提交翻页的种子
             context.submit({**context.seeds, "page": context.seeds["page"] + 1})
 
@@ -74,13 +94,14 @@ class MySpider(air.Spider):
         :param context:
         :return:
         """
-        # 不成功 -> 返回 False
-        if context.response.get('code') != 0:
-            # 重试信号
-            raise signals.Retry
+        if context.seeds.get('$config', 0) == 0:
+            # 不成功 -> 返回 False
+            if context.response.get('code') != 0:
+                # 重试信号
+                raise signals.Retry
 
-    def before_start(self):
-        super().before_start()
+    def install(self):
+        super().install()
         self.use(const.BEFORE_PIPELINE, {"func": self.turn_page})
         self.use(const.AFTER_REQUEST, {"func": self.is_success})
 
@@ -105,12 +126,12 @@ if __name__ == '__main__':
 
         # # 设置代理模式 2, 该模式适用于: 指向固定代理, 如 http://127.0.0.1:7890
         # # 这样设置的话就会自动去取
-        proxy={
-            "ref": "bricks.lib.proxies.CustomProxy",  # 指向 Redis
-            "key": "127.0.0.1:7890",  # 指向代理 Key
-            "threshold": 100,  # 一个代理最多使用多少次, 到这个次数之后就会归还到Redis, 然后重新拿, 默认不归还
-            # "scheme": "http"  # 代理协议, 默认是 http
-        },
+        # proxy={
+        #     "ref": "bricks.lib.proxies.CustomProxy",  # 指向 Redis
+        #     "key": "127.0.0.1:7890",  # 指向代理 Key
+        #     "threshold": 100,  # 一个代理最多使用多少次, 到这个次数之后就会归还到Redis, 然后重新拿, 默认不归还
+        #     # "scheme": "http"  # 代理协议, 默认是 http
+        # },
 
         # # 设置代理模式 3, 该模式适用于: 你有一个提取 api,访问就会获取代理
         # # 这样设置的话就会自动去取
