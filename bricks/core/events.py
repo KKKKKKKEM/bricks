@@ -50,7 +50,6 @@ class Task:
 
 @dataclass
 class Register:
-
     task: Task
     container: list
     form: str
@@ -122,13 +121,13 @@ class EventManager:
         disposable = []
         for event in REGISTERED_EVENTS.disposable[context.target][context.form]:
             match = event.match
-            if callable(match) and match(context):
+            if match is None:
+                disposable.append(event)
+                yield event
+            elif callable(match) and match(context):
                 disposable.append(event)
                 yield event
             elif isinstance(match, str) and eval(match, globals(), {"context": context}):
-                disposable.append(event)
-                yield event
-            else:
                 disposable.append(event)
                 yield event
 
@@ -137,11 +136,11 @@ class EventManager:
 
         for event in REGISTERED_EVENTS.permanent[context.target][context.form]:
             match = event.match
-            if callable(match) and match(context):
+            if match is None:
+                yield event
+            elif callable(match) and match(context):
                 yield event
             elif isinstance(match, str) and eval(match, globals(), {"context": context}):
-                yield event
-            else:
                 yield event
 
     @classmethod
