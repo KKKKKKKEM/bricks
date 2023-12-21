@@ -76,6 +76,9 @@ class Context:
         self.clear_context()
 
 
+local = threading.local()
+
+
 class Flow(Context):
 
     def __init__(
@@ -94,8 +97,6 @@ class Flow(Context):
         self.kwargs = kwargs or {}
         self.flows = flows or {}
         super().__init__(form, target, **options)
-        self.doing: deque = deque([self])
-        self.pending: deque = deque([])
 
     def __setattr__(self, key, value):
         if key == "next":
@@ -106,12 +107,10 @@ class Flow(Context):
         super().__setattr__(key, value)
 
     def is_continue(self) -> bool:
-        return bool(self.doing or self.pending)
+        return bool(self.doing)
 
     def produce(self) -> 'Flow':
-        queue = self.doing or self.pending
-        if queue:
-            return queue.popleft()
+        return self.doing.popleft() if self.doing else None
 
     def flow(self, attrs=None):
         # 更新属性
@@ -156,7 +155,7 @@ class Flow(Context):
         context = self.copy()
         for k, v in attrs.items(): setattr(context, k, v)
         rollback and context.rollback()
-        submit and self.pending.append(context)
+        submit and self.doing.append(context)
         return context
 
     def background(self, attrs: dict = None, rollback=False, action="active"):
@@ -204,6 +203,14 @@ class Flow(Context):
         return self.__class__(**self.__dict__)
 
     copy = __copy__
+
+    @property
+    def doing(self) -> deque:
+        if not hasattr(local, "$doing"):
+            setattr(local, "$doing", deque())
+
+        doing: deque = getattr(local, "$doing", None)
+        return doing
 
 
 class Error(Context):
