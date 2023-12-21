@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - bricks/VERSION  # 每次更改 VERSION 时发布到 TestPyPI
+      - setup.py  # 每次更改 VERSION 时发布到 TestPyPI
   release:
     types: [ created ]  # 每次创建新标签时发布到 PyPI
 
