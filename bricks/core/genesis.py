@@ -182,6 +182,7 @@ class Pangu(Chaos):
         self.plugins: List[Register] = []
 
     def on_consume(self, context: Flow):
+        context.doing.append(context)
         context.next.root == self.on_consume and context.flow()
 
         while True:
