@@ -576,7 +576,7 @@ class Spider(Pangu):
                 args=args,
                 kwargs=kwargs,
                 annotations={
-                    Context: context,
+                    self.Context: context,
                     Response: context.response,
                     Item: context.seeds
                 },
@@ -624,7 +624,7 @@ class Spider(Pangu):
                 args=args,
                 kwargs=kwargs,
                 annotations={
-                    Context: context,
+                    self.Context: context,
                     Item: context.seeds,
                     Request: context.request,
                 },
@@ -783,7 +783,7 @@ class Spider(Pangu):
     def make_request(self, context: Context) -> Request:
         raise NotImplementedError
 
-    def parse(self, context: Context):
+    def parse(self, context: Context) -> Union[List[dict], Items]:
         raise NotImplementedError
 
     def item_pipeline(self, context: Context):
