@@ -4,6 +4,7 @@
 # @Desc    : 时间工具类
 import calendar
 import datetime
+import math
 from typing import Callable, Tuple, Union
 
 
@@ -183,11 +184,7 @@ class Arrow(datetime.datetime):
         raw_parameter = {k: v for k, v in raw_parameter.items() if v is not ...}
 
         def cacl_days(count):
-
-            if self.month + count == 0:
-                y = self.year - 1
-            else:
-                y = self.year + (self.month + count) // 12
+            y = self.year + math.ceil((self.month + count) / 12) - 1
 
             m = (self.month + count) % 12
             if m == 0: m = 12
