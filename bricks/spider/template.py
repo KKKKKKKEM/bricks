@@ -5,21 +5,106 @@
 import copy
 import inspect
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict
+from typing import Optional, Union, List, Dict, Callable
 
 from bricks import Request, Response
+from bricks.core import events as _events
+from bricks.lib.headers import Header
 from bricks.lib.items import Items
+from bricks.lib.nodes import RenderNode
 from bricks.lib.queues import Item
 from bricks.spider import air, form
-from bricks.utils import pandora
+from bricks.utils import convert, pandora
 
-Task = form.Task
-Parse = form.Parse
-Pipeline = form.Pipeline
 Init = form.Init
 Layout = form.Layout
-Download = form.Download
-Context = air.Context
+
+
+class Context(air.Context):
+    def next_step(self, *objs, call_later=False, signpost: int = ...):
+        """
+        切换配置
+
+        :param objs: 要切换配置的对象, 可以理解为种子, 默认为当前 seeds
+        :param call_later: 是否稍后调用
+        :param signpost: 需要切换的 config id, 默认为 当前的 +1
+        :return:
+        """
+        if signpost is ...:
+            signpost = self.signpost + 1
+
+        if not objs:
+            new = [{**self.seeds, "$config": signpost}]
+
+        else:
+            new = [{**self.seeds, **obj, "$config": signpost} for obj in objs]
+
+        return self.submit(*new, call_later=call_later)
+
+    @property
+    def signpost(self):
+        return self.seeds.setdefault("$config", 0)
+
+
+class Task(_events.Task, RenderNode):
+    ...
+
+
+@dataclass
+class Download(RenderNode):
+    url: str = ...
+    params: Optional[dict] = None
+    method: str = 'GET'
+    body: Union[str, dict] = None
+    headers: Union[Header, dict] = None
+    cookies: Dict[str, str] = None
+    options: dict = None
+    timeout: int = ...
+    allow_redirects: bool = True
+    proxies: Optional[str] = None
+    proxy: Optional[dict] = None
+    is_success: Optional[str] = ...
+    retry: int = 0
+    max_retry: int = 5
+
+    def to_request(self) -> Request:
+        return Request(
+            url=self.url,
+            params=self.params,
+            method=self.method,
+            body=self.body,
+            headers=self.headers,
+            cookies=self.cookies,
+            options=self.options,
+            timeout=self.timeout,
+            allow_redirects=self.allow_redirects,
+            proxies=self.proxies,
+            proxy=self.proxy,
+            is_success=self.is_success,
+            retry=self.retry,
+            max_retry=self.max_retry
+        )
+
+    def to_response(self, options: dict = None) -> Response:
+        return convert.req2resp(self.to_request(), options)
+
+
+@dataclass
+class Parse(RenderNode):
+    func: Union[str, Callable] = ...
+    args: Optional[list] = None
+    kwargs: Optional[dict] = None
+    layout: Optional[Layout] = None
+
+
+@dataclass
+class Pipeline(RenderNode):
+    func: Union[str, Callable] = ...
+    args: Optional[list] = None
+    kwargs: Optional[dict] = None
+    success: bool = False
+    layout: Optional[Layout] = None
+    match: Optional[Union[Callable, str]] = None
 
 
 @dataclass
@@ -32,12 +117,13 @@ class Config:
 
 
 class Spider(air.Spider):
+    Context = Context
 
     @property
     def config(self) -> Config:
         raise NotImplementedError
 
-    def make_seeds(self, context: air.Context, **kwargs):
+    def make_seeds(self, context: Context, **kwargs):
         if not self.config.init:
             return
 
@@ -55,7 +141,7 @@ class Spider(air.Spider):
                 func=engine,
                 args=node_args,
                 kwargs={**kwargs, **node_kwargs},
-                annotations={air.Context: context},
+                annotations={Context: context},
                 namespace={"context": context}
             )
 
@@ -79,16 +165,16 @@ class Spider(air.Spider):
                 )
                 yield seeds or []
 
-    def make_request(self, context: air.Context) -> Request:
-        signpost: int = context.seeds.get('$config', 0)
+    def make_request(self, context: Context) -> Request:
+        signpost: int = context.signpost
         configs = pandora.iterable(self.config.download)
         node: Download = configs[signpost % len(configs)]
         s = node.render(context.seeds)
         request = s.to_request()
         return request
 
-    def parse(self, context: air.Context):
-        signpost: int = context.seeds.get('$config', 0)
+    def parse(self, context: Context) -> Union[List[dict], Items]:
+        signpost: int = context.signpost
         configs = pandora.iterable(self.config.parse)
         node: Parse = configs[signpost % len(configs)]
         engine = node.func
@@ -103,7 +189,7 @@ class Spider(air.Spider):
                 args=[engine.lower(), *args],
                 kwargs=kwargs,
                 annotations={
-                    air.Context: context,
+                    Context: context,
                     Response: context.response,
                     Request: context.request,
                     Item: context.seeds
@@ -124,7 +210,7 @@ class Spider(air.Spider):
                 args=args,
                 kwargs=kwargs,
                 annotations={
-                    air.Context: context,
+                    Context: context,
                     Response: context.response,
                     Request: context.request,
                     Item: context.seeds
@@ -137,27 +223,16 @@ class Spider(air.Spider):
                 }
             )
 
-        if inspect.isgenerator(items):
-            for item in items:
-                pandora.clean_rows(
-                    *pandora.iterable(item),
-                    rename=layout.rename,
-                    default=layout.default,
-                    factory=layout.factory,
-                    show=layout.show,
-                )
-                yield item
-        else:
-            pandora.clean_rows(
-                *pandora.iterable(items),
-                rename=layout.rename,
-                default=layout.default,
-                factory=layout.factory,
-                show=layout.show,
-            )
-            yield items or []
+        pandora.clean_rows(
+            *pandora.iterable(items),
+            rename=layout.rename,
+            default=layout.default,
+            factory=layout.factory,
+            show=layout.show,
+        )
+        return items or []
 
-    def item_pipeline(self, context: air.Context):
+    def item_pipeline(self, context: Context):
         nodes: List[Pipeline] = pandora.iterable(self.config.pipeline)
 
         for node in nodes:
@@ -166,11 +241,44 @@ class Spider(air.Spider):
             kwargs = node.kwargs or {}
             layout = node.layout or Layout()
             layout = layout.render(context.seeds)
+            if callable(node.match):
+                ok = pandora.invoke(
+                    func=node.match,
+                    annotations={
+                        Context: context,
+                        Response: context.response,
+                        Request: context.request,
+                        Item: context.seeds,
+                        Items: context.items
+                    },
+                    namespace={
+                        "context": context,
+                        "response": context.response,
+                        "request": context.request,
+                        "seeds": context.seeds,
+                        "items": context.items
+                    }
+                )
+
+            elif isinstance(node.match, str):
+                ok = eval(node.match, {
+                    "context": context,
+                    "response": context.response,
+                    "request": context.request,
+                    "seeds": context.seeds,
+                    "items": context.items
+                })
+
+            else:
+                ok = True
+
+            if not ok:
+                continue
 
             if not callable(engine):
                 engine = pandora.load_objects(engine)
 
-            back = context.items
+            backup = context.items
             try:
                 context.items = pandora.clean_rows(
                     *copy.deepcopy(context.items),
@@ -184,7 +292,7 @@ class Spider(air.Spider):
                     args=args,
                     kwargs=kwargs,
                     annotations={
-                        air.Context: context,
+                        Context: context,
                         Response: context.response,
                         Request: context.request,
                         Item: context.seeds,
@@ -199,7 +307,7 @@ class Spider(air.Spider):
                     }
                 )
             finally:
-                context.items = back
+                context.items = backup
 
             node.success and context.success()
 
