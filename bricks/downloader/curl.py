@@ -10,8 +10,6 @@ import random
 import urllib.parse
 from typing import Union
 
-import curl
-
 from bricks.downloader import AbstractDownloader
 from bricks.lib.cookies import Cookies
 from bricks.lib.request import Request
@@ -66,13 +64,21 @@ class Downloader(AbstractDownloader):
             # Save the header line for later parsing cookies
             k, v = header_line.split(":", 1)
             k, v = k.strip(), v.strip()
-
-            if k.lower() == 'set-cookie':
-                cookies.load(v)
-
             headers[k] = v
 
-        curl = requests.get_options("$session") or pycurl.Curl()
+        def make_cookie():
+            cookies = Cookies()
+            for cookie in curl.getinfo(pycurl.INFO_COOKIELIST):
+                cookie_lis = cookie.split("\t")
+                cookies.set(
+                    name=cookie_lis[5],
+                    value=cookie_lis[6],
+                    domain=cookie_lis[0],
+                    path=cookie_lis[2],
+                )
+            return cookies
+
+        curl = request.get_options("$session") or pycurl.Curl()
         next_url = request.real_url
 
         options = {
@@ -82,6 +88,7 @@ class Downloader(AbstractDownloader):
             pycurl.FOLLOWLOCATION: 0,
             pycurl.HEADERFUNCTION: with_header,
             pycurl.URL: next_url,
+            pycurl.COOKIEFILE: "",
             # pycurl.ENCODING: "gzip"
         }
 
@@ -107,7 +114,7 @@ class Downloader(AbstractDownloader):
 
             while True:
                 assert _redirect_count < 999, "已经超过最大重定向次数: 999"
-                body, headers, cookies = io.BytesIO(), {}, Cookies()
+                body, headers = io.BytesIO(), {}
                 curl.setopt(pycurl.URL, next_url)
                 curl.setopt(pycurl.WRITEFUNCTION, body.write)
                 curl.setopt(pycurl.HTTPHEADER, self.build_headers_options(request.headers)[pycurl.HTTPHEADER])
@@ -127,9 +134,9 @@ class Downloader(AbstractDownloader):
                             request=Request(
                                 url=curl.getinfo(pycurl.EFFECTIVE_URL),
                                 method=request.method,
-                                headers=copy.deepcopy(request.headers)
+                                headers=copy.deepcopy(request.headers),
                             ),
-                            cookies=cookies
+                            cookies=make_cookie()
                         )
                     )
                     auto_referer and request.headers.update(Referer=options[pycurl.URL])
@@ -141,12 +148,12 @@ class Downloader(AbstractDownloader):
                     res.status_code = curl.getinfo(pycurl.HTTP_CODE)
                     res.headers = headers
                     res.url = curl.getinfo(pycurl.EFFECTIVE_URL)
-                    res.cookies = cookies
+                    res.cookies = make_cookie()
                     res.request = request
                     return res
 
         finally:
-            not requests.get_options("$session") and curl.close()
+            not request.get_options("$session") and curl.close()
 
     @property
     def set_cipher(self):
@@ -275,15 +282,22 @@ class Downloader(AbstractDownloader):
             components = urllib.parse.urlparse(request.proxies)
             s2t = {
                 "http": pycurl.PROXYTYPE_HTTP,
+                # "https": pycurl.PROXYTYPE_HTTPS,
                 "socks5": pycurl.PROXYTYPE_SOCKS5,
                 "socks4": pycurl.PROXYTYPE_SOCKS4,
             }
-            return {
-                pycurl.PROXY: components.netloc,
-                # pycurl.PROXYPORT: pcom.port,
-                # pycurl.PROXYUSERPWD: f'{pcom.username}:{pcom.password}',
+            options = {
                 pycurl.PROXYTYPE: s2t.get(components.scheme) or pycurl.PROXYTYPE_HTTP,
+                pycurl.PROXY: f'{components.scheme}://{components.hostname}:{components.port}',
             }
+
+            if components.username and components.password:
+                options.update({
+                    pycurl.PROXYAUTH: pycurl.HTTPAUTH_BASIC,
+                    pycurl.PROXYUSERPWD: f'{components.username}:{components.password}',
+                })
+
+            return options
         else:
             return {}
 
@@ -328,5 +342,5 @@ class Downloader(AbstractDownloader):
 
 if __name__ == '__main__':
     downloader = Downloader()
-    resp = downloader.fetch({"url": "https://www.baidu.com"})
-    print(resp.cookies)
+    resp = downloader.fetch({"url": "https://httpbin.org/get", "proxies": "socks5://127.0.0.1:7890"})
+    print(resp.text)
