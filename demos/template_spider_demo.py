@@ -1,12 +1,7 @@
-# -*- coding: utf-8 -*-
-# @Time    : 2023-12-05 20:29
-# @Author  : Kem
-# @Desc    :
 import time
 
 from bricks import const
-from bricks.core import signals
-from bricks.lib.queues import RedisQueue
+from bricks.plugins import scripts
 from bricks.spider import template
 from bricks.spider.template import Config
 
@@ -14,7 +9,6 @@ from bricks.spider.template import Config
 class Spider(template.Spider):
 
     def __init__(self, **kwargs):
-
         super().__init__(**kwargs)
 
     @property
@@ -33,13 +27,35 @@ class Spider(template.Spider):
             ],
             events={
                 const.AFTER_REQUEST: [
-                    template.Task(func=self.is_success),
+                    # context.signpost 为 0 的时候 -> 判断请求是否成功
+                    template.Task(
+                        match="context.signpost == 0",
+                        func=scripts.is_success,
+                        kwargs={
+                            "match": [
+                                "context.response.get('code') == 0"
+                            ]
+                        }
+                    ),
                 ],
                 const.BEFORE_PIPELINE: [
-                    template.Task(func=self.turn_page),
-                ]
+                    # context.signpost 为 0 的时候 -> 请求第二个配置
+                    template.Task(func=lambda context: context.next_step(), match="context.signpost == 0"),
+                    # context.signpost 为 0 的时候 -> 进行翻页
+                    template.Task(
+                        match="context.signpost == 0",
+                        func=scripts.turn_page,
+                        kwargs={
+                            "match": [
+                                "context.response.get('data.hasNextPage') == 1"
+                            ],
+                        }
+                    ),
+                ],
+
             },
             download=[
+                # 第一个下载配置
                 template.Download(
                     url="https://fx1.service.kugou.com/mfanxing-home/h5/cdn/room/index/list_v2",
                     params={
@@ -51,8 +67,17 @@ class Spider(template.Spider):
                         "Content-Type": "application/json;charset=UTF-8",
                     },
                 ),
+                # 第二个下载配置
+                template.Download(
+                    url="https://www.baidu.com/sugrec?pre=1&p=3&ie=utf-8&json=1&prod=pc&from=pc_web&wd=1&req=2&csor=1&_=1703142848459",
+                    headers={
+                        "User-Agent": "@chrome",
+                        "Content-Type": "application/json;charset=UTF-8",
+                    },
+                ),
             ],
             parse=[
+                # 第一个解析配置
                 template.Parse(
                     func="json",
                     kwargs={
@@ -71,7 +96,20 @@ class Spider(template.Spider):
                         rename={"userId": "user_id"},
                         default={"modify_at": time.time(), "page": "{page}", "seeds_time": "{time}"}
                     )
-                )
+                ),
+                # 第二个解析配置
+                template.Parse(
+                    func="json",
+                    kwargs={
+                        "rules": {
+                            "g": {
+                                "type": "type",
+                                "sa": "sa",
+                                "q": "q",
+                            }
+                        }
+                    }
+                ),
             ],
             pipeline=[
                 template.Pipeline(
@@ -82,32 +120,7 @@ class Spider(template.Spider):
 
         )
 
-    @staticmethod
-    def turn_page(context: template.Context):
-        # 判断是否存在下一页
-        has_next = context.response.get('data.hasNextPage')
-        if has_next == 1:
-            # 提交翻页的种子
-            context.submit({**context.seeds, "page": context.seeds["page"] + 1})
-
-    @staticmethod
-    def is_success(context: template.Context):
-        """
-        判断相应是否成功
-
-        :param context:
-        :return:
-        """
-        # 不成功 -> 返回 False
-        if context.response.get('code') != 0:
-            # 重试信号
-            raise signals.Retry
-
 
 if __name__ == '__main__':
-    spider = Spider(
-        task_queue=RedisQueue()
-    )
-    spider.run(
-        task_name='init',
-    )
+    spider = Spider()
+    spider.run()
