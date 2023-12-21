@@ -13,7 +13,7 @@ jobs:
 
   deploy-to-test-pypi:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: github.event_name == 'push'  && github.repository == 'KKKKKKKEM/bricks'
     steps:
       - uses: actions/checkout@v3
       - name: Set up Python
@@ -40,7 +40,7 @@ jobs:
 
   deploy-to-pypi:
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' && github.event.action == 'created'
+    if: github.event_name == 'release' && github.event.action == 'created' && github.repository == 'KKKKKKKEM/bricks'
     steps:
       - uses: actions/checkout@v3
       - name: Set up Python
