@@ -376,6 +376,8 @@ if __name__ == '__main__':
 
     # 将字符串转为 arrow 对象, 后面可以传格式
     print(arrow.get("2023-11-20 10:12:13"))
+    # 将时间戳转为 arrow 对象, 可以是秒级 / 毫秒 啥的, 会兼容
+    print(arrow.get(1703174400))
 
     # 获取当前时间月份的开始, 天的开始, 天的结尾, 月份的结尾
     print(arrow.start.months, arrow.start.days, arrow.end.days, arrow.end.months)
