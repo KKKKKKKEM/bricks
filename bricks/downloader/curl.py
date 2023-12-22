@@ -156,7 +156,7 @@ class Downloader(AbstractDownloader):
                     return res
 
         finally:
-            not request.get_options("$session") and curl.close()
+            not request.use_session and curl.close()
 
     @property
     def set_cipher(self):
@@ -345,5 +345,7 @@ class Downloader(AbstractDownloader):
 
 if __name__ == '__main__':
     downloader = Downloader()
-    resp = downloader.fetch({"url": "https://httpbin.org/get", "proxies": "socks5://127.0.0.1:7890"})
-    print(resp.text)
+    rsp = downloader.fetch(Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True))
+    print(rsp.cookies)
+    rsp = downloader.fetch(Request(url="https://httpbin.org/cookies", use_session=True))
+    print(rsp.text)
