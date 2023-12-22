@@ -27,7 +27,7 @@ import httpx  # noqa: E402
 
 class Downloader(AbstractDownloader):
     """
-    对 requests 进行的一层包装
+    对 httpx 进行的一层包装
     兼容 Windows / Mac / Linux
 
 
