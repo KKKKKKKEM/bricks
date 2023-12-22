@@ -96,6 +96,7 @@ class Downloader(AbstractDownloader):
         }
 
         options.update(self.build_headers_options(request.headers))
+        options.update(self.build_cookie_options(request))
         options.update(self.build_body_options(request))
         options.update(self.build_http_method_options(request))
         options.update(self.build_timeout_options(request))
@@ -184,6 +185,17 @@ class Downloader(AbstractDownloader):
         options = {pycurl.HTTPHEADER: headers}
         if req_headers.get("accept-encoding", "").__contains__("gzip"):
             options.update({pycurl.ENCODING: "gzip"})
+
+        return options
+
+    @staticmethod
+    def build_cookie_options(request: Request):
+        """Returns a dict with the pycurl option for the headers."""
+        if request.cookies:
+            cookie_string = '; '.join([f'{key}={value}' for key, value in request.cookies.items()])
+            options = {pycurl.COOKIE, cookie_string}
+        else:
+            options = {}
 
         return options
 
