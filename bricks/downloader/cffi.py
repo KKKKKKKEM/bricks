@@ -52,12 +52,15 @@ class Downloader(AbstractDownloader):
             'verify': request.options.get("verify", False),
             'impersonate': request.options.get("impersonate") or self.impersonate,
             'http_version': request.options.get("http_version"),
-            'stream': request.options.get("stream", False),
         }
 
         next_url = request.real_url
         _redirect_count = 0
-        session: requests.Session = request.get_options("$session") or requests
+
+        if request.use_session:
+            session = request.get_options("$session") or self.get_session()
+        else:
+            session = requests
 
         while True:
             assert _redirect_count < 999, "已经超过最大重定向次数: 999"
@@ -94,3 +97,11 @@ class Downloader(AbstractDownloader):
 
     def make_session(self) -> requests.Session:
         return requests.Session()
+
+
+if __name__ == '__main__':
+    downloader = Downloader()
+    rsp = downloader.fetch(Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True))
+    print(rsp.cookies)
+    rsp = downloader.fetch(Request(url="https://httpbin.org/cookies", use_session=True))
+    print(rsp.text)

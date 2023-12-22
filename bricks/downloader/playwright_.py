@@ -168,8 +168,7 @@ class Downloader(AbstractDownloader):
                 "proxy": proxies,
                 "user_agent": request.headers.get("user-agent"),
             })
-            if not request.get_options("$session"):
-                await context.clear_cookies()
+            await context.clear_cookies()
 
             for interceptor in context_interceptors:
                 assert inspect.isasyncgenfunction(interceptor)

@@ -63,7 +63,10 @@ class Downloader(AbstractDownloader):
         tls_config and options.update(tls_config=tls_config)
         next_url = request.real_url
         _redirect_count = 0
-        session: requests_go.Session = request.get_options("$session") or requests_go
+        if request.use_session:
+            session = request.get_options("$session") or self.get_session()
+        else:
+            session = requests_go
 
         while True:
             assert _redirect_count < 999, "已经超过最大重定向次数: 999"

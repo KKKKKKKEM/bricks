@@ -5,6 +5,7 @@
 import functools
 import inspect
 import json
+import threading
 import time
 import urllib.parse
 from typing import Union
@@ -17,6 +18,7 @@ from bricks.lib.response import Response
 
 
 class AbstractDownloader(metaclass=genesis.MetaClass):
+    local = threading.local()
 
     def fetch(self, request: Union[Request, dict]) -> Response:
         """
@@ -172,3 +174,29 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
         :return:
         """
         raise NotImplementedError
+
+    def _when_make_session(self, func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            self.clear_session()
+            session = func(*args, **kwargs)
+            setattr(self.local, f"{self.__class__}$session", session)
+            return session
+
+        return wrapper
+
+    def get_session(self):
+        """
+        获取当前会话
+
+        :return:
+        """
+        return getattr(self.local, f"{self.__class__}$session", None) or self.make_session()
+
+    def clear_session(self):
+        if hasattr(self.local, f"{self.__class__}$session"):
+            try:
+                old_session = getattr(self.local, f"{self.__class__}$session")
+                old_session.close()
+            except Exception as e:
+                logger.error(f'[清空 session 失败] 失败原因: {str(e) or str(e.__class__.__name__)}', error=e)

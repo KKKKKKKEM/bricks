@@ -78,7 +78,10 @@ class Downloader(AbstractDownloader):
                 )
             return cookies
 
-        curl = request.get_options("$session") or pycurl.Curl()
+        if request.use_session:
+            curl = request.get_options("$session") or self.get_session()
+        else:
+            curl = pycurl.Curl()
         next_url = request.real_url
 
         options = {

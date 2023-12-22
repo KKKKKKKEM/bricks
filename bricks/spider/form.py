@@ -82,6 +82,7 @@ class Download(RenderNode):
     is_success: Optional[str] = ...
     retry: int = 0
     max_retry: int = 5
+    use_session: bool = False
     archive: bool = False
 
     def to_request(self) -> Request:
@@ -99,7 +100,8 @@ class Download(RenderNode):
             proxy=self.proxy,
             is_success=self.is_success,
             retry=self.retry,
-            max_retry=self.max_retry
+            max_retry=self.max_retry,
+            use_session=self.use_session
         )
 
     def to_response(self, options: dict = None) -> Response:

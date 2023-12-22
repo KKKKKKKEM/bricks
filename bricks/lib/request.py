@@ -32,8 +32,10 @@ class Request:
             is_success: Optional[str] = ...,
             retry: int = 0,
             max_retry: int = 5,
+            use_session: bool = False,
     ) -> None:
         self.url = url
+        self.use_session = use_session
         self.params = params
         self.cookies = cookies
         self.method = method.upper()

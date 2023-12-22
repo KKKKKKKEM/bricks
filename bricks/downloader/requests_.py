@@ -58,8 +58,11 @@ class Downloader(AbstractDownloader):
 
         next_url = request.real_url
         _redirect_count = 0
+        if request.use_session:
+            session = request.get_options("$session") or self.get_session()
+        else:
+            session = requests
 
-        session: requests.Session = request.get_options("$session") or requests
         while True:
             assert _redirect_count < 999, "已经超过最大重定向次数: 999"
             response = session.request(**{**options, "url": next_url})
