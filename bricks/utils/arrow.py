@@ -356,3 +356,26 @@ class Arrow(datetime.datetime):
         """
         ts = super().timestamp()
         return fmt(ts * 10 ** (length - 10))
+
+
+if __name__ == '__main__':
+    # 获取当前时间
+    arrow = Arrow()
+
+    # 获取当前时间的相关信息
+    print(f'{arrow.year=}, {arrow.month=}, {arrow.day=}, {arrow.hour=}, {arrow.minute=}, {arrow.second=}')
+
+    # 当前时间往后面偏移一年 + 一个月
+    print(arrow.shift(years=1, months=1))
+
+    # 获取当前时间当前月份有多少天
+    print(f'{arrow.statistics.number_of_days_for_this_month=}')
+
+    # 将当前时间转化为时间戳
+    print(arrow.ts())
+
+    # 将字符串转为 arrow 对象, 后面可以传格式
+    print(arrow.get("2023-11-20 10:12:13"))
+
+    # 获取当前时间月份的开始, 天的开始, 天的结尾, 月份的结尾
+    print(arrow.start.months, arrow.start.days, arrow.end.days, arrow.end.months)
