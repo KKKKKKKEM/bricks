@@ -19,6 +19,7 @@ from bricks.lib.response import Response
 
 class AbstractDownloader(metaclass=genesis.MetaClass):
     local = threading.local()
+    debug = False
 
     def fetch(self, request: Union[Request, dict]) -> Response:
         """
@@ -64,6 +65,7 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
 
             except Exception as e:
                 logger.error(f'[请求失败] 失败原因: {str(e) or str(e.__class__.__name__)}', error=e)
+                self.debug and logger.exception(e)
                 response: Response = Response.make_response(
                     error=e.__class__.__name__,
                     reason=str(e),
@@ -93,6 +95,7 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
 
             except Exception as e:
                 logger.error(f'[请求失败] 失败原因: {str(e) or str(e.__class__.__name__)}', error=e)
+                self.debug and logger.exception(e)
                 response: Response = Response.make_response(
                     error=e.__class__.__name__,
                     reason=str(e),
@@ -167,7 +170,7 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
         request = Request.from_curl(curl_cmd)
         return self.fetch(request)
 
-    def make_session(self):
+    def make_session(self, **options):
         """
         创建一个会话
 
@@ -185,13 +188,13 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
 
         return wrapper
 
-    def get_session(self):
+    def get_session(self, **options):
         """
         获取当前会话
 
         :return:
         """
-        return getattr(self.local, f"{self.__class__}$session", None) or self.make_session()
+        return getattr(self.local, f"{self.__class__}$session", None) or self.make_session(**options)
 
     def clear_session(self):
         if hasattr(self.local, f"{self.__class__}$session"):
