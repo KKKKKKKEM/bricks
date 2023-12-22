@@ -6,6 +6,8 @@ from typing import Literal, Union, List, Awaitable, Callable
 from urllib import parse
 from urllib.parse import urlparse
 
+from loguru import logger
+
 from bricks import Request, Response
 from bricks.downloader import AbstractDownloader
 from bricks.lib.cookies import Cookies
@@ -141,7 +143,8 @@ class Downloader(AbstractDownloader):
 
         proxies = self.parse_proxies_for_playwright(request.proxies)
 
-        if self.reuse:
+        if self.reuse or request.use_session:
+            self.browser_context.reuse = True
             self.browser_context.options = browser_options
             self.browser_context.driver = driver
         else:
@@ -163,41 +166,52 @@ class Downloader(AbstractDownloader):
                     }
                 )
 
-            context = await browser.new_context(**{
-                **context_options,
-                "proxy": proxies,
-                "user_agent": request.headers.get("user-agent"),
-            })
-            await context.clear_cookies()
+            if request.use_session:
+                context = request.get_options("$session")
+                if not context:
+                    context = await self.get_session(**{
+                        "$brwoser": browser,
+                        **context_options,
+                        "proxy": proxies,
+                        "user_agent": request.headers.get("user-agent"),
+                    })
 
-            for interceptor in context_interceptors:
-                assert inspect.isasyncgenfunction(interceptor)
-                await pandora.invoke(
-                    interceptor,
-                    args=[context],
-                    annotations={
-                        type(context): context,
-                        type(browser): browser,
-                        Request: request
-                    },
-                    namespace={
-                        "context": context,
-                        "browser": browser,
-                        "request": request,
-                    }
-                )
+            else:
 
-            scripts = request.get_options("scripts", [])
-            # 为 context 注入脚本
-            await self.injection_scripts(context, scripts=scripts)
+                context = await browser.new_context(**{
+                    **context_options,
+                    "proxy": proxies,
+                    "user_agent": request.headers.get("user-agent"),
+                })
+                await context.clear_cookies()
 
-            # 设置 context 的 Cookie
-            if request.cookies:
-                domain = urlparse(request.real_url).hostname
-                cookies = [SetCookieParam(name=k, value=v, domain=domain) for k, v in request.cookies]
-                await context.add_cookies(cookies)
+            try:
+                for interceptor in context_interceptors:
+                    assert inspect.isasyncgenfunction(interceptor)
+                    await pandora.invoke(
+                        interceptor,
+                        args=[context],
+                        annotations={
+                            type(context): context,
+                            type(browser): browser,
+                            Request: request
+                        },
+                        namespace={
+                            "context": context,
+                            "browser": browser,
+                            "request": request,
+                        }
+                    )
 
-            async with context:
+                scripts = request.get_options("scripts", [])
+                # 为 context 注入脚本
+                await self.injection_scripts(context, scripts=scripts)
+
+                # 设置 context 的 Cookie
+                if request.cookies:
+                    domain = urlparse(request.real_url).hostname
+                    cookies = [SetCookieParam(name=k, value=v, domain=domain) for k, v in request.cookies.items()]
+                    await context.add_cookies(cookies)
 
                 for interceptor in response_interceptors:
                     assert inspect.isasyncgenfunction(interceptor)
@@ -270,6 +284,9 @@ class Downloader(AbstractDownloader):
 
                     return res
 
+            finally:
+                not request.use_session and await context.close()
+
     @staticmethod
     def on_response(page_url, raw_response: Response):
         async def inner(response: async_api.Response):
@@ -330,18 +347,46 @@ class Downloader(AbstractDownloader):
                 _script = {'script': script}
             await conn.add_init_script(**_script)
 
-    def make_session(self):
-        raise NotImplementedError("请设置 reuse 模式为 True 来实现会话复用")
+    async def make_session(self, **kwargs):
+        browser = kwargs.pop('$brwoser')
+        return await browser.new_context(**kwargs)
+
+    async def get_session(self, **options):
+        """
+        获取当前会话
+
+        :return:
+        """
+        session = getattr(self.local, f"{self.__class__}$session", None)
+        if not session:
+            session = await self.make_session(**options)
+
+        return session
+
+    async def clear_session(self):
+        if hasattr(self.local, f"{self.__class__}$session"):
+            try:
+                old_session: async_api.BrowserContext = getattr(self.local, f"{self.__class__}$session")
+                await old_session.close()
+            except Exception as e:
+                logger.error(f'[清空 session 失败] 失败原因: {str(e) or str(e.__class__.__name__)}', error=e)
 
 
 if __name__ == '__main__':
-    downloader = Downloader(headless=False, reuse=False)
+    downloader = Downloader(mode='api', reuse=False, headless=False)
+    downloader.debug = True
 
 
     async def main():
-        res = await downloader.fetch({"url": "https://httpbin.org/get"})
-        # await downloader.fetch({"url": "https://httpbin.org/headers"})
-        print(res.text)
+        rsp = await downloader.fetch(Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True))
+        print(rsp.cookies)
+        rsp = await downloader.fetch(Request(url="https://httpbin.org/cookies", use_session=True))
+        print(rsp.text)
+        rsp = await downloader.fetch(Request(url="https://httpbin.org/cookies"))
+        print(rsp.text)
+
+        rsp = await downloader.fetch(Request(url="https://httpbin.org/cookies", use_session=True))
+        print(rsp.text)
 
 
     asyncio.run(main())

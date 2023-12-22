@@ -181,12 +181,30 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
     def _when_make_session(self, func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            """
+            同步下载器的装饰器方法
+
+            :param args:
+            :param kwargs:
+            :return:
+            """
             self.clear_session()
             session = func(*args, **kwargs)
             setattr(self.local, f"{self.__class__}$session", session)
             return session
 
-        return wrapper
+        @functools.wraps(func)
+        async def aswrapper(*args, **kwargs):
+            if inspect.iscoroutinefunction(self.clear_session):
+                await self.clear_session()  # noqa
+            else:
+                self.clear_session()
+
+            session = await func(*args, **kwargs)
+            setattr(self.local, f"{self.__class__}$session", session)
+            return session
+
+        return aswrapper if inspect.iscoroutinefunction(func) else wrapper
 
     def get_session(self, **options):
         """
