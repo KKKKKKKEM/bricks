@@ -9,7 +9,7 @@ from typing import Union, Literal, Callable, List
 from loguru import logger
 
 from bricks.core import signals, dispatch
-from bricks.core.context import Flow, Context
+from bricks.core.context import Flow, Context, Error
 from bricks.core.events import EventManager, Task, Register
 from bricks.state import const
 from bricks.utils import pandora
@@ -238,9 +238,7 @@ class Pangu(Chaos):
                         raise
 
                     except Exception as e:
-                        logger.error(
-                            f"\n{pandora.get_simple_stack(e)} [{context.form}] {e.__class__.__name__}({e})"
-                        )
+                        EventManager.invoke(Error(context=context, error=e), errors="output")
                         context.error(shutdown=True)
 
     def submit(self, task: dispatch.Task, timeout=None) -> dispatch.Task:
@@ -272,4 +270,19 @@ class Pangu(Chaos):
 
         :return:
         """
-        pass
+        self.use(const.ERROR_OCCURRED, {"func": self.catch})
+
+    def catch(self, exception: Error):  # noqa
+        """
+        捕获异常
+
+        :param exception:
+        :return:
+        """
+        context = exception.context
+        exception: Exception = exception.error
+        stack = pandora.get_pretty_stack(exception)
+        logger.error(
+            f"[{context.form}] {exception.__class__.__name__}({exception})"
+            f"\n{stack}"
+        )
