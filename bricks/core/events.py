@@ -8,24 +8,18 @@ import itertools
 import threading
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Optional, Union, Callable, Any, List
+from typing import Optional, Union, Callable, Any, List, Literal
 
 from loguru import logger
 
-from bricks.core.context import Context, Error
-from bricks.state import const
+from bricks.core.context import Context
 from bricks.utils import pandora
 
 
 class RegisteredEvents:
     def __init__(self):
-        def output_exception(context: Error):
-            logger.exception(context.error)
-
         # 持久事件
         self.permanent = defaultdict(functools.partial(defaultdict, list))
-        self.permanent[None][const.ERROR_OCCURRED].append({"func": output_exception})
-
         # 一次性事件
         self.disposable = defaultdict(functools.partial(defaultdict, list))
         self.lock = threading.Lock()
@@ -96,24 +90,25 @@ class EventManager:
     counter = collections.defaultdict(itertools.count)
 
     @classmethod
-    def trigger(cls, context: Context):
+    def trigger(cls, context: Context, errors: Literal['raise', 'ignore', 'output'] = "raise"):
         """
         trigger events: interact with external functions
 
         """
 
         for event in cls.acquire(context):
-            yield cls._call(event, context)
+            yield cls._call(event, context, errors=errors)
 
     @classmethod
-    def invoke(cls, context: Context):
+    def invoke(cls, context: Context, errors: Literal['raise', 'ignore', 'output'] = "raise"):
         """
         invoke events: invoke all events
 
+        :param errors:
         :param context:
         :return:
         """
-        for _ in cls.trigger(context):
+        for _ in cls.trigger(context, errors=errors):
             pass
 
     @classmethod
@@ -144,18 +139,26 @@ class EventManager:
                 yield event
 
     @classmethod
-    def _call(cls, event: Task, context: Context):
+    def _call(cls, event: Task, context: Context, errors: Literal['raise', 'ignore', 'output'] = "raise"):
 
         func = event.func
         args = event.args or []
         kwargs = event.kwargs or {}
-        return pandora.invoke(
-            func,
-            args=args,
-            kwargs=kwargs,
-            annotations={type(context): context},
-            namespace={"context": context}
-        )
+        try:
+            return pandora.invoke(
+                func,
+                args=args,
+                kwargs=kwargs,
+                annotations={type(context): context},
+                namespace={"context": context}
+            )
+        except Exception as e:
+            if errors == "raise":
+                raise
+            elif errors == "ignore":
+                pass
+            else:
+                logger.exception(e)
 
     @classmethod
     def register(cls, context: Context, *events: Task) -> List[Register]:
