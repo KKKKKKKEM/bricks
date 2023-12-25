@@ -5,6 +5,7 @@
 import threading
 from collections import deque
 
+from bricks import const
 from bricks.core import signals
 from bricks.lib.nodes import LinkNode
 
@@ -214,6 +215,12 @@ class Flow(Context):
 
 
 class Error(Context):
-    def __init__(self, form: str, error: Exception, target=None, **kwargs) -> None:
-        super().__init__(form, target, **kwargs)
+    def __init__(self, error: Exception, context: Context = None, **kwargs) -> None:
+        super().__init__(
+            form=const.ERROR_OCCURRED,
+            target=context and context.target,
+            context=context,
+            **kwargs
+        )
         self.error = error
+        self.context = context
