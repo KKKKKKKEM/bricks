@@ -11,7 +11,7 @@ import re
 import threading
 import time
 import urllib.parse
-from typing import Optional, Callable, Type
+from typing import Optional, Callable, Type, Literal
 
 from loguru import logger
 
@@ -37,6 +37,7 @@ class Proxy:
             proxy: Optional[str] = None,
             auth: Optional[Callable] = None,
             recover: Optional[Callable] = ...,
+            clear: Optional[Callable] = ...,
             threshold: int = math.inf,
             derive: "BaseProxy" = None,
             rkey: str = None
@@ -50,10 +51,11 @@ class Proxy:
         :param threshold: 使用阈值
         """
         self.threshold = threshold
-        self.counter = itertools.count()
+        self.counter = itertools.count(1)
         self.proxy = proxy
         self.auth = auth
         self.recover = recover
+        self.clear = clear
         self.derive = derive
         self.rkey = rkey
 
@@ -133,6 +135,9 @@ class BaseProxy:
         prepared = pandora.prepare(cls.__init__, kwargs=options, ignore=[0])
         return cls(**prepared.kwargs)
 
+    def clear(self, proxy: Proxy):
+        pass
+
     def _when_get(self, raw_method):
         def inner(*args, **kwargs):
             proxy = raw_method(*args, **kwargs)
@@ -140,6 +145,7 @@ class BaseProxy:
                 proxy = Proxy(proxy, auth=self.auth, recover=self.recover, threshold=self.threshold, derive=self)
             proxy.proxy = self.fmt(proxy=proxy.proxy)
             proxy.auth = self.auth
+            proxy.clear = self.clear
             proxy.recover = self.recover
             proxy.threshold = self.threshold
             proxy.derive = self
@@ -310,30 +316,35 @@ class Manager:
         self._context = contextlib.nullcontext()
         self.container = {}
 
-    def get_proxy(self, *configs: dict, timeout: int = None) -> Proxy:
+    def build(self, obj: (dict, BaseProxy)) -> BaseProxy:
+
+        rkey = self.get_rkey(obj)
+        if rkey not in self.container:
+            if isinstance(obj, BaseProxy):
+                self.container[rkey] = obj
+            else:
+                ref: Type[BaseProxy] = pandora.load_objects(obj["ref"])
+                self.container[rkey] = ref.build(**obj)
+
+        return self.container[rkey]
+
+    def get(self, *objs: (dict, BaseProxy), timeout: int = None) -> Proxy:
         """
 
         获取代理
 
-        :param configs: 获取代理的配置 -> {"ref": "指向代理类", ... 这些其他的都是实例化类的参数}
+        :param objs: 获取代理的配置 -> {"ref": "指向代理类", ... 这些其他的都是实例化类的参数}
         :param timeout: 获取代理的超时时间, timeout 为 None 代表一直等待, 超时会直接使用空代理
         :return:
         """
         with self._context:
-            for config in configs:
-                ref = config["ref"] = pandora.load_objects(config["ref"])
-                ref: Type[BaseProxy]
-
-                rkey = self.get_rkey(config)
+            for obj in objs:
+                rkey = self.get_rkey(obj)
 
                 if not hasattr(self._local, rkey):
-                    if rkey not in self.container:
-                        self.container[rkey] = ref.build(**config)
-
-                    # 获取代理模型
-                    ins: BaseProxy = self.container[rkey]
+                    pins: BaseProxy = self.build(obj)
                     try:
-                        proxy = ins.get(timeout=timeout)
+                        proxy = pins.get(timeout=timeout)
                     except TimeoutError:
                         proxy = Proxy()
 
@@ -346,70 +357,77 @@ class Manager:
             else:
                 return Proxy()
 
-    def clear_proxy(self, *configs: dict):
+    def clear(self, *objs: (dict, BaseProxy)):
         """
         清除代理
 
-        :param configs:
+        :param objs:
         :return:
         """
         with self._context:
-            for config in configs:
+            for config in objs:
                 rkey = self.get_rkey(config)
                 if hasattr(self._local, rkey):
+                    proxy: Proxy = getattr(self._local, rkey)
+                    callable(proxy.clear) and pandora.invoke(proxy.clear, args=[proxy])
                     delattr(self._local, rkey)
 
-    def current_proxy(self, *configs: dict) -> Proxy:
+    def now(self, *objs: (dict, BaseProxy)) -> Proxy:
         """
         获取当前代理
 
-        :param configs:
+        :param objs:
         :return:
         """
         with self._context:
-            for config in configs:
+            for config in objs:
                 rkey = self.get_rkey(config)
                 if hasattr(self._local, rkey):
                     return getattr(self._local, rkey)
             else:
                 return Proxy()
 
-    def recover_proxy(self, *configs: dict):
+    def recover(self, *objs: (dict, BaseProxy)):
         """
         回收代理
 
-        :param configs:
+        :param objs:
         :return:
         """
         with self._context:
-            for config in configs:
+            for config in objs:
                 rkey = self.get_rkey(config)
                 if hasattr(self._local, rkey):
                     proxy: Proxy = getattr(self._local, rkey)
-                    callable(proxy.recover) and proxy.recover(proxy.proxy)
+                    callable(proxy.recover) and pandora.invoke(proxy.recover, args=[proxy])
                     delattr(self._local, rkey)
 
-    def use_proxy(self, proxy: Proxy):
+    def fresh(self, *objs: (dict, BaseProxy)) -> Proxy:
+        """
+        刷新代理
+
+        :param objs:
+        :return:
+        """
+        with self._context:
+            self.clear(*objs)
+            return self.get(*objs)
+
+    def use(self, proxy: Proxy):
         state = proxy.use()
         if state is False and hasattr(self._local, proxy.rkey):
             delattr(self._local, proxy.rkey)
 
-    def fresh_proxy(self, *configs: dict) -> Proxy:
-        """
-        刷新代理
-
-        :param configs:
-        :return:
-        """
-        with self._context:
-            self.clear_proxy(*configs)
-            return self.get_proxy(*configs)
-
     @staticmethod
-    def get_rkey(config: dict):
-        return str(hash(json.dumps(config, default=str)))
+    def get_rkey(obj: (dict, BaseProxy)):
+        if isinstance(obj, BaseProxy):
+            rkey = hash(BaseProxy)
+        else:
+            rkey = hash(json.dumps(obj, default=str))
 
-    def set_mode(self, mode=0):
+        return str(rkey)
+
+    def set_mode(self, mode: Literal[0, 1] = 0):
         # 线程隔离
         if mode == 0:
             self._local = threading.local()
@@ -424,4 +442,4 @@ class Manager:
 manager = Manager()
 if __name__ == '__main__':
     p = CustomProxy("www.baidu.com", scheme="socks5")
-    print(p.get())
+    print(manager.get(p))
