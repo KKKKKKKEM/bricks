@@ -439,9 +439,34 @@ class Spider(Pangu):
                             self.dispatcher.running == 0 and
                             task_queue.is_empty(queue_name, threshold=self.get("spider.threshold", default=0))
                     ):
+
+                        number_of_total_requests = self.number_of_total_requests.value
+                        number_of_failure_requests = self.number_of_failure_requests.value
+                        number_of_success_requests = number_of_total_requests - number_of_failure_requests
+                        if number_of_total_requests:
+                            rate_of_success_requests = round(
+                                number_of_success_requests / number_of_total_requests * 100, 2
+                            )
+                        else:
+                            rate_of_success_requests = 0
+
                         logger.debug(
-                            f'[爬取完毕] 队列名称: {queue_name}, 关闭阈值: {self.get("spider.threshold", default=0)}, 提交种子的数量: {count}')
-                        return count
+                            f'[爬取完毕] '
+                            f'队列名称: {queue_name} '
+                            f'关闭阈值: {self.get("spider.threshold", default=0)} '
+                            f'提交种子的数量: {count} '
+                            f'总请求的数量: {number_of_total_requests} '
+                            f'请求成功率: {rate_of_success_requests}% '
+                        )
+
+                        return {
+                            "seeds_count": count,
+                            "number_of_total_requests": number_of_total_requests,
+                            "number_of_failure_requests": number_of_failure_requests,
+                            "number_of_success_requests": number_of_success_requests,
+                            "request_success_rate": rate_of_success_requests,
+
+                        }
 
                     else:
 
@@ -484,11 +509,14 @@ class Spider(Pangu):
         with self.dispatcher:
             t1 = int(time.time() * 1000)
             init_task = dispatch.Task(func=self.run_init)
-            self.active(init_task)
+            future = self.active(init_task)
             task_queue: TaskQueue = self.get("init.task_queue", self.task_queue)
             queue_name: str = self.get("init.queue_name", self.queue_name)
             task_queue.command(queue_name, {"action": task_queue.COMMANDS.WAIT_INIT, "time": t1})
-            self.run_spider()
+            return {
+                "spider": self.run_spider(),
+                "init": future.result()
+            }
 
     @staticmethod
     def get_seeds(**kwargs) -> Union[Iterable[Item], Item]:
@@ -850,7 +878,3 @@ class Spider(Pangu):
         survey: Spider = clazz(**attrs)
         survey.run()
         return list(collect.queue)
-
-
-if __name__ == '__main__':
-    Spider().survey({"id": 1})
