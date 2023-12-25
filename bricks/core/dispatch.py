@@ -17,7 +17,6 @@ from concurrent.futures import Future
 from typing import Union, Dict, Optional
 
 from bricks.core import events, context
-from bricks.state import const
 
 
 class Task(Future):
@@ -83,7 +82,7 @@ class Worker(threading.Thread):
 
             except Exception as e:
                 task.set_exception(e)
-                events.EventManager.invoke(context.Error(error=e, form=const.ERROR_OCCURRED))
+                events.EventManager.invoke(context.Error(error=e))
 
             finally:
                 self.dispatcher.doing.task_done()
