@@ -20,7 +20,7 @@ from bricks.core.genesis import Pangu
 from bricks.downloader import cffi, AbstractDownloader
 from bricks.lib.counter import FastWriteCounter
 from bricks.lib.items import Items
-from bricks.lib.proxies import manager
+from bricks.lib.proxies import manager, BaseProxy
 from bricks.lib.queues import TaskQueue, LocalQueue, Item
 from bricks.lib.request import Request
 from bricks.lib.response import Response
@@ -112,7 +112,7 @@ class Context(Flow):
         return ret
 
     def clear_proxy(self):
-        manager.clear_proxy(self.request.proxy or self.target.proxy)
+        manager.clear(self.request.proxy or self.target.proxy)
         self.request.proxies = None
 
     error = failure
@@ -163,7 +163,7 @@ class Spider(Pangu):
             downloader: Optional[Union[str, AbstractDownloader]] = None,
             task_queue: Optional[TaskQueue] = None,
             queue_name: Optional[str] = "",
-            proxy: Optional[dict] = None,
+            proxy: Optional[Union[dict, BaseProxy]] = None,
             forever: Optional[bool] = False,
             **kwargs
     ) -> None:
