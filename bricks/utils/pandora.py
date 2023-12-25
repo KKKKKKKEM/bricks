@@ -19,10 +19,20 @@ import sys
 import threading
 from typing import Any, List, Union, Mapping, Callable, Literal, Tuple
 
+import better_exceptions
 from loguru import logger
 
 JSONP_REGEX = re.compile(r'\S+?\((?P<obj>[\s\S]*)\)')
 PACKAGE_REGEX = re.compile(r"([a-zA-Z0-9_\-]+)([<>=]*)([\d.]*)")
+
+better_exceptions.MAX_LENGTH = None
+exec_formatter = better_exceptions.ExceptionFormatter(
+    colored=False,
+    theme=better_exceptions.THEME,
+    max_length=better_exceptions.MAX_LENGTH,
+    pipe_char=better_exceptions.PIPE_CHAR,
+    cap_char=better_exceptions.CAP_CHAR
+)
 
 
 def load_objects(path_or_reference, reload=False):
@@ -321,6 +331,14 @@ def get_simple_stack(e):
         formatted_trace += f"    {line}\n"
         tb = tb.tb_next
     return formatted_trace
+
+
+def get_pretty_stack(e: Exception):
+    """
+    获取 stack 信息
+
+    """
+    return "".join(list(exec_formatter.format_exception(e.__class__, e, sys.exc_info()[2])))
 
 
 def clean_rows(*rows: dict, **layout):

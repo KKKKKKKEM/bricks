@@ -5,3 +5,4 @@ jsonpath==0.82.2
 w3lib==2.1.2
 curl_cffi==0.5.10
 redis==5.0.1
+better_exceptions==0.3.3
