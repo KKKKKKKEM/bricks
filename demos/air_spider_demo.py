@@ -2,6 +2,7 @@ from loguru import logger
 
 from bricks import Request, const
 from bricks.core import signals
+from bricks.core.context import Error
 from bricks.spider import air
 from bricks.spider.air import Context
 
@@ -105,6 +106,9 @@ class MySpider(air.Spider):
         self.use(const.BEFORE_PIPELINE, {"func": self.turn_page})
         self.use(const.AFTER_REQUEST, {"func": self.is_success})
 
+    def catch(self, exception: Error):
+        super().catch(exception)
+
 
 if __name__ == '__main__':
     spider = MySpider(
@@ -143,4 +147,4 @@ if __name__ == '__main__':
         # },
         # task_queue=RedisQueue()
     )
-    spider.run()
+    print(spider.run())
