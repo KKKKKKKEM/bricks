@@ -98,7 +98,7 @@ class RenderNode:
         base = base or {}
         node = copy.deepcopy(self)
         for field in dataclasses.fields(node):
-            if field.name in node.unrendered:
+            if field.name in node.unrendered.value:
                 continue
             value = getattr(node, field.name)
             new_value = node.format(value, base)
