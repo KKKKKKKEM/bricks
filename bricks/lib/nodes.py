@@ -98,7 +98,7 @@ class RenderNode:
         base = base or {}
         node = copy.deepcopy(self)
         for field in dataclasses.fields(node):
-            if field.name in node.unrendered.value:
+            if field.name in [*["adapters", "miss", "unrendered"], *node.unrendered]:
                 continue
             value = getattr(node, field.name)
             new_value = node.format(value, base)
@@ -118,12 +118,6 @@ class RenderNode:
                 return value
         else:
             return value
-
-    def __setattr__(self, key, value):
-        if key in ["adapters", "miss", "unrendered"] and not isinstance(value, UnRendered):
-            value = UnRendered(value)
-
-        return super().__setattr__(key, value)
 
 
 @dataclasses.dataclass
