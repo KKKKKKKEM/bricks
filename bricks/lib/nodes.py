@@ -14,6 +14,11 @@ from bricks.utils import pandora
 FORMAT_REGEX = re.compile(r'{(\w+)(?::(\w+))?}')
 
 
+class UnRendered:
+    def __init__(self, value):
+        self.value = value
+
+
 @dataclasses.dataclass
 class RenderNode:
     # 字段缺失时的处理手段
@@ -80,6 +85,9 @@ class RenderNode:
 
         elif isinstance(value, dict):
             return {k: self.format(v, base) for k, v in value.items()}
+
+        elif isinstance(value, UnRendered):
+            return value.value
 
         elif dataclasses.is_dataclass(value):
             return value.render(base)
