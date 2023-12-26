@@ -4,9 +4,10 @@
 # @Desc    :
 import copy
 import dataclasses
+import json
 import re
 from collections import UserDict
-from typing import Any, Callable, Optional, Literal, Mapping
+from typing import Any, Callable, Optional, Literal, Mapping, Union, List, Tuple
 
 from bricks.utils import pandora
 
@@ -15,17 +16,22 @@ FORMAT_REGEX = re.compile(r'{(\w+)(?::(\w+))?}')
 
 @dataclasses.dataclass
 class RenderNode:
-    errors: Literal["fix", "raise", "ignore"] = "fix"
+    # 字段缺失时的处理手段
+    miss: Literal["fix", "raise", "ignore"] = "fix"
+
+    # 不需要渲染的字段
+    unrendered: Union[List[str], Tuple[str]] = dataclasses.field(
+        default_factory=lambda: ["adapters", "miss", "unrendered"])
+
+    # 适配器, 可以改造渲染语法
     adapters: dict = dataclasses.field(default_factory=lambda: {
         "int": int,
-        int: int,
         "str": str,
-        str: str,
         "float": float,
-        float: float,
-        "json": pandora.json_or_eval,
-        list: pandora.json_or_eval,
-        dict: pandora.json_or_eval,
+        "list": pandora.json_or_eval,
+        "dict": pandora.json_or_eval,
+        "json": lambda value: json.dumps(pandora.json_or_eval(value), ensure_ascii=False)
+
     })
 
     def format(self, value, base: dict):
@@ -33,58 +39,62 @@ class RenderNode:
             while True:
                 try:
                     return value.format(**base)
-                except ValueError:
+                except (ValueError, TypeError):
 
                     placeholders = FORMAT_REGEX.findall(value)
-                    # 有多个, 那最终肯定还是字符串
-                    convert_value = len(placeholders) == 1
                     for placeholder, type_str in placeholders:
 
-                        if placeholder not in base:
-                            if self.errors == 'raise':
+                        if placeholder not in base or not placeholder:
+                            if self.miss == "raise":
                                 raise ValueError(f"Missing key in base: {placeholder}")
-                            elif self.errors == 'ignore':
+
+                            elif self.miss == 'ignore':
                                 return value
+
                             else:
                                 base.setdefault(placeholder, "")
 
                         placeholder_value = base[placeholder]
-                        if type_str:
-                            placeholder_value = self.run_adapter(placeholder_value, type_str, base=base)
-                            value = value.replace(f"{{{placeholder}:{type_str}}}", str(placeholder_value))
-                        else:
-                            value = value.replace(f"{{{placeholder}}}", str(placeholder_value))
 
-                        if convert_value:
-                            value = self.run_adapter(value, type(placeholder_value), base=base)
+                        if type_str:
+                            tpl = f"{{{placeholder}:{type_str}}}"
+                        else:
+                            tpl = f"{{{placeholder}}}"
+
+                        value = self.run_adapter(value.replace(tpl, str(placeholder_value)), type_str, base=base)
 
                     return value
 
-                except KeyError as e:
-                    if self.errors == "raise":
+                except (KeyError, IndexError) as e:
+                    if self.miss == "raise":
                         raise ValueError(f"Missing key in base: {e}")
 
-                    elif self.errors == 'ignore':
+                    elif self.miss == 'ignore':
                         return value
 
                     else:
                         base.setdefault(e.args[0], "")
 
-        elif isinstance(value, list):
-            return [self.format(item, base) for item in value]
+        elif isinstance(value, (list, tuple, set)):
+            return type(value)(self.format(item, base) for item in value)
+
         elif isinstance(value, dict):
             return {k: self.format(v, base) for k, v in value.items()}
+
         elif dataclasses.is_dataclass(value):
             return value.render(base)
+
         return value
 
     def render(self, base: (dict, Mapping, UserDict) = None):
         # 创建一个新的实例，避免修改原始实例
         base = base or {}
         node = copy.deepcopy(self)
-        for field in dataclasses.fields(self):
+        for field in dataclasses.fields(node):
+            if field.name in node.unrendered:
+                continue
             value = getattr(node, field.name)
-            new_value = self.format(value, base)
+            new_value = node.format(value, base)
             setattr(node, field.name, new_value)
         return node
 
@@ -92,7 +102,6 @@ class RenderNode:
         self.adapters[form] = action
 
     def run_adapter(self, value, form: Any, base: dict = None):
-        print(value)
         if form in self.adapters:
             adapter = self.adapters[form]
             try:
