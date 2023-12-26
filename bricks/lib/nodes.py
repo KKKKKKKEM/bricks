@@ -25,8 +25,7 @@ class RenderNode:
     miss: Literal["fix", "raise", "ignore"] = "fix"
 
     # 不需要渲染的字段
-    unrendered: Union[List[str], Tuple[str]] = dataclasses.field(
-        default_factory=lambda: ["adapters", "miss", "unrendered"])
+    unrendered: Union[List[str], Tuple[str]] = dataclasses.field(default_factory=lambda: [])
 
     # 适配器, 可以改造渲染语法
     adapters: dict = dataclasses.field(default_factory=lambda: {
@@ -119,6 +118,12 @@ class RenderNode:
                 return value
         else:
             return value
+
+    def __setattr__(self, key, value):
+        if key in ["adapters", "miss", "unrendered"] and not isinstance(value, UnRendered):
+            value = UnRendered(value)
+
+        return super().__setattr__(key, value)
 
 
 @dataclasses.dataclass
