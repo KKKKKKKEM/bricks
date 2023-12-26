@@ -108,14 +108,16 @@ def require(
             return installed_version
 
     except importlib_metadata.PackageNotFoundError:
-        if action == "raise":
-            raise importlib_metadata.PackageNotFoundError(f"缺少依赖包: {package_spec}")
 
         # 包没有安装或版本不符合要求
         install_command = package_spec if required_version else package
-        subprocess.check_call([sys.executable, "-m", "pip", "install", install_command])
-        logger.debug(f"'{install_command}'已安装/更新。")
-        return importlib_metadata.version(package)
+        cmd = [sys.executable, "-m", "pip", "install", install_command]
+        if action == "raise":
+            raise importlib_metadata.PackageNotFoundError(f"依赖包不符合要求, 请使用以下命令安装: {' '.join(cmd)}")
+        else:
+            logger.debug(f"依赖包不符合要求, 自动修正, 命令: {' '.join(cmd)}")
+            subprocess.check_call(cmd)
+            return importlib_metadata.version(package)
 
 
 def invoke(func, args=None, kwargs: dict = None, annotations: dict = None, namespace: dict = None, ignore: list = None):
