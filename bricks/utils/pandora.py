@@ -460,9 +460,9 @@ def with_metaclass(
 
                 for func in iterable(autonomous):
                     if isinstance(func, str):
-                        func = getattr(ins, func)
+                        func = getattr(ins, func, None)
 
-                    invoke(func, namespace={"self": ins})
+                    func and invoke(func, namespace={"self": ins})
 
                 return ins
 
@@ -482,13 +482,25 @@ class Method:
 
         return inner
 
-    def install(self):
-        print('install...')
 
+def guess(_object: Any) -> Any:
+    """
+    智能的转换类型
 
-if __name__ == '__main__':
-    # print(Method("sss"))
-    # print(Method("sss"))
-    # print(Method("sss"))
-    # print(Method("sss"))
-    print(inspect.signature(Method))
+    :param _object:
+    :return:
+    """
+    if isinstance(_object, dict):
+        return {k: guess(v) for k, v in _object.items()}
+
+    elif isinstance(_object, (list, tuple, set)):
+        return _object.__class__([guess(i) for i in _object])
+
+    elif isinstance(_object, str):
+        try:
+            return ast.literal_eval(_object)
+        except:
+            return _object
+
+    else:
+        return _object
