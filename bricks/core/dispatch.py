@@ -155,7 +155,8 @@ class Dispatcher:
         self._set_env()
 
     def _set_env(self):
-        self.loop = asyncio.get_event_loop()
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
         self.doing = queue.Queue()
         self.workers: Dict[str, Worker] = {}
         self._remain_workers = queue.Queue()
