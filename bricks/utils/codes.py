@@ -17,7 +17,7 @@ class Type(str, enum.Enum):
 
 
 @dataclasses.dataclass
-class Genertor:
+class Generator:
     flows: List[Tuple[Type, Any]]
     code: str = ""
 
