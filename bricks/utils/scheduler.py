@@ -49,7 +49,7 @@ from bricks.utils import pandora, arrow
 
 
 class TSTATE(enum.Enum):
-    CANCLE = 0
+    CANCEL = 0
 
 
 class BaseTrigger:
@@ -127,7 +127,7 @@ class BaseTrigger:
 
         self._next_fire_time = self.get_next_fire_time(now)
         if self.until and self.until > arrow.Arrow.now():
-            return TSTATE.CANCLE
+            return TSTATE.CANCEL
         else:
             return self._result
 
@@ -370,9 +370,9 @@ class DateTrigger(BaseTrigger):
         return arrow.Arrow.get(self.exprs)
 
     def run(self):
-        if arrow.Arrow.now() > self.next_fire_time: return TSTATE.CANCLE
+        if arrow.Arrow.now() > self.next_fire_time: return TSTATE.CANCEL
         super().run()
-        return TSTATE.CANCLE
+        return TSTATE.CANCEL
 
 
 class Scheduler:
@@ -492,7 +492,7 @@ class Scheduler:
 
     def run_job(self, job: BaseTrigger):
         res = job.run()
-        if res == TSTATE.CANCLE: self.jobs.remove(job)
+        if res == TSTATE.CANCEL: self.jobs.remove(job)
 
     def submit(
             self,

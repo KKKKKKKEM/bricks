@@ -357,8 +357,8 @@ def clean_rows(*rows: dict, **layout):
     """
 
     def _rename(rule: dict, data: dict):
-        for oldname, newname in rule.items():
-            data[newname] = data.pop(oldname, None)
+        for old_name, new_name in rule.items():
+            data[new_name] = data.pop(old_name, None)
 
     def _show(rule: dict, data: dict):
         for key, flag in rule.items():
@@ -499,7 +499,7 @@ def guess(_object: Any) -> Any:
     elif isinstance(_object, str):
         try:
             return ast.literal_eval(_object)
-        except:
+        except:  # noqa
             return _object
 
     else:

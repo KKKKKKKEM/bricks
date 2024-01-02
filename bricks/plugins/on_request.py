@@ -142,7 +142,7 @@ class After:
         if not scripts:
             return
 
-        obj = codes.Genertor(
+        obj = codes.Generator(
             flows=[
                 (codes.Type.condition, scripts),
             ]
