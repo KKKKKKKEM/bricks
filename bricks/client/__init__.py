@@ -1,5 +1,6 @@
 import argparse
 import dataclasses
+import os
 import sys
 
 
@@ -30,6 +31,7 @@ class Argv:
     def get_parser() -> argparse.ArgumentParser:
         def set_work_dir(x):
             x and sys.path.insert(0, x)
+            x and os.chdir(x)
             return x
 
         parser = argparse.ArgumentParser()
