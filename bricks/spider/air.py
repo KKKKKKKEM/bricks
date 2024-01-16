@@ -81,7 +81,7 @@ class Context(Flow):
 
         :return:
         """
-        ret = self.task_queue.replace(self.queue_name, self.seeds, new, qtypes=qtypes)
+        ret = self.task_queue.replace(self.queue_name, (self.seeds, new), qtypes=qtypes)
         self.seeds.fingerprint = new
         return ret
 
