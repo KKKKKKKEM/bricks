@@ -143,8 +143,8 @@ local function popItems(key, count, default_type, backup_key)
         -- 获取最大的分数
         values = redis.call("ZPOPMIN", key, count)
         ret = {}
-        for i = 1, #temp, 2 do
-            table.insert(ret, temp[i])
+        for i = 1, #values, 2 do
+            table.insert(ret, values[i])
         end
     elseif keyType == "none" then
         ret = {}
@@ -662,8 +662,9 @@ return  redis.call("DEL", unpack(ARGV))
 
 if __name__ == '__main__':
     rds = Redis()
-    print(rds.add('test2', 'test', "test2", "test3"))
+    print(rds.add('test2', 'test', "test2", "test3", genre="list"))
     # print(rds.pop('test'))
     # print(rds.remove('test', "test2"))
     # print(rds.replace('test', ("test3", "test4")))
-    print(rds.merge('test', "test2"))
+    # print(rds.merge('test', "test2"))
+    print(rds.add('test2', 'xxx', maxsize=3))
