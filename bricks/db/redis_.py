@@ -6,6 +6,7 @@ from __future__ import absolute_import
 
 import copy
 import datetime
+import functools
 import json
 import time
 from typing import Union, List
@@ -30,6 +31,253 @@ def _to_str(*args):
     ]
 
 
+class LUA:
+
+    def __init__(self, conn: "Redis", base: str = ...) -> None:
+        self.conn = conn
+        if base is ...:
+            base = """
+            
+--更换数据库
+local function changeDataBase(db_num)
+    redis.replicate_commands()
+    redis.call("select", db_num)
+end
+--获取key的类型
+local function getKeyType(key, default_type)
+    -- .ok 正式情况下要加上, 调试的时候不需要 .ok
+    local kt = redis.call("TYPE", key).ok
+    if default_type and kt == "none" then
+        return default_type
+    else
+        return kt
+    end
+
+end
+--获取 key 内的数据条数
+local function getKeySize(key, default_type)
+    local keyType = getKeyType(key, default_type)
+    if keyType == "none" then
+        return 0
+    elseif keyType == "set" then
+        return redis.call("SCARD", key)
+    elseif keyType == "zset" then
+        return redis.call("ZCARD", key)
+    elseif keyType == "list" then
+        return redis.call("LLEN", key)
+    elseif keyType == "hash" then
+        local v = redis.call("hgetall", KEYS[flag])
+        local t = 0
+        for i = 1, #v, 2 do t = t + tonumber(v[i + 1]) end
+        return t 
+    else
+        return redis.error_reply("[getKeySize] ERR unknown key type: ".. keyType)
+    end
+
+
+end
+-- 合并多个 key 到 dest 内
+local function mergeKeys(dest, froms, default_type)
+    local keyType = getKeyType(dest, default_type)
+    local ret
+    if keyType == "set" then
+        ret = redis.call("SUNIONSTORE", dest, dest, unpack(froms))
+    elseif keyType == 'zset' then
+        ret = redis.call("ZUNIONSTORE", dest, #froms + 1, dest, unpack(froms))
+    elseif keyType == 'list' then
+        local mergedList = {}
+        for i = 1, #froms do
+            for j = 1, redis.call('LLEN', froms[i]) do
+                table.insert(mergedList, redis.call('LINDEX', froms[i], j - 1))
+            end
+        end
+        ret = redis.call('RPUSH', dest, unpack(mergedList))
+    else
+        return redis.error_reply("ERR unknown key type: ".. keyType)
+    end
+    redis.call("DEL", unpack(froms))
+    return ret
+end
+
+--将 values 添加至 key 中 (原封不同)
+local function backupItems(key, values, default_type)
+    local keyType = getKeyType(key, default_type)
+
+    -- list, 从右边加进去
+    if keyType == "list" then
+        redis.call("RPUSH", key, unpack(values))
+        return #values
+
+        -- set, 一次全部加进去
+    elseif keyType == "set" then
+        return redis.call("SADD", key, unpack(values))
+
+        -- zset, 从最小分数开始递增
+    elseif keyType == "zset" then
+        return redis.call("ZADD", key, unpack(values))
+    else
+        return redis.error_reply("ERR unknown key type: ".. keyType)
+    end
+
+
+end
+--从key 中 pop 出 count 条数据
+local function popItems(key, count, default_type, backup_key)
+    local keyType = getKeyType(key, default_type)
+    local ret
+    local values = {}
+    count = count or 1
+
+    -- list, 从左边弹出
+    if keyType == "list" then
+        ret = redis.call("LPOP", key, count)
+        values = ret
+
+        -- set, 从左边弹出
+    elseif keyType == "set" then
+        ret = redis.call("SPOP", key, count)
+        values = ret
+
+        -- zset, 从最小分数开始弹出
+    elseif keyType == "zset" then
+        -- 获取最大的分数
+        values = redis.call("ZPOPMIN", key, count)
+        ret = {}
+        for i = 1, #temp, 2 do
+            table.insert(ret, temp[i])
+        end
+    elseif keyType == "none" then
+        ret = {}
+    else
+        return redis.error_reply("ERR unknown key type: ".. keyType)
+    end
+
+    if #values > 0 and backup_key and backup_key ~= "" then
+        backupItems(backup_key, values, keyType)
+    end
+
+    return ret
+
+
+end
+
+--将 values 添加至 key 中
+local function addItems(key, values, default_type, maxsize)
+    -- 移除多余的数量
+    if maxsize and tonumber(maxsize) ~= 0 then
+        local currentCount = getKeySize(key, default_type)
+        local removeCount = currentCount + #values - maxsize
+        popItems(key, removeCount, default_type)
+    end
+
+    local keyType = getKeyType(key, default_type)
+    -- list, 从右边加进去
+    if keyType == "list" then
+        redis.call("RPUSH", key, unpack(values))
+        return #values
+
+        -- set, 一次全部加进去
+    elseif keyType == "set" then
+        return redis.call("SADD", key, unpack(values))
+
+        -- zset, 从最小分数开始递增
+    elseif keyType == "zset" then
+        -- 获取最大的分数
+        local score = redis.call('ZRANGE', key, "+inf", "-inf", "BYSCORE", "REV", "LIMIT", 0, 1, "withscores")[2]
+        -- 不存在的时候初始为 0
+        score = score or 0
+        -- 转为数字
+        score = tonumber(score)
+        local ret = 0
+        for i = 1, #values, 1 do
+            score = score + 1
+            ret = ret + redis.call('ZADD', key, score, values[i])
+        end
+
+        return ret
+
+    else
+        return redis.error_reply("ERR unknown key type: ".. keyType)
+    end
+
+
+end
+
+--从key 中删除 values
+local function removeItems(key, values, default_type, backup_key)
+    local keyType = getKeyType(key, default_type)
+    local removed = 0
+    local backupd = {}
+
+    if keyType == "set" then
+
+        for i = 1, #values do
+            local r = redis.call("SREM", key, values[i])
+            removed = removed + r
+            if r ~= 0 then
+                table.insert(backupd, values[i])
+            end
+
+        end
+    elseif keyType == "zset" then
+        for i = 1, #values do
+            local score = redis.call("ZSCORE", key, values[i])
+            local r = redis.call("ZREM", key, values[i])
+            removed = removed + r
+            if r ~= 0 then
+                table.insert(backupd, score)
+                table.insert(backupd, values[i])
+            end
+        end
+
+    elseif keyType == 'list' then
+        for i = 1, #values do
+            local r = redis.call("LREM", key, 0, values[i])
+            removed = removed + r
+            if r ~= 0 then
+                table.insert(backupd, values[i])
+            end
+        end
+
+    end
+    if #backupd > 0 and backup_key and backup_key ~= "" then
+        backupItems(backup_key, backupd, keyType)
+    end
+    return removed
+
+end
+--将 key 中的 old 替换为 new
+local function replaceItem(key, old, new, default_type)
+    local ret = 0
+    local keyType = getKeyType(key, default_type)
+    local r = removeItems(key, { old }, keyType)
+    if r ~= 0 then
+        addItems(key, { new }, keyType)
+        ret = ret + 1
+    end
+    return ret
+end
+
+            
+            
+            """
+
+        self.base = base or ""
+
+    def register(self, lua: str):
+        return self.get_script(lua)
+
+    def run(self, lua, keys=None, args=None):
+        script = self.get_script(lua)
+        return script(keys=keys, args=args)
+
+    @functools.lru_cache(maxsize=None)
+    def get_script(self, lua: str):
+        lua = self.base + lua.strip()
+        script = self.conn.register_script(lua)
+        return script
+
+
 class Redis(redis.client.Redis):
     """
     Redis 工具
@@ -51,6 +299,7 @@ class Redis(redis.client.Redis):
         self.password = password
         self.port = port
         self._kwargs = copy.deepcopy(kwargs)
+        self.lua = LUA(self)
 
         super().__init__(
             host=host,
@@ -74,34 +323,35 @@ class Redis(redis.client.Redis):
         db_num = self.database if db_num is None else db_num
         keys = [value, *names]
         args = [db_num, *offsets]
-        lua = """
-redis.replicate_commands()
-redis.call("select", ARGV[1])
-for flag = 2, #ARGV 
-do 
-    redis.call("setbit",KEYS[flag],ARGV[flag], KEYS[1])
-end
- """
-        script = self.register_script(lua)
-        return script(keys=keys, args=args)
+
+        return self.lua.run(
+            lua="""
+    changeDataBase(ARGV[1])
+    for flag = 2, #ARGV
+    do
+        redis.call("setbit", KEYS[flag], ARGV[flag], KEYS[1])
+    end
+            
+            """,
+            keys=keys,
+            args=args
+        )
 
     def getbits(self, names, offsets, db_num=None):
         db_num = self.database if db_num is None else db_num
         keys = names
         args = [db_num, *offsets]
         lua = """
-redis.replicate_commands()
-redis.call("select", ARGV[1])
-local ret = {}
-for flag = 2, #ARGV 
-do 
-    local r = redis.call("getbit",KEYS[flag-1],ARGV[flag])
-    table.insert(ret, r)
-end
-return ret
+    changeDataBase(ARGV[1])
+    local ret = {}
+    for flag = 2, #ARGV
+    do
+        local r = redis.call("getbit", KEYS[flag - 1], ARGV[flag])
+        table.insert(ret, r)
+    end
+    return ret
             """
-        script = self.register_script(lua)
-        return script(keys=keys, args=args)
+        return self.lua.run(lua=lua, args=args, keys=keys)
 
     def acquire_lock(self, name, timeout=3600 * 24, block=False, prefix='', value=None, db_num=None):
         """
@@ -121,8 +371,7 @@ return ret
         keys = [f'{prefix}{name}', value or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), timeout]
         args = [db_num]
         lua = """
-redis.replicate_commands()
-redis.call("select", ARGV[1])
+changeDataBase(ARGV[1])
 local ret = redis.call("SETNX",KEYS[1],KEYS[2])
 if(ret == 1)
 then
@@ -131,9 +380,8 @@ end
 return ret
 
 """
-        script = self.register_script(lua)
         while True:
-            ret = script(keys=keys, args=args)
+            ret = self.lua.run(lua=lua, args=args, keys=keys)
             if ret or not block:
                 return ret
             else:
@@ -214,30 +462,14 @@ return ret
         keys = names
         args = [db_num]
         lua = """
-redis.replicate_commands()
-redis.call("select", ARGV[1])
+changeDataBase(ARGV[1])
 local ret = {}
 for flag = 1, #KEYS do
-    local key_type = redis.call("TYPE", KEYS[flag]).ok
-    if key_type == "zset" then
-        ret[flag] = redis.call("zcard", KEYS[flag])
-    elseif key_type == "none" then
-        ret[flag] = 0
-    elseif key_type == "list" then
-        ret[flag] = redis.call("llen", KEYS[flag])
-    elseif key_type == "hash" then
-        local v = redis.call("hgetall", KEYS[flag])
-        local t = 0
-        for i = 1, #v, 2 do t = t + tonumber(v[i + 1]) end
-        ret[flag] = t
-    else
-        ret[flag] = redis.call("scard", KEYS[flag])
-    end
+    ret[flag] = getKeySize(KEYS[flag], "none")
 end
 return ret
 """
-        script = self.register_script(lua)
-        ret = script(keys=keys, args=args)
+        ret = self.lua.run(lua=lua, args=args, keys=keys)
         return pandora.single(ret) if len(names) == 1 else ret
 
     def delete(self, *names, db_num=None):
@@ -254,17 +486,10 @@ return ret
         keys = [db_num]
         args = names
         lua = '''
-redis.replicate_commands()
-redis.call("select", KEYS[1])
-local success = 0
-for i = 1, #ARGV do
-    local r = redis.call("DEL", ARGV[i])
-    success = success + r
-end
-return success
+changeDataBase(KEYS[1])
+return  redis.call("DEL", unpack(ARGV))
 '''
-        script = self.register_script(lua)
-        return script(keys=keys, args=args)
+        return self.lua.run(lua=lua, keys=keys, args=args)
 
     def add(self, name: Union[str, List[str]], *values, db_num=None, genre=None, maxsize=0):
         """
@@ -280,85 +505,24 @@ return success
         if not name:
             return 0
 
-        if genre is None:
-            genre = "redis.call('TYPE', KEYS[index]).ok"
-
         db_num = self.database if db_num is None else db_num
-        keys = [db_num, maxsize, *pandora.iterable(name)]
+        keys = [db_num, genre or "set", maxsize, *pandora.iterable(name)]
         args = _to_str(*values)
         lua = f'''
-redis.replicate_commands()
-redis.call("select", KEYS[1])
-local success = 0
-local maxsize = tonumber(KEYS[2])
-for index = 3, #KEYS do
-    local key_type = {"redis.call('TYPE', KEYS[index]).ok" if genre is None else genre!r}
-    if key_type == "zset" then
+    local db_num = KEYS[1]
+    local default_type = KEYS[2]
+    local maxsize = KEYS[3]
+    local values = ARGV
 
-        if maxsize ~= 0 then
-            -- 将重复的移除
-            redis.call("zrem", KEYS[index], unpack(ARGV))
-            -- 计算当前总数量
-            local current_count = redis.call("zcard", KEYS[index])
-            -- 计算需要删除多少数量
-            local remove_count = current_count - maxsize + #ARGV
-            if remove_count > 0 then
-                -- 将多余的删除
-                redis.call("zpopmin", KEYS[index], remove_count)
-            end
-        end
-        -- 获取当前最大的分数
-        local v = redis.call("zrevrangebyscore", KEYS[index], "+inf", "-inf", "LIMIT", 0, 1, "withscores")[2]
-        if v == nil then v = 0 end
-        local values = {{}}
-
-        for i = 1, #ARGV, 1 do
-            table.insert(values, v + i+1)
-            table.insert(values, ARGV[i])
-        end
-
-        local r = redis.call("zadd", KEYS[index], unpack(values))
-        success = success + r
-
-    elseif key_type == "list" then
-        if maxsize ~= 0 then
-
-            local current_count = redis.call("llen", KEYS[index])
-            local remove_count = current_count + #ARGV - maxsize
-            if remove_count > 0 then
-                for i = 1, remove_count do
-                    redis.call("rpop", KEYS[index])
-                end
-            end
-
-        end
-        local r = redis.call("lpush", KEYS[index], unpack(ARGV))
-        success = success + r
-
-    else
-        if maxsize ~= 0 then
-            -- 将重复的移除
-            redis.call("srem", KEYS[index], unpack(ARGV))
-            -- 计算当前总数量
-            local current_count = redis.call("scard", KEYS[index])
-            -- 计算需要删除多少数量
-            local remove_count = current_count - maxsize + #ARGV
-            if remove_count > 0 then
-                -- 将多余的删除
-                redis.call("spop", KEYS[index], remove_count)
-            end
-
-        end
-
-        local r = redis.call("sadd", KEYS[index], unpack(ARGV))
-        success = success + r
+    changeDataBase(db_num)
+    local success = 0
+    for i = 4, #KEYS do
+        local key = KEYS[i]
+        success = success + addItems(key, values, default_type, maxsize)
     end
-end
-return success
-
+    return success
 '''
-        script = self.register_script(lua)
-        return script(keys=keys, args=args)
+        return self.lua.run(lua=lua, keys=keys, args=args)
 
     def pop(self, name: Union[str, List[str]], count=1, db_num=None, backup=None):
         """
@@ -373,72 +537,33 @@ return success
         if not name:
             return
         db_num = self.database if db_num is None else db_num
-        keys = [backup or '', *pandora.iterable(name)]
-        args = [db_num, count]
+        keys = [db_num, count, "set", backup or '']
+        args = [*pandora.iterable(name)]
         lua = '''
-redis.replicate_commands()
-redis.call("select", ARGV[1])
-local ret = {}
-
-for index = 2, #KEYS, 1 do
-    local key_type = redis.call("TYPE", KEYS[index]).ok
-
-    if key_type == "set" then
-        local temp = redis.call("spop", KEYS[index], ARGV[2])
-        for flag = 1, #temp do
-            if KEYS[1] ~= '' then
-                redis.call("sadd", KEYS[1], temp[flag])
-            end
-            table.insert(ret, temp[flag])
-        end
-
-    elseif key_type == "zset" then
-        local temp = redis.call("zpopmin", KEYS[index], ARGV[2])
-        for i = 1, #temp do
-            if i % 2 ~= 0 then
-                table.insert(ret, temp[i])
-                if KEYS[1] ~= '' then
-                    redis.call("zadd", KEYS[1], temp[i + 1], temp[i])
-                end
-            end
-        end
-
-    elseif key_type == "list" then
-        local count = 0
-        while count < tonumber(ARGV[2]) do
-            local t = redis.call("rpop", KEYS[index])
-            count = count + 1
-            if not t then
-                break
-            else
-                table.insert(ret, t)
-
-            end
-        end
-
-        if KEYS[1] ~= '' then
-            for flag = 1, #ret do
-                redis.call("lpush", KEYS[1], ret[flag])
-            end
-        end
-
-    else
-        table.insert(ret, nil)
+    local db_num = KEYS[1]
+    local count = KEYS[2]
+    local default_type = KEYS[3]
+    local backup_key = KEYS[4]
+    changeDataBase(db_num)
+    local s = {}
+    for i = 1, #ARGV do
+        local t = popItems(ARGV[i], count, default_type, backup_key)  
+        for j = 1, #t do
+            table.insert(s, t[j])
+        end 
     end
-
-end
-return ret
+    return s
 '''
-        script = self.register_script(lua)
-        ret = script(keys=keys, args=args)
+        ret = self.lua.run(lua=lua, keys=keys, args=args)
         if ret:
             return ret[0] if len(ret) == 1 else ret
         return None
 
-    def remove(self, name: Union[str, List[str]], *values, db_num=None):
+    def remove(self, name: Union[str, List[str]], *values, db_num=None, backup: str = ""):
         """
         从 `name` 中删除 `values`
 
+        :param backup:
         :param name: 队列名称
         :param values: 需要删除的  values
         :param db_num: 数据库编号
@@ -447,48 +572,27 @@ return ret
         if not name:
             return
         db_num = self.database if db_num is None else db_num
-        keys = [db_num, *pandora.iterable(name)]
+        keys = [db_num, "none", backup, *pandora.iterable(name)]
         args = _to_str(*values)
         lua = '''
-redis.replicate_commands()
-redis.call("select", KEYS[1])
-local success = 0
+    local db_num = KEYS[1]
+    local default_type = KEYS[2]
+    local backup_key = KEYS[3]
+    changeDataBase(db_num)
+    local s = 0
+    for i = 4, #KEYS do
+        s = s + removeItems(KEYS[i], ARGV, default_type, backup_key)
 
-for index = 2, #KEYS, 1 do
-    local key_type = redis.call("TYPE", KEYS[index]).ok
-    local cmd = ""
-
-    if key_type == "set" then
-        cmd = "srem"
-    elseif key_type == "zset" then
-        cmd = "zrem"
-    elseif key_type == "list" then
-        cmd = "lrem"
-    else
-        cmd = "srem"
     end
-
-    local r
-    if cmd == 'lrem' then
-        r = redis.call(cmd, KEYS[index], 0, unpack(ARGV))
-    else
-        r = redis.call(cmd, KEYS[index], unpack(ARGV))
-    end
-    success = success + r
-
-end
-return success
+    return s
 
 '''
-        script = self.register_script(lua)
-        return script(keys=keys, args=args)
+        return self.lua.run(lua=lua, keys=keys, args=args)
 
-    def replace(self, name: Union[str, List[str]], old, new, db_num=None):
+    def replace(self, name: Union[str, List[str]], *values, db_num=None):
         """
         从 `name` 中 pop 出 `count` 个值出来
 
-        :param new: 新
-        :param old: 旧
         :param name: 队列名称
         :param db_num: 数据库编号
         :return:
@@ -496,75 +600,22 @@ return success
         if not name:
             return
         db_num = self.database if db_num is None else db_num
-        keys = [*pandora.iterable(name)]
-        args = [db_num, *[
-            j for i in zip(pandora.iterable(old), pandora.iterable(new)) for j in _to_str(*i)
-        ]]
+        keys = [db_num, "set", *pandora.iterable(name)]
+        args = [j for i in values for j in _to_str(*i)]
         lua = '''
-redis.replicate_commands()
-redis.call("select", ARGV[1])
-local ret = 0
-
-for index = 1, #KEYS, 1 do
-    local key_type = redis.call("TYPE", KEYS[index]).ok
-    local need_remove = {}
-    local need_add = {}
-
-    for i = 2, #ARGV, 2 do
-        table.insert(need_remove, ARGV[i])
-        table.insert(need_add, ARGV[i + 1])
-    end
-
-    if key_type == "set" then
-        -- 删除
-        redis.call("srem", KEYS[index], unpack(need_remove))
-        -- 添加
-        local r = redis.call("sadd", KEYS[index], unpack(need_add))
-        ret = ret + r
-
-
-    elseif key_type == "zset" then
-        -- 删除
-        redis.call("zrem", KEYS[index], unpack(need_remove))
-
-        -- 计算初试分数
-        local v = redis.call("zrevrangebyscore", KEYS[index], "+inf", "-inf", "LIMIT", 0, 1, "withscores")[2]
-        if v == nil then v = 0 end
-        local values = {}
-
-        for i = 1, #need_add, 1 do
-            table.insert(values, v + i+1)
-            table.insert(values, need_add[i])
+    local db_num = KEYS[1]
+    local default_type = KEYS[2]
+    changeDataBase(db_num)
+    local ret = 0
+    for i = 3, #KEYS do
+        for j = 1, #ARGV, 2 do
+            ret = ret + replaceItem(KEYS[i], ARGV[j], ARGV[j + 1], default_type)
         end
-
-        -- 添加
-        local r = redis.call("zadd", KEYS[index], unpack(values))
-        ret = ret + r
-
-    elseif key_type == "list" then
-        -- 删除
-        redis.call("lrem", KEYS[index], 0, unpack(need_remove))
-        -- 添加
-        local r = redis.call("lpush", KEYS[index], unpack(need_add))
-        ret = ret + r
-
-    else
-        -- 删除
-        redis.call("srem", KEYS[index], unpack(need_remove))
-        -- 添加
-        local r = redis.call("sadd", KEYS[index], unpack(need_add))
-        ret = ret + r
-
     end
-
-
-end
-return ret
-
+    return ret
 
 '''
-        script = self.register_script(lua)
-        return script(keys=keys, args=args)
+        return self.lua.run(lua=lua, keys=keys, args=args)
 
     def merge(self, dest, *sources, db_num=None):
         """
@@ -576,24 +627,17 @@ return ret
         :return:
         """
         db_num = self.database if db_num is None else db_num
-        keys = [dest, db_num]
+        keys = [db_num, "set", dest]
         args = sources
         lua = '''
-redis.replicate_commands()
-redis.call("select", KEYS[2])
-for flag = 1, #ARGV do
-    local key_type = redis.call("TYPE", ARGV[flag]).ok
-    if key_type == 'zset' then
-        redis.call("ZUNIONSTORE", KEYS[1], #ARGV + 1, KEYS[1], ARGV[flag])
-
-    else
-        redis.call("SUNIONSTORE", KEYS[1], KEYS[1], ARGV[flag])
-    end
-    redis.call("DEL", ARGV[flag])
-end
+    local db_num = KEYS[1]
+    local default_type = KEYS[2]
+    local dest = KEYS[3]
+    local froms = ARGV
+    changeDataBase(db_num)
+    return mergeKeys(dest, froms, default_type)
 '''
-        script = self.register_script(lua)
-        return script(keys=keys, args=args)
+        return self.lua.run(lua=lua, keys=keys, args=args)
 
     def command(self, cmd, *args, db_num=None):
         """
@@ -605,17 +649,21 @@ end
         :return:
         """
         db_num = self.database if db_num is None else db_num
-        keys = [db_num]
-        args = [cmd, *args]
+        keys = [db_num, cmd]
+        args = [*args]
         lua = f"""
-redis.replicate_commands()
-redis.call("select", KEYS[1])
-return redis.call({",".join([json.dumps(i, escape_forward_slashes=False) for i in args])})
+    local db_num = KEYS[1]
+    local cmd = KEYS[2]
+    changeDataBase(db_num)
+    return redis.call(cmd, unpack(ARGV))
         """
-        script = self.register_script(lua)
-        return script(keys=keys, args=args)
+        return self.lua.run(lua=lua, keys=keys, args=args)
 
 
 if __name__ == '__main__':
-    redis = Redis()
-    print(redis.hgetall('__main__:PC:history'))
+    rds = Redis()
+    print(rds.add('test2', 'test', "test2", "test3"))
+    # print(rds.pop('test'))
+    # print(rds.remove('test', "test2"))
+    # print(rds.replace('test', ("test3", "test4")))
+    print(rds.merge('test', "test2"))
