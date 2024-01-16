@@ -187,7 +187,7 @@ class TaskQueue(metaclass=genesis.MetaClass):
     def merge(self, dest: str, *queues: str, **kwargs):
         raise NotImplementedError
 
-    def replace(self, name: str, old, new, **kwargs):
+    def replace(self, name: str, *values, **kwargs):
         """
         替换
 
@@ -196,14 +196,12 @@ class TaskQueue(metaclass=genesis.MetaClass):
         raise NotImplementedError
 
     def _when_replace(self, func):  # noqa
-        def inner(name, old, new, **kwargs):
-            if isinstance(old, Item):
-                old = self.py2str(old.fingerprint)[0]
-
-            if isinstance(new, Item):
-                new = self.py2str(new.fingerprint)[0]
-
-            return func(name, old, new, **kwargs)
+        def inner(name, *values, **kwargs):
+            values = [
+                [(self.py2str(i.fingerprint)[0] if isinstance(i, Item) else i) for i in value]
+                for value in values
+            ]
+            return func(name, *values, **kwargs)
 
         return inner
 
