@@ -26,7 +26,7 @@ def is_success(match: List[str], pre: List[str] = None, post: List[str] = None, 
     context: Context = Context.get_context()
     request = context.obtain("request")
     response = context.obtain("response")
-    obj = codes.Genertor(
+    obj = codes.Generator(
         flows=[
             (codes.Type.code, pre),
             (codes.Type.define, ("ISPASS", match)),
@@ -81,7 +81,7 @@ def turn_page(
         f'logger.debug(f"[停止翻页] 当前页面: {{context.seeds[{key!r}]}}, 种子: {{context.seeds}}")',
     ])
 
-    obj = codes.Genertor(
+    obj = codes.Generator(
         flows=[
             (codes.Type.code, pre),
             (codes.Type.define, ("ISPASS", match)),
@@ -111,7 +111,7 @@ def inject(flows: List[Tuple[codes.Type, Any]]):
     :return:
     """
 
-    obj = codes.Genertor(
+    obj = codes.Generator(
         flows=flows
     )
     obj.run({
