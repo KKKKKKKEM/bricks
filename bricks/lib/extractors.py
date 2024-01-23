@@ -191,8 +191,7 @@ class Extractor:
         return rows
 
     @classmethod
-    def _match(cls, obj: Any, rules: dict, rkey="", pkey=""):
-        flag = isinstance(obj, list)
+    def _match(cls, obj: Any, rules: dict, rkey="", pkey="", deep=0):
         if obj in [None, []]: obj = [None]
         obj = pandora.iterable(obj, enforce=object, exclude=(set, list, tuple))
 
@@ -208,8 +207,9 @@ class Extractor:
                 if not isinstance(v, dict):
                     rule = Rule.to_rule(v, engine=cls)
                     _rkey = (
-                        rkey.split(".")[0], pkey.count(".") + 1 if flag else pkey.count("."),
-                        get_rkey(pkey, str(index).zfill(number_of_digits)) if flag else pkey
+                        rkey.split(".")[0],
+                        pkey.count(".") + deep,
+                        get_rkey(pkey, str(index).zfill(number_of_digits)) if deep else pkey
                     )
 
                     if rule.exprs == '@index':
@@ -221,7 +221,7 @@ class Extractor:
                     elif rule.exprs == '@date':
                         yield k, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), *_rkey
 
-                    elif not rule.is_work(_obj) is False:
+                    elif rule.is_work(_obj) is not False:
                         _unpack_obj = rule.apply(_obj)
 
                         if k == '@unpack':
@@ -247,13 +247,14 @@ class Extractor:
 
                     rule = Rule.to_rule(k, engine=cls)
                     if not rule.is_work(_obj) is False:
-                        _ = rule.apply(_obj)
+                        sub_obj = rule.apply(_obj)
 
                         for i in cls._match(
-                                obj=_,
+                                obj=sub_obj,
                                 rules=v,
                                 rkey=get_rkey(rkey, rule.exprs),
                                 pkey=get_rkey(pkey, str(index).zfill(number_of_digits)),
+                                deep=bool(isinstance(sub_obj, list))
                         ):
                             yield i
 
