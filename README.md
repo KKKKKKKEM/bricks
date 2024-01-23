@@ -29,5 +29,5 @@ pip install bricks-py
 ```
 
 # 使用文档
-具体文档请查看 [WIKI](https://github.com/KKKKKKKEM/bricks/wiki)
+具体文档请查看 [Bricks Docs](https://kkkkkkkem.vercel.app/bricks)
 
