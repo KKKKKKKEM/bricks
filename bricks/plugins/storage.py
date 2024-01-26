@@ -60,12 +60,14 @@ def to_mongo(
 def to_csv(
         path: str,
         items: Union[List[dict], Items],
+        conn: Optional[Writer] = None,
         encoding: str = 'utf-8-sig',
         **kwargs
 ):
     """
     存入数据至 csv
 
+    :param conn:
     :param path: 表名
     :param items: 数据
     :param encoding: 编码
@@ -73,8 +75,9 @@ def to_csv(
     :return:
     """
     if not items: return
-    conn = Writer(path, encoding=encoding, **kwargs)
-    return conn.writerows(items)
+    kwargs.setdefault("header", tuple(items.columns))
+    conn = conn or Writer.create_safe_writer(path=path, encoding=encoding, **kwargs)
+    return conn.writerows(*items)
 
 
 def to_redis(

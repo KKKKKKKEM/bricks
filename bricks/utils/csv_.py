@@ -7,8 +7,10 @@
 """
 import atexit
 import csv
+import functools
 import os.path
 import re
+import threading
 from typing import Optional, Callable, Literal
 
 from loguru import logger
@@ -17,6 +19,13 @@ from bricks.db.sqlite import Sqlite
 
 TABLE_PATTERN = re.compile(r"<TABLE>", flags=re.IGNORECASE)
 NAME_PATTERN = re.compile(rf'{os.sep}|[.]', flags=re.IGNORECASE)
+
+_lock = threading.Lock()
+
+
+@functools.lru_cache(maxsize=None)
+def _get_writer(p, **options):
+    return Writer(p, **options)
 
 
 class Reader:
@@ -148,9 +157,9 @@ class Writer:
         else:
             write_header = True
 
-        f = open(self.path, mode=self.mode, newline=self.newline, encoding=self.encoding)
-        atexit.register(lambda: f.close())
-        self.writer = csv.DictWriter(f, self.header)
+        self.file = open(self.path, mode=self.mode, newline=self.newline, encoding=self.encoding)
+        atexit.register(lambda: self.file.close())
+        self.writer = csv.DictWriter(self.file, self.header)
         write_header and self.writer.writeheader()
 
     def writerows(self, *rows: dict):
@@ -160,7 +169,10 @@ class Writer:
         return self.conn.insert(self.table, *rows)
 
     def _by_writer(self, *rows: dict):
-        return self.writer.writerows(rows)
+        try:
+            return self.writer.writerows(rows)
+        finally:
+            self.flush()
 
     def init_table(self):
         self.conn.create_table(self.table, {h: str for h in self.header})
@@ -183,12 +195,20 @@ class Writer:
         else:
             self.file and self.file.flush()
 
+    @classmethod
+    def create_safe_writer(cls, path: str, **options):
+        if "header" in options:
+            options['header'] = tuple(options['header'])
+        with _lock:
+            return _get_writer(path, **options)
+
 
 if __name__ == '__main__':
-    writer = Writer("test.csv", header=["a", "b", "c"], schema="sqlite:storage")
-    for _ in range(20000):
-        # 生成一个随机数（这里以0到100之间的整数为例）
-        writer.writerows({"a": _, "b": _, "c": _})
+    # writer = Writer("test.csv", header=["a", "b", "c"], schema="sqlite:storage")
+    writer = Writer.create_safe_writer("test.csv", header=("a", "b", "c"), schema="sqlite:storage")
+    # for _ in range(20000):
+    #     # 生成一个随机数（这里以0到100之间的整数为例）
+    #     writer.writerows({"a": _, "b": _, "c": _})
 
     # reader = Reader("test.csv", structure={"a": int})
     # count = 0
