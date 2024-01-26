@@ -119,6 +119,8 @@ class Writer:
         :param header: csv 表头
         :param schema: normal: 常规写文件(线程不安全) / sqlite:storage: 将数据先写入到 sqlite, 可持久化(慢), 然后再导出为 csv / sqlite:memory: 将数据先写入到 sqlite, 内存(数据库), 然后再导出为 csv
         """
+        assert header, "必须传入 header"
+
         if not path.endswith(".csv"):
             path = path + ".csv"
 
