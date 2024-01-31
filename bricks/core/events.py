@@ -2,7 +2,6 @@
 # @Time    : 2023-11-13 19:41
 # @Author  : Kem
 # @Desc    :
-import collections
 import functools
 import itertools
 import threading
@@ -22,14 +21,15 @@ class RegisteredEvents:
         self.permanent = defaultdict(functools.partial(defaultdict, list))
         # 一次性事件
         self.disposable = defaultdict(functools.partial(defaultdict, list))
-        self.lock = threading.Lock()
+
+        self._lock = threading.Lock()
 
     def __enter__(self):
-        self.lock.acquire()
+        self._lock.acquire()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.lock.release()
+        self._lock.release()
 
 
 @dataclass
@@ -87,7 +87,7 @@ class Register:
 
 
 class EventManager:
-    counter = collections.defaultdict(itertools.count)
+    counter = defaultdict(itertools.count)
 
     @classmethod
     def trigger(cls, context: Context, errors: Literal['raise', 'ignore', 'output'] = "raise"):
@@ -140,15 +140,11 @@ class EventManager:
 
     @classmethod
     def _call(cls, event: Task, context: Context, errors: Literal['raise', 'ignore', 'output'] = "raise"):
-
-        func = event.func
-        args = event.args or []
-        kwargs = event.kwargs or {}
         try:
             return pandora.invoke(
-                func,
-                args=args,
-                kwargs=kwargs,
+                event.func,
+                args=event.args,
+                kwargs=event.kwargs,
                 annotations={type(context): context},
                 namespace={"context": context}
             )
