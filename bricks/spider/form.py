@@ -184,10 +184,10 @@ class Spider(air.Spider):
                 # 种子 -> Request
                 if isinstance(node, Download):
                     if context.next.prev and context.next.prev.root == self.on_retry:
-                        # 这是需要重试的
+                        # 从重试请求那边过来的
                         context.flow({"next": self.on_request})
                     else:
-                        # 这是新的请求
+                        # 将种子 -> request -> 发送请求
                         context.seeds['$bookmark'] = signpost
                         node.archive and context.archive(signpost)
                         context.flow({"next": self.make_request})
@@ -385,10 +385,3 @@ class Spider(air.Spider):
 
         for form, events in (self.config.events or {}).items():
             self.use(form, *events)
-
-
-if __name__ == '__main__':
-    down = Download(url="http://www.baidu.com", params={"skus": '{sku:allsku}'})
-    down.register_adapter("allsku", lambda has_sku, miss_sku: has_sku + miss_sku)
-    rendered = down.render({"has_sku": [1, 2, 3], "miss_sku": [4, 5, 6]})
-    print(rendered.params)

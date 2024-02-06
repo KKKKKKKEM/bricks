@@ -87,7 +87,7 @@ class Chaos(metaclass=MetaClass):
 
     def launch(self, scheduler: dict, task_name: str = "all", args=None, kwargs=None, callback: Callable = None):
         """
-        同 launch, 但是是提交给调度器运行的, 可以定时执行
+        同 run, 但是是提交给调度器运行的, 可以定时执行
 
         :param scheduler:
         :param task_name:
@@ -242,12 +242,33 @@ class Pangu(Chaos):
                         context.error(shutdown=True)
 
     def submit(self, task: dispatch.Task, timeout=None) -> dispatch.Task:
+        """
+        提交任务 -> 任务提交至调度器, worker 运行
+
+        :param task:
+        :param timeout:
+        :return:
+        """
         return self.dispatcher.submit_task(task=task, timeout=timeout)
 
     def active(self, task: dispatch.Task, timeout=-1) -> dispatch.Task:
+        """
+        激活任务 -> 任务提交至调度器, loop 运行
+
+        :param task:
+        :param timeout:
+        :return:
+        """
         return self.dispatcher.active_task(task=task, timeout=timeout)
 
     def use(self, form: str, *events: Union[Task, dict]):
+        """
+        注册事件
+
+        :param form:
+        :param events:
+        :return:
+        """
         context = self.make_context(form=form)
         register = EventManager.register(context, *events)
         self.plugins.extend(register)
