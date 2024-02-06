@@ -833,7 +833,7 @@ class Spider(Pangu):
 
     @pandora.Method
     def survey(
-            self_or_cls,  # noqa
+            binding,  # noqa
             *seeds: dict,
             attrs: dict =
             None, modded:
@@ -857,13 +857,13 @@ class Spider(Pangu):
         modded = modded or {}
         extract = extract or []
 
-        if isinstance(self_or_cls, type):
-            cls = self_or_cls
+        if isinstance(binding, type):
+            cls = binding
         else:
-            cls = self_or_cls.__class__
-            attrs.setdefault("proxy", self_or_cls.proxy)
-            attrs.setdefault("concurrency", self_or_cls.concurrency)
-            attrs.setdefault("downloader", self_or_cls.downloader)
+            cls = binding.__class__
+            attrs.setdefault("proxy", binding.proxy)
+            attrs.setdefault("concurrency", binding.concurrency)
+            attrs.setdefault("downloader", binding.downloader)
 
         collect = queue.Queue()
 
