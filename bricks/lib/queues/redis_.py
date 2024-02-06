@@ -534,9 +534,8 @@ class RedisQueue(TaskQueue):
 
 
 if __name__ == '__main__':
-    q = RedisQueue()
-    # print(q.put('xxx', {"name": "kem2"}))
+    q = RedisQueue(genre="zset")
+    print(q.put('xxx', {"name": "kem2", "$score": 1234}))
     # print(q.replace('xxx', ({"name": "kemxxxx"}, {"name": "kem"})))
     # print(q.remove('xxx', *({"name": "kem"}, {"name": "xxx"}), qtypes=["current"]))
     # print(q.clear('xxx'))
-    print(q.smart_reverse('xxx'))

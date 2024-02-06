@@ -24,7 +24,7 @@ def _to_str(*args):
             default=str,  # noqa
             sort_keys=True,
             ensure_ascii=False,
-            escape_forward_slashes=False
+            # escape_forward_slashes=False
         )
         if not isinstance(value, (bytes, str, int, float)) else value
         for value in args
@@ -183,15 +183,21 @@ local function addItems(key, values, default_type, maxsize)
         -- zset, 从最小分数开始递增
     elseif keyType == "zset" then
         -- 获取最大的分数
-        local score = redis.call('ZRANGE', key, "+inf", "-inf", "BYSCORE", "REV", "LIMIT", 0, 1, "withscores")[2]
+        local maxScore = redis.call('ZRANGE', key, "+inf", "-inf", "BYSCORE", "REV", "LIMIT", 0, 1, "withscores")[2]
         -- 不存在的时候初始为 0
-        score = score or 0
+        maxScore = maxScore or 0
         -- 转为数字
-        score = tonumber(score)
+        maxScore = tonumber(maxScore)
         local ret = 0
         for i = 1, #values, 1 do
-            score = score + 1
-            ret = ret + redis.call('ZADD', key, score, values[i])
+            local currentValue = cjson.decode(values[i])
+            if tonumber(currentValue["$score"]) then
+                ret = ret + redis.call('ZADD', key, currentValue["$score"], values[i])
+            else
+                maxScore = maxScore + 1
+                ret = ret + redis.call('ZADD', key, maxScore, values[i])
+            end
+            
         end
 
         return ret
@@ -662,9 +668,4 @@ return  redis.call("DEL", unpack(ARGV))
 
 if __name__ == '__main__':
     rds = Redis()
-    print(rds.add('test2', 'test', "test2", "test3", genre="list"))
-    # print(rds.pop('test'))
-    # print(rds.remove('test', "test2"))
-    # print(rds.replace('test', ("test3", "test4")))
-    # print(rds.merge('test', "test2"))
-    print(rds.add('test2', 'xxx', maxsize=3))
+    rds.add("test2", {"name": "kem", "$score": 999}, genre="zset")
