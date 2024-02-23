@@ -21,7 +21,7 @@ class Generator:
     flows: List[Tuple[Type, Any]]
     code: str = ""
 
-    def make(self):
+    def build(self):
         tpls = []
         for ctype, value in self.flows:
             if ctype == Type.code:
@@ -45,9 +45,14 @@ class Generator:
                 for cond, action in value.items():
                     tpls.append(f"if {cond}:\n    {';'.join(iterable(action)) or 'pass'}")
 
+        else:
             self.code = "\n".join(tpls)
 
+        return self.code
+
     def run(self, namespace: dict):
-        self.make()
-        exec(self.code, namespace)
+        exec(self.build(), namespace)
         return namespace
+
+    def __str__(self):
+        return self.build()
