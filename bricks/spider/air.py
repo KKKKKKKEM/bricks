@@ -105,9 +105,16 @@ class Context(Flow):
                 ret.append(stuff)
         else:
             if call_later:
-                self.task_queue.put(self.queue_name, *obj)
+                qtypes = "current"
             else:
-                self.task_queue.put(self.queue_name, *obj, qtypes="temp")
+                qtypes = "temp"
+
+            self.target.put_seeds(
+                obj,
+                task_queue=self.task_queue,
+                queue_name=self.queue_name,
+                qtypes=qtypes
+            )
 
         return ret
 
@@ -130,6 +137,8 @@ class InitContext(Flow):
         self.seeds: List[Item] = kwargs.pop("seeds", None)
         self.task_queue: TaskQueue = kwargs.pop("task_queue", None)
         self.queue_name: str = kwargs.pop("queue_name", f'{self.__class__.__module__}.{self.__class__.__name__}')
+        self.maxsize: int = kwargs.pop("maxsize", None)
+        self.priority: bool = kwargs.pop("priority", False)
         super().__init__(form, target, **kwargs)
         self.target: Spider = target
 
@@ -177,6 +186,14 @@ class Spider(Pangu):
         super().__init__(**kwargs)
         self.number_of_total_requests = FastWriteCounter()  # 发起请求总数量
         self.number_of_failure_requests = FastWriteCounter()  # 发起请求失败数量
+        self.number_of_new_seeds = FastWriteCounter()  # 动态新增的种子数量(翻页/拆分等等)
+        self.number_of_seeds_obtained = FastWriteCounter()  # 获取得到的种子数量
+
+    is_master = property(
+        fget=lambda self: getattr(self, "$isMaster", False),
+        fset=lambda self, v: setattr(self, "$isMaster", v),
+        fdel=lambda self: setattr(self, "$isMaster", False),
+    )
 
     @property
     def flows(self):
@@ -204,6 +221,7 @@ class Spider(Pangu):
             logger.debug(f"[停止投放] 当前机器 ID: {state.MACHINE_ID}, 原因: {pinfo['msg']}")
             return
 
+        self.is_master = True
         task_queue.command(queue_name, {"action": task_queue.COMMANDS.SET_INIT})
 
         logger.debug(f"[开始投放] 获取初始化权限成功, MACHINE_ID: {state.MACHINE_ID}")
@@ -303,13 +321,13 @@ class Spider(Pangu):
         context.seeds = seeds
         fettle = pandora.invoke(
             func=self.put_seeds,
+            args=[context.seeds],
             kwargs={
-                "seeds": seeds,
                 "maxsize": settings['queue_size'],
-                "where": "init",
                 "task_queue": context.task_queue,
                 "queue_name": context.queue_name,
-
+                "priority": context.priority,
+                "where": "init"
             },
             annotations={InitContext: context},
             namespace={"context": context},
@@ -342,38 +360,76 @@ class Spider(Pangu):
         else:
             context.flow()
 
-    def put_seeds(self, **kwargs):
+    def put_seeds(
+            self,
+            seeds: Union[dict, Item, Iterable[Item], Iterable[dict]],
+            task_queue: Optional[TaskQueue] = ...,
+            queue_name: Optional[str] = ...,
+            maxsize: Optional[int] = None,
+            priority: Optional[bool] = False,
+            **kwargs
+    ):
         """
         将种子放入容器
 
-        :param kwargs:
+        :param priority: 种子投放优先级, 需要队列支持
+        :param maxsize: 种子限制数量, 到达这个数量会被阻塞
+        :param queue_name: 队列名
+        :param task_queue: 队列
+        :param seeds: 种子
+        :param kwargs: 其他参数
         :return:
         """
-        task_queue: TaskQueue = kwargs.pop('task_queue', None) or self.task_queue
-        queue_name: str = kwargs.pop('queue_name', None) or self.queue_name
-        seeds = kwargs.pop('seeds', {})
 
-        maxsize = kwargs.pop('maxsize', None)
-        priority = kwargs.pop('priority', False)
+        if task_queue is ...: task_queue = self.task_queue
+        if queue_name is ...: queue_name = self.queue_name
+        seeds = seeds or {}
         task_queue.continue_(queue_name, maxsize=maxsize, interval=1)
         return task_queue.put(queue_name, *pandora.iterable(seeds), priority=priority, **kwargs)
 
     def _when_put_seeds(self, raw_method):  # noqa
         @functools.wraps(raw_method)
-        def wrapper(*args, **kwargs):
-            context: InitContext = InitContext.get_context()
-            context.form = state.const.BEFORE_PUT_SEEDS
-            events.EventManager.invoke(context)
-            prepared = pandora.prepare(
-                func=raw_method,
-                args=args,
-                kwargs=kwargs,
-                annotations={InitContext: context},
-                namespace={"context": context}
-            )
+        def wrapper(
+                seeds: Union[dict, Item, List[Item], List[dict]],
+                task_queue: Optional[TaskQueue] = ...,
+                queue_name: Optional[str] = ...,
+                maxsize: Optional[int] = None,
+                priority: Optional[bool] = False,
+                **kwargs
+        ):
+            where = kwargs.pop('where', None)
+            if where == 'init':
+                context: InitContext = InitContext.get_context()
+                context.form = state.const.BEFORE_PUT_SEEDS
+                events.EventManager.invoke(context)
+                args = [context.seeds]
+                kws = {
+                    "task_queue": context.task_queue,
+                    "queue_name": context.queue_name,
+                    "maxsize": context.maxsize,
+                    "priority": context.priority,
+                    **kwargs
+                }
+            else:
+                args = [seeds]
+                kws = {
+                    "task_queue": task_queue,
+                    "queue_name": queue_name,
+                    "maxsize": maxsize,
+                    "priority": priority,
+                    **kwargs
+                }
+
+            prepared = pandora.prepare(func=raw_method, args=args, kwargs=kws)
             ret = prepared.func(*prepared.args, **prepared.kwargs)
-            context.form = state.const.AFTER_PUT_SEEDS
-            events.EventManager.invoke(context)
+
+            if where == 'init':
+                context: InitContext = InitContext.get_context()
+                context.form = state.const.AFTER_PUT_SEEDS
+                events.EventManager.invoke(context)
+            else:
+                self.number_of_new_seeds.increment(ret)
+
             return ret
 
         return wrapper
@@ -385,7 +441,6 @@ class Spider(Pangu):
 
         :return:
         """
-        count = 0
         task_queue: TaskQueue = self.get("spider.task_queue", self.task_queue)
         queue_name: str = self.get("spider.queue_name", self.queue_name)
         output = time.time()
@@ -440,6 +495,8 @@ class Spider(Pangu):
                             task_queue.is_empty(queue_name, threshold=self.get("spider.threshold", default=0))
                     ):
 
+                        number_of_seeds_obtained = self.number_of_seeds_obtained.value
+                        number_of_new_seeds = self.number_of_new_seeds.value
                         number_of_total_requests = self.number_of_total_requests.value
                         number_of_failure_requests = self.number_of_failure_requests.value
                         number_of_success_requests = number_of_total_requests - number_of_failure_requests
@@ -454,18 +511,19 @@ class Spider(Pangu):
                             f'[爬取完毕] '
                             f'队列名称: {queue_name} '
                             f'关闭阈值: {self.get("spider.threshold", default=0)} '
-                            f'提交种子的数量: {count} '
-                            f'总请求的数量: {number_of_total_requests} '
+                            f'已获取的种子数量: {number_of_seeds_obtained} '
+                            f'新增的种子数量: {number_of_new_seeds} '
+                            f'总的请求数量: {number_of_total_requests} '
                             f'请求成功率: {rate_of_success_requests}% '
                         )
 
                         return {
-                            "seeds_count": count,
+                            "number_of_seeds_obtained": number_of_seeds_obtained,
+                            "number_of_new_seeds": number_of_new_seeds,
                             "number_of_total_requests": number_of_total_requests,
                             "number_of_failure_requests": number_of_failure_requests,
                             "number_of_success_requests": number_of_success_requests,
                             "request_success_rate": rate_of_success_requests,
-
                         }
 
                     else:
@@ -485,7 +543,7 @@ class Spider(Pangu):
                         stuff = context.copy()
                         stuff.flow({"next": self.on_consume, "seeds": seeds})
                         self.submit(dispatch.Task(stuff.next.root, [stuff]))
-                        count += 1
+                        self.number_of_seeds_obtained.increment()
 
     def _when_run_spider(self, raw_method):
         @functools.wraps(raw_method)
