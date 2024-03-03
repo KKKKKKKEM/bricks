@@ -15,11 +15,11 @@ class FastWriteCounter:
         self._in_counter = itertools.count(init, step)
         self._lock = threading.Lock()
 
-    def increment(self):
-        next(self._in_counter)
+    def increment(self, step: int = 1):
+        for _ in range(step): next(self._in_counter)
 
-    def decrement(self):
-        next(self._de_counter)
+    def decrement(self, step: int = 1):
+        for _ in range(step): next(self._de_counter)
 
     @property
     def value(self):
