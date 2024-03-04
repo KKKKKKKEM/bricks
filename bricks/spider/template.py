@@ -146,6 +146,7 @@ class Spider(air.Spider):
                 annotations={Context: context},
                 namespace={"context": context}
             )
+            layout = layout.render(seeds)
 
             if inspect.isgenerator(seeds):
                 for seed in seeds:
