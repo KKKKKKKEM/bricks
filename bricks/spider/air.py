@@ -893,9 +893,8 @@ class Spider(Pangu):
     def survey(
             binding,  # noqa
             *seeds: dict,
-            attrs: dict =
-            None, modded:
-            dict = None,
+            attrs: dict = None,
+            modded: dict = None,
             extract: list = None
     ) -> List[Context]:
         """
