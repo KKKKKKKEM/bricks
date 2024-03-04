@@ -5,6 +5,7 @@
 
 
 import collections
+import inspect
 import itertools
 import math
 import re
@@ -58,7 +59,7 @@ class Rule:
         if not value:
             return
 
-        if isinstance(value, Extractor) or issubclass(value, Extractor):
+        if isinstance(value, Extractor) or (inspect.isclass(value) and issubclass(value, Extractor)):
             return value
         elif isinstance(value, str):
             return globals()[f'{value.title()}Extractor']
@@ -280,7 +281,7 @@ class XpathExtractor(Extractor):
             if obj.strip().startswith("<?xml "):
                 obj = etree.fromstring(obj, parser=parser, base_url=base_url)
             else:
-                obj = etree.HTML(obj, parser=parser, base_url=base_url)
+                obj = etree.HTML(obj.encode(), parser=parser, base_url=base_url)
         return obj
 
 
