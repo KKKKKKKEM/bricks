@@ -92,7 +92,7 @@ class Rule:
 
         # 引擎适配逻辑
         if self.is_array is False:
-            res = pandora.single(res)
+            res = pandora.first(res)
 
         elif self.is_array is True:
             res = pandora.iterable(res)
@@ -144,7 +144,7 @@ class Extractor:
             exprs=exprs,
             **kwargs
         )
-        return pandora.single(res, default=default)
+        return pandora.first(res, default=default)
 
     @classmethod
     def match(cls, obj: Any, rules: Union[dict, list]):

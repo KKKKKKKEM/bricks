@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore")
 # 设置 requests 最大的响应头的长度 为 1000
 http.client._MAXHEADERS = 1000
 
-pandora.require("httpx==0.26.0")
+pandora.require("httpx")
 
 import httpx  # noqa: E402
 

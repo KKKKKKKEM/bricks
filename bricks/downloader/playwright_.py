@@ -13,7 +13,7 @@ from bricks.downloader import AbstractDownloader
 from bricks.lib.cookies import Cookies
 from bricks.utils import pandora
 
-pandora.require("playwright==1.40.0")
+pandora.require("playwright")
 from playwright import async_api  # noqa: E402
 from playwright._impl._api_structures import SetCookieParam  # noqa
 from playwright._impl._driver import compute_driver_executable, get_driver_env  # noqa

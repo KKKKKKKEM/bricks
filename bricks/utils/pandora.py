@@ -255,7 +255,7 @@ def iterable(
         return [_object]
 
 
-def single(_object, default=None):
+def first(_object, default=None):
     """
     将元素变为可迭代对象后, 获取其第一个元素
 

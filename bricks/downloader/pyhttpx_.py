@@ -17,7 +17,7 @@ from bricks.utils import pandora
 
 warnings.filterwarnings("ignore")
 
-pandora.require("pyhttpx==2.10.12")
+pandora.require("pyhttpx")
 
 import pyhttpx  # noqa: E402
 

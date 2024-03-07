@@ -211,7 +211,7 @@ class Response:
         :return:
         """
 
-        return pandora.single(self.xpath(xpath, obj, **kwargs), default=default)
+        return pandora.first(self.xpath(xpath, obj, **kwargs), default=default)
 
     def jsonpath(self, jpath, obj=None, strict=True, **kwargs):
         """
@@ -243,7 +243,7 @@ class Response:
         :param kwargs:
         :return:
         """
-        return pandora.single(self.jsonpath(jpath, obj, strict, **kwargs), default=default)
+        return pandora.first(self.jsonpath(jpath, obj, strict, **kwargs), default=default)
 
     def re(self, regex, obj=None, **kwargs):
         """
@@ -275,7 +275,7 @@ class Response:
         :param kwargs:
         :return:
         """
-        return pandora.single(self.re(regex, obj, **kwargs), default=default)
+        return pandora.first(self.re(regex, obj, **kwargs), default=default)
 
     def get(self, rule: str, obj=None, strict=True, **kwargs):
         """
@@ -313,7 +313,7 @@ class Response:
         :return:
 
         """
-        return pandora.single(self.get(rule, obj, strict, **kwargs), default=default)
+        return pandora.first(self.get(rule, obj, strict, **kwargs), default=default)
 
     @property
     def ok(self):

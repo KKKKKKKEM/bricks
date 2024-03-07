@@ -476,7 +476,7 @@ end
 return ret
 """
         ret = self.lua.run(lua=lua, args=args, keys=keys)
-        return pandora.single(ret) if len(names) == 1 else ret
+        return pandora.first(ret) if len(names) == 1 else ret
 
     def delete(self, *names, db_num=None):
         """
