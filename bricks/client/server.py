@@ -21,7 +21,7 @@ from starlette import requests, responses, websockets
 fast_app = fastapi.FastAPI()
 
 
-class Server:
+class APP:
     def __init__(
             self,
             port: int = 8888,
@@ -133,7 +133,11 @@ class Server:
         fast_app.include_router(self.router)
         uvicorn.run(f'{__name__}:fast_app', host=self.host, port=self.port, reload=self.reload)
 
+    @property
+    def app(self):
+        return fast_app
+
 
 if __name__ == '__main__':
-    server = Server()
+    server = APP()
     server.run()

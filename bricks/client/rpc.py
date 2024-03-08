@@ -18,7 +18,7 @@ pandora.require("websockets==12.0")
 import websockets
 
 
-class Client:
+class APP:
 
     def __init__(
             self,
@@ -158,7 +158,3 @@ class Client:
 
     def register_adapter(self, form: str, action: Callable):
         self.adapters[form] = action
-
-
-if __name__ == '__main__':
-    client = Client()

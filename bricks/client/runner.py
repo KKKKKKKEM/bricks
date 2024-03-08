@@ -104,12 +104,12 @@ class BaseRunner:
         if not settings:
             return
 
-        from bricks.client.rpc import Client
-        client = Client(**settings)
-        client.register_adapter('stop', cls.stop)
-        client.register_adapter('reload', cls.reload)
-        client.start()
-        return client
+        from bricks.client.rpc import APP
+        app = APP(**settings)
+        app.register_adapter('stop', cls.stop)
+        app.register_adapter('reload', cls.reload)
+        app.start()
+        return app
 
     def build_env(self, settings: dict):
         if not settings:
