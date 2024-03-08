@@ -89,7 +89,7 @@ class Downloader(AbstractDownloader):
                         )
                     )
                 )
-                request.options.get('auto_referer', True) and options['headers'].update(Referer=response.url)
+                request.options.get('auto_referer', False) and options['headers'].update(Referer=response.url)
 
             else:
                 res.content = response.content
