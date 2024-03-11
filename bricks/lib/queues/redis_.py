@@ -426,7 +426,7 @@ class RedisQueue(TaskQueue):
 
             pubsub = self.redis_db.pubsub()
             pubsub.subscribe(**{chanel: main})
-            pubsub.run_in_thread(sleep_time=0.001, daemon=True)
+            return pubsub.run_in_thread(sleep_time=0.001, daemon=True)
 
         def get_permission():
             """

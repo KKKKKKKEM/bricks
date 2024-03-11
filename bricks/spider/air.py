@@ -554,7 +554,7 @@ class Spider(Pangu):
             with self.dispatcher:
                 task_queue: TaskQueue = self.get("spider.task_queue", self.task_queue)
                 queue_name: str = self.get("spider.queue_name", self.queue_name)
-                task_queue.command(
+                server = task_queue.command(
                     queue_name,
                     {
                         "action": task_queue.COMMANDS.RUN_SUBSCRIBE,
@@ -564,7 +564,10 @@ class Spider(Pangu):
                     }
                 )
 
-                return raw_method(*args, **kwargs)
+                try:
+                    return raw_method(*args, **kwargs)
+                finally:
+                    hasattr(server, "stop") and server.stop()
 
         return wrapper
 
