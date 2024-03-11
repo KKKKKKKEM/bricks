@@ -198,7 +198,6 @@ class RedisQueue(TaskQueue):
     if machine_id == identifier then
         redis.call("HSET", record_key, "status", 0)
         redis.call("HDEL", record_key, "identifier")
-        redis.call("HDEL", record_key, "time")
         if ttl ~= 0 then
             redis.call("DEL", history_key)
             local dump = redis.call('DUMP', record_key)
@@ -406,7 +405,7 @@ class RedisQueue(TaskQueue):
 
     def command(self, name: str, order: dict):
 
-        def run_subscribe(chanel, target):
+        def run_subscribe(chanel, adapters: dict):
             """
             订阅消息
             """
@@ -418,10 +417,11 @@ class RedisQueue(TaskQueue):
                 if recv != state.MACHINE_ID:
                     return
 
-                    # 上报状态
-                if _action == "collect-status":
+                if _action in adapters:
+                    func = adapters[_action]
+                    ret = pandora.invoke(func, args=[msg], kwargs={"queue": self})
                     key = msg["key"]
-                    self.redis_db.hset(key, mapping={state.MACHINE_ID: target.dispatcher.running})
+                    self.redis_db.hset(key, mapping={state.MACHINE_ID: ret})
                     self.redis_db.expire(key, 5)
 
             pubsub = self.redis_db.pubsub()
@@ -460,13 +460,23 @@ class RedisQueue(TaskQueue):
 
         def wait_init():
             key = self.name2key(name, 'record')
+            # 爬虫的启动时间
             t1 = order.get('time')
+
             while True:
+                # 如果队列不为空 -> 不需要等待初始化
                 if not self.is_empty(name):
                     return
 
+                # 初始化爬虫设置的开始初始化时间
                 t2 = self.redis_db.hget(key, "time")
-                if self.redis_db.exists(key) and (t2 and float(t2) >= t1):
+                # 当前初始化状态: 1 为开始, 0 为未开始 / 结束
+                status = int(self.redis_db.hget(key, "status") or "0")
+                if status == 1:
+                    return
+
+                # 初始化时间大于启动的时间
+                if t2 and float(t2) >= t1:
                     return
 
                 logger.debug('等待初始化开始')
