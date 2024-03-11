@@ -188,6 +188,7 @@ class Spider(Pangu):
         self.number_of_failure_requests = FastWriteCounter()  # 发起请求失败数量
         self.number_of_new_seeds = FastWriteCounter()  # 动态新增的种子数量(翻页/拆分等等)
         self.number_of_seeds_obtained = FastWriteCounter()  # 获取得到的种子数量
+        self.number_of_seeds_pending = 0  # 获取得到的种子数量
 
     is_master = property(
         fget=lambda self: getattr(self, "$isMaster", False),
@@ -539,11 +540,13 @@ class Spider(Pangu):
                             time.sleep(1)
 
                 else:
+                    self.number_of_seeds_pending += len(pandora.iterable(fettle))
                     for seeds in pandora.iterable(fettle):
                         stuff = context.copy()
                         stuff.flow({"next": self.on_consume, "seeds": seeds})
                         self.submit(dispatch.Task(stuff.next.root, [stuff]))
                         self.number_of_seeds_obtained.increment()
+                        self.number_of_seeds_pending -= 1
 
     def _when_run_spider(self, raw_method):
         @functools.wraps(raw_method)
@@ -555,7 +558,9 @@ class Spider(Pangu):
                     queue_name,
                     {
                         "action": task_queue.COMMANDS.RUN_SUBSCRIBE,
-                        "target": self
+                        "target": {
+                            "collect-status": lambda: self.dispatcher.running + self.number_of_seeds_pending
+                        }
                     }
                 )
 
