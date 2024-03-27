@@ -104,7 +104,7 @@ class Downloader(AbstractDownloader):
         options.update(self.build_cert_options(request))
         options.update(self.build_proxy_options(request))
         options.update(self.build_version_options(request))
-        auto_referer = request.options.pop("auto_referer", False)
+        _referer = request.options.pop("$referer", False)
         options.update(request.options)
 
         res = Response.make_response(request=request)
@@ -143,7 +143,7 @@ class Downloader(AbstractDownloader):
                             cookies=make_cookie()
                         )
                     )
-                    auto_referer and request.headers.update(Referer=options[pycurl.URL])
+                    _referer and request.headers.update(Referer=options[pycurl.URL])
                     options[pycurl.URL] = next_url
 
                 else:
