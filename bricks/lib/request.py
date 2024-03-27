@@ -87,20 +87,24 @@ class Request:
         # 开始构建curl命令
         parts = ["curl", f"-X {self.method.upper()}"]
 
-        # 添加请求方法
-
         # 添加请求头
-        if self.headers:
-            for header, value in self.headers.items():
-                parts.append(f"-H {shlex.quote(f'{header}: {value}')}")
 
-        # 添加请求头
+        if self.cookies:
+            cookie_str = "; ".join([f'{k}={v}' for k, v in self.cookies.items()])
+        else:
+            cookie_str = ""
+
         content_type = None
         if self.headers:
             for header, value in self.headers.items():
-                parts.append(f"-H {shlex.quote(f'{header}: {value}')}")
-                if header.lower() == 'content-type':
-                    content_type = value
+                if header.lower() == 'cookie':
+                    cookie_str = "; ".join(list(filter(None, [value, cookie_str])))
+                else:
+                    if header.lower() == 'content-type':
+                        content_type = value.lower()
+                    parts.append(f"-H {shlex.quote(f'{header}: {value}')}")
+
+        cookie_str and parts.append(f"-H {shlex.quote(f'Cookie: {cookie_str}')}")
 
         # 添加请求体
         if self.body:
@@ -191,7 +195,7 @@ class Request:
                 for key in cookie:
                     cookie_dict[key] = cookie[key].value
             else:
-                quoted_headers[header_key] = header_value.strip()
+                quoted_headers[header_key] = str(header_value).strip()
 
         # 解析原始URL
         parsed_url = urllib.parse.urlparse(parsed_args.url)
