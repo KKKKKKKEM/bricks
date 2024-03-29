@@ -18,7 +18,7 @@ from loguru import logger
 from bricks.db.sqlite import Sqlite
 
 TABLE_PATTERN = re.compile(r"<TABLE>", flags=re.IGNORECASE)
-NAME_PATTERN = re.compile(rf'{os.sep}|[.]', flags=re.IGNORECASE)
+NAME_PATTERN = re.compile(r'\W', flags=re.IGNORECASE)
 
 _lock = threading.Lock()
 
@@ -102,7 +102,10 @@ class Reader:
                     conn.close()
 
             finally:
-                os.remove(f'{database}.db')
+                try:
+                    os.remove(f'{database}.db')
+                except:
+                    atexit.register(lambda: os.remove(f'{database}.db'))
 
 
 class Writer:
@@ -209,15 +212,4 @@ class Writer:
 
 
 if __name__ == '__main__':
-    # writer = Writer("test.csv", header=["a", "b", "c"], schema="sqlite:storage")
-    writer = Writer.create_safe_writer("test.csv", header=("a", "b", "c"), schema="sqlite:storage")
-    # for _ in range(20000):
-    #     # 生成一个随机数（这里以0到100之间的整数为例）
-    #     writer.writerows({"a": _, "b": _, "c": _})
-
-    # reader = Reader("test.csv", structure={"a": int})
-    # count = 0
-    # for d in reader.iter_data('select cast(a as TEXT) as a, b from <TABLE> where a < 1000'):
-    #     print(d)
-    #     count += 1
-    # print(count)
+    print(NAME_PATTERN.sub( "_",'dasdas\\\///...dsada',))
