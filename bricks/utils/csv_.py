@@ -11,6 +11,7 @@ import functools
 import os.path
 import re
 import threading
+from shutil import rmtree
 from typing import Optional, Callable, Literal
 
 from loguru import logger
@@ -102,10 +103,7 @@ class Reader:
                     conn.close()
 
             finally:
-                try:
-                    os.remove(f'{database}.db')
-                except:
-                    atexit.register(lambda: os.remove(f'{database}.db'))
+                rmtree(f'{database}.db', ignore_errors=True)
 
 
 class Writer:
@@ -212,4 +210,4 @@ class Writer:
 
 
 if __name__ == '__main__':
-    print(NAME_PATTERN.sub( "_",'dasdas\\\///...dsada',))
+    print(NAME_PATTERN.sub("_", 'dasdas\\\///...dsada', ))
