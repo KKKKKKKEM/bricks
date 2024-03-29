@@ -208,6 +208,7 @@ class Sqlite:
             subprocess.run(cmd, shell=True, text=True, **options)
 
     def close(self):
+        self._cursor and self._cursor.close()
         self.connection.close()
 
 
