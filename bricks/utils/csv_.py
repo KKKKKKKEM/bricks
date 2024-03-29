@@ -98,6 +98,9 @@ class Reader:
                 )
                 for data in conn.find(TABLE_PATTERN.sub(table, sql), batch_size=batch_size):
                     yield data
+                else:
+                    conn.close()
+
             finally:
                 os.remove(f'{database}.db')
 

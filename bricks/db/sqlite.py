@@ -207,6 +207,9 @@ class Sqlite:
                 })
             subprocess.run(cmd, shell=True, text=True, **options)
 
+    def close(self):
+        self.connection.close()
+
 
 if __name__ == '__main__':
     class People:
