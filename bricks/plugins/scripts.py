@@ -85,7 +85,7 @@ def turn_page(
         flows=[
             (codes.Type.code, pre),
             (codes.Type.define, ("ISPASS", match)),
-            (codes.Type.define, ("NEXT_SEEDS", f'{{**context.seeds, "page": context.seeds["{key}"] {action}}}')),
+            (codes.Type.define, ("NEXT_SEEDS", f'{{**context.seeds, "{key}": context.seeds["{key}"] {action}}}')),
             (codes.Type.code, post),
             (codes.Type.choice, flow),
             (codes.Type.code, f'{success} and context.success()'),
