@@ -15,7 +15,8 @@ from loguru import logger
 
 from bricks import state
 from bricks.core import dispatch, signals, events
-from bricks.core.context import Flow
+from bricks.core.context import Flow, Error
+from bricks.core.events import EventManager
 from bricks.core.genesis import Pangu
 from bricks.downloader import cffi, AbstractDownloader
 from bricks.lib.counter import FastWriteCounter
@@ -538,6 +539,12 @@ class Spider(Pangu):
                                 output = time.time()
 
                             time.sleep(1)
+
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+
+                except Exception as e:
+                    EventManager.invoke(Error(context=context, error=e), errors="output")
 
                 else:
                     self.number_of_seeds_pending += len(pandora.iterable(fettle))
