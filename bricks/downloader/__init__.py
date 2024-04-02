@@ -64,7 +64,7 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
                 raise e
 
             except Exception as e:
-                logger.error(f'[请求失败] 失败原因: {str(e) or str(e.__class__.__name__)}', error=e)
+                logger.error(f'[请求失败] 失败原因: {str(e) or str(e.__class__.__name__)}')
                 self.debug and logger.exception(e)
                 response: Response = Response.make_response(
                     error=e.__class__.__name__,
@@ -94,7 +94,7 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
                 response.rt = time.time() - t
 
             except Exception as e:
-                logger.error(f'[请求失败] 失败原因: {str(e) or str(e.__class__.__name__)}', error=e)
+                logger.error(f'[请求失败] 失败原因: {str(e) or str(e.__class__.__name__)}')
                 self.debug and logger.exception(e)
                 response: Response = Response.make_response(
                     error=e.__class__.__name__,
