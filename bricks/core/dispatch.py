@@ -308,6 +308,7 @@ class Dispatcher:
             # If the task is still in the task queue and has not been retrieved for use, it will be deleted from the task queue
             if task in self.doing.queue:
                 self.doing.queue.remove(task)
+                self.doing.task_done()
                 self.doing.not_full.notify()
             else:
                 # If there is a worker and the task is running, shut down the worker
@@ -379,3 +380,6 @@ class Dispatcher:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop()
+
+
+

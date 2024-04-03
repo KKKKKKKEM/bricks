@@ -39,11 +39,11 @@ class Context(Flow):
             **kwargs
 
     ) -> None:
-        self.request: Request = kwargs.pop("request", None)
-        self.response: Response = kwargs.pop("response", None)
-        self.seeds: Union[Item, List[Item]] = kwargs.pop("seeds", None)
-        self.items: Items = kwargs.pop("items", None)
-        self.task_queue: TaskQueue = kwargs.pop("task_queue", None)
+        self.request: Optional[Request] = kwargs.pop("request", None)
+        self.response: Optional[Response] = kwargs.pop("response", None)
+        self.seeds: Optional[Union[Item, List[Item]]] = kwargs.pop("seeds", None)
+        self.items: Optional[Items] = kwargs.pop("items", None)
+        self.task_queue: Optional[TaskQueue] = kwargs.pop("task_queue", None)
         self.queue_name: str = kwargs.pop("queue_name", f'{self.__class__.__module__}.{self.__class__.__name__}')
         super().__init__(form, target, **kwargs)
         self.target: Spider = target
@@ -135,10 +135,10 @@ class InitContext(Flow):
             **kwargs
 
     ) -> None:
-        self.seeds: List[Item] = kwargs.pop("seeds", None)
-        self.task_queue: TaskQueue = kwargs.pop("task_queue", None)
+        self.seeds: Optional[List[Item]] = kwargs.pop("seeds", None)
+        self.task_queue: Optional[TaskQueue] = kwargs.pop("task_queue", None)
         self.queue_name: str = kwargs.pop("queue_name", f'{self.__class__.__module__}.{self.__class__.__name__}')
-        self.maxsize: int = kwargs.pop("maxsize", None)
+        self.maxsize: Optional[int] = kwargs.pop("maxsize", None)
         self.priority: bool = kwargs.pop("priority", False)
         super().__init__(form, target, **kwargs)
         self.target: Spider = target

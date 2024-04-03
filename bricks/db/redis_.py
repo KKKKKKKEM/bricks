@@ -153,10 +153,12 @@ local function popItems(key, count, default_type, backup_key)
     end
 
     if #values > 0 and backup_key and backup_key ~= "" then
-        backupItems(backup_key, values, keyType)
+        return backupItems(backup_key, values, keyType)
+    else
+        return ret
     end
 
-    return ret
+    
 
 
 end
@@ -247,9 +249,11 @@ local function removeItems(key, values, default_type, backup_key)
 
     end
     if #backupd > 0 and backup_key and backup_key ~= "" then
-        backupItems(backup_key, backupd, keyType)
+        return backupItems(backup_key, backupd, keyType)
+    else 
+        return removed
     end
-    return removed
+    
 
 end
 --将 key 中的 old 替换为 new
