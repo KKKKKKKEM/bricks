@@ -979,7 +979,7 @@ class Spider(Pangu):
         2. 如果只要 request, 那么生效的事件只有: before request
         3. 如果只要 items, 那么生效的事件只有: before request, after request
 
-        也就是说: 如果你有翻页事件, 且在 before pipeline, 且 获取的是 items 的时候翻页才会生效 (但是我们一般都不需要这个, 建议自己注释掉)
+        也就是说: 如果你有翻页事件, 且在 pipeline, 则不会生效 (但是我们一般都不需要这个, 建议自己注释掉)
 
         :param modded: 魔改 class
         :param attrs: 初始化参数
