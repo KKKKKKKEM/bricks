@@ -971,11 +971,15 @@ class Spider(Pangu):
             modded: dict = None,
     ) -> 'Listener':
         """
-        创建一个 Listener, 等于后台运行爬虫
-        该 Listener 后期可以直接接受种子, 拿到你想要的结果 -> 适用于
+        将 Spider 转化为 Listener, 等于后台运行爬虫, 支持动态添加种子, 然后获取该种子消耗的结果
+        实现类似将爬虫转化为 API 的效果, 避免维护多份代码
 
-        但是: 如果在运行过程中用户修改了里面的结果, 那会被覆盖掉
-        Listener 会屏蔽原来的 make_seeds 和 item_pipeline 方法, 会使用用户传入的 seeds, 并且仅仅输出结果 (不会存储)
+        但是, 部分事件会失效:
+        1. 如果只要 response, 那么生效的事件只有: before request, after request
+        2. 如果只要 request, 那么生效的事件只有: before request
+        3. 如果只要 items, 那么生效的事件只有: before request, after request
+
+        也就是说: 如果你有翻页事件, 且在 before pipeline, 且 获取的是 items 的时候翻页才会生效 (但是我们一般都不需要这个, 建议自己注释掉)
 
         :param modded: 魔改 class
         :param attrs: 初始化参数
@@ -992,50 +996,45 @@ class Spider(Pangu):
             attrs.setdefault("concurrency", binding.concurrency)
             attrs.setdefault("downloader", binding.downloader)
 
-        def mock_make_seeds(self):  # noqa
-            pass
+        class ListenContext(Context):
+            def success(self, shutdown=False):
+                future_id = self.seeds.get('$futureID')
+                if future_id in listener.futures:
+                    future: Optional[queue.Queue] = listener.futures[future_id]
+                    future.put(self)
+
+                return super().success(shutdown)
 
         def mock_on_request(self, context: Context):
-            future_id = context.seeds.get('$futureID')
             future_type = context.seeds.get('$futureType', "$response")
-            if future_id in listener.futures and future_type == '$request':
-                future: queue.Queue = listener.futures[future_id]
-                future.put(context)
+            if future_type == '$request':
                 raise signals.Success
 
             return super(self.__class__, self).on_request(context)
 
         def mock_on_response(self, context: Context):
-            future_id = context.seeds.get('$futureID')
             future_type = context.seeds.get('$futureType', "$response")
-            if future_id in listener.futures and future_type == '$response':
-                future: queue.Queue = listener.futures[future_id]
-                future.put(context)
+
+            if future_type == '$response':
                 raise signals.Success
 
-            return super(self.__class__, self).on_response(context)
+            items: Items = super(self.__class__, self).mock_on_response(context)
 
-        def mock_item_pipeline(self, context: Context):  # noqa
-            future_id = context.seeds.get('$futureID')
-            future_type = context.seeds.get('$futureType', "$response")
-            if future_id in listener.futures and future_type == '$items':
-                future: queue.Queue = listener.futures[future_id]
-                future.put(context)
+            if future_type == '$items':
                 raise signals.Success
 
-            logger.debug(context.items)
-            context.success()
+            return items
 
         modded.setdefault("on_request", mock_on_request)
         modded.setdefault("on_response", mock_on_response)
-        modded.setdefault("make_seeds", mock_make_seeds)
-        modded.setdefault("item_pipeline", mock_item_pipeline)
+
         attrs.update({
             "task_queue": LocalQueue(),
             "queue_name": f"{cls.__module__}.{cls.__name__}:listen",
             "forever": True,
         })
         clazz = type("Listen", (cls,), modded)
+        clazz.Context = ListenContext
         listen: Spider = clazz(**attrs)
         listener = Listener(listen)
         return listener.run()
@@ -1055,39 +1054,60 @@ class Listener:
     def stop(self):
         self.spider.forever = False
 
-    def listen(self, seeds: Union[dict, Item], timeout: int = -1) -> Generator[Context, None, None]:
+    def listen(self, seeds: Union[dict, Item], timeout: int = None) -> Generator[Context, Union[dict, Item], None]:
+        """
+        给 listener 一个种子, 然后获取种子的消耗结果
+        种子内特殊键值对说明:
+        $futureID 当前任务 ID, 自动生成
+
+        $futureType 表示需要的类型, 可以自己设置, 默认为 $response
+            $request -> 表示只需要 request, 也就是消耗到了请求之前就会告知结果
+            $response -> 表示只要 response, 也就是消耗到了解析之前就会告知结果
+            $items -> 表示只要 items, 也就是消耗到了存储之前就会告知结果
+
+
+        :param seeds: 需要消耗的种子
+        :param timeout: 超时时间, 超时后还没有获取到结果则退出, 如果为 None 则表示必须等待一个结果才会结束
+        :return:
+        """
         future_id = str(uuid.uuid4())
         future = self.futures[future_id]
         seeds.update({"$futureID": future_id})
         self.spider.put_seeds(seeds)
         try:
-            if timeout == -1:
+            if timeout is None:
                 loop = range(1)
-                timeout = None
             else:
                 loop = itertools.cycle([None])
 
             for _ in loop:
                 yield future.get(timeout=timeout)
-
+        except GeneratorExit:
+            raise
         except queue.Empty:
             return
-
         finally:
             self.futures.pop(future_id, None)
 
-    async def wait(self, seeds: Union[dict, Item], timeout: int = -1) -> Generator[Context, None, None]:
+    async def wait(self, seeds: Union[dict, Item], timeout: int = None) -> Generator[Context, None, None]:
+        """
+        listen 的 异步实现
+
+        :param seeds:
+        :param timeout:
+        :return:
+        """
         loop = asyncio.get_event_loop()
         sync_gen = self.listen(seeds, timeout=timeout)
 
         def next_item():
             try:
                 return next(sync_gen)
-            except StopIteration:
-                return None
+            except StopIteration as e:
+                return e
 
         while True:
             item = await loop.run_in_executor(None, next_item)
-            if item is None:
+            if isinstance(item, StopIteration):
                 break
             yield item

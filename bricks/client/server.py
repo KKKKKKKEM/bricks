@@ -162,10 +162,10 @@ class APP:
             else:
                 return responses.PlainTextResponse(content=context.request.curl)
 
-        async def post(request: fastapi.Request, form: str = '$response'):
+        async def post(request: fastapi.Request, form: str = '$response', timeout: int = None):
             try:
                 seeds = await request.json()
-                async for ctx in listener.wait({**seeds, "$futureType": form}):
+                async for ctx in listener.wait({**seeds, "$futureType": form}, timeout=timeout):
                     return fmt_ret(form, ctx)
             except Exception as e:
                 return responses.JSONResponse(
@@ -176,10 +176,10 @@ class APP:
                     status_code=500
                 )
 
-        async def get(request: fastapi.Request, form: str = '$response'):
+        async def get(request: fastapi.Request, form: str = '$response', timeout: int = None):
             try:
                 seeds = request.query_params
-                async for ctx in listener.wait({**seeds, "$futureType": form}):
+                async for ctx in listener.wait({**seeds, "$futureType": form}, timeout=timeout):
                     return fmt_ret(form, ctx)
             except Exception as e:
                 return responses.JSONResponse(
