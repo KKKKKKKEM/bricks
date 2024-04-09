@@ -5,10 +5,11 @@
 import asyncio
 import collections
 import uuid
-from typing import Dict, List
+from typing import Dict, List, Callable
 
 from loguru import logger
 
+from bricks.spider.air import Listener, Context
 from bricks.utils import pandora
 
 pandora.require("fastapi==0.105.0")
@@ -136,6 +137,61 @@ class APP:
     @property
     def app(self):
         return fast_app
+
+    def bind_listener(
+            self,
+            listener: Listener,
+            path: str,
+            method: str = "POST",
+            adapter: Callable = None
+    ):
+        """
+        绑定 listener
+
+        :param listener: 需要绑定的 listener
+        :param path: 访问路径
+        :param method: 访问方法
+        :param adapter: 自定义视图函数
+        :return:
+        """
+        def fmt_ret(future_type: str, context: Context):
+            if future_type == '$items':
+                return responses.JSONResponse(content=context.items.data)
+            elif future_type == '$response':
+                return responses.PlainTextResponse(content=context.response.content)
+            else:
+                return responses.PlainTextResponse(content=context.request.curl)
+
+        async def post(request: fastapi.Request, form: str = '$response'):
+            try:
+                seeds = await request.json()
+                async for ctx in listener.wait({**seeds, "$futureType": form}):
+                    return fmt_ret(form, ctx)
+            except Exception as e:
+                return responses.JSONResponse(
+                    content={
+                        "code": -1,
+                        "msg": str(e)
+                    },
+                    status_code=500
+                )
+
+        async def get(request: fastapi.Request, form: str = '$response'):
+            try:
+                seeds = request.query_params
+                async for ctx in listener.wait({**seeds, "$futureType": form}):
+                    return fmt_ret(form, ctx)
+            except Exception as e:
+                return responses.JSONResponse(
+                    content={
+                        "code": -1,
+                        "msg": str(e)
+                    },
+                    status_code=500
+                )
+
+        func = getattr(self.router, method.lower())
+        func(path)(adapter or locals()[method.lower()])
 
 
 if __name__ == '__main__':

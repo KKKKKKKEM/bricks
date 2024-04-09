@@ -2,14 +2,18 @@
 # @Time    : 2023-11-15 14:09
 # @Author  : Kem
 # @Desc    :
+import asyncio
+import collections
 import datetime
 import functools
 import inspect
+import itertools
 import math
 import queue
 import re
 import time
-from typing import Optional, Union, Iterable, Callable, List
+import uuid
+from typing import Optional, Union, Iterable, Callable, List, Generator
 
 from loguru import logger
 
@@ -959,3 +963,131 @@ class Spider(Pangu):
         survey: Spider = clazz(**attrs)
         survey.run()
         return list(collect.queue) if not extract else [{k: getattr(c, k) for k in extract} for c in collect.queue]
+
+    @pandora.Method
+    def listen(
+            binding,  # noqa
+            attrs: dict = None,
+            modded: dict = None,
+    ) -> 'Listener':
+        """
+        创建一个 Listener, 等于后台运行爬虫
+        该 Listener 后期可以直接接受种子, 拿到你想要的结果 -> 适用于
+
+        但是: 如果在运行过程中用户修改了里面的结果, 那会被覆盖掉
+        Listener 会屏蔽原来的 make_seeds 和 item_pipeline 方法, 会使用用户传入的 seeds, 并且仅仅输出结果 (不会存储)
+
+        :param modded: 魔改 class
+        :param attrs: 初始化参数
+        :return:
+        """
+        attrs = attrs or {}
+        modded = modded or {}
+
+        if isinstance(binding, type):
+            cls = binding
+        else:
+            cls = binding.__class__
+            attrs.setdefault("proxy", binding.proxy)
+            attrs.setdefault("concurrency", binding.concurrency)
+            attrs.setdefault("downloader", binding.downloader)
+
+        def mock_make_seeds(self):  # noqa
+            pass
+
+        def mock_on_request(self, context: Context):
+            future_id = context.seeds.get('$futureID')
+            future_type = context.seeds.get('$futureType', "$response")
+            if future_id in listener.futures and future_type == '$request':
+                future: queue.Queue = listener.futures[future_id]
+                future.put(context)
+                raise signals.Success
+
+            return super(self.__class__, self).on_request(context)
+
+        def mock_on_response(self, context: Context):
+            future_id = context.seeds.get('$futureID')
+            future_type = context.seeds.get('$futureType', "$response")
+            if future_id in listener.futures and future_type == '$response':
+                future: queue.Queue = listener.futures[future_id]
+                future.put(context)
+                raise signals.Success
+
+            return super(self.__class__, self).on_response(context)
+
+        def mock_item_pipeline(self, context: Context):  # noqa
+            future_id = context.seeds.get('$futureID')
+            future_type = context.seeds.get('$futureType', "$response")
+            if future_id in listener.futures and future_type == '$items':
+                future: queue.Queue = listener.futures[future_id]
+                future.put(context)
+                raise signals.Success
+
+            logger.debug(context.items)
+            context.success()
+
+        modded.setdefault("on_request", mock_on_request)
+        modded.setdefault("on_response", mock_on_response)
+        modded.setdefault("make_seeds", mock_make_seeds)
+        modded.setdefault("item_pipeline", mock_item_pipeline)
+        attrs.update({
+            "task_queue": LocalQueue(),
+            "queue_name": f"{cls.__module__}.{cls.__name__}:listen",
+            "forever": True,
+        })
+        clazz = type("Listen", (cls,), modded)
+        listen: Spider = clazz(**attrs)
+        listener = Listener(listen)
+        return listener.run()
+
+
+class Listener:
+
+    def __init__(self, spider: Spider):
+        self.spider = spider
+        self.futures = collections.defaultdict(queue.Queue)
+
+    def run(self):
+        self.spider.dispatcher.start()
+        self.spider.active(dispatch.Task(func=self.spider.run, kwargs={"task_name": "spider"}))
+        return self
+
+    def stop(self):
+        self.spider.forever = False
+
+    def listen(self, seeds: Union[dict, Item], timeout: int = -1) -> Generator[Context, None, None]:
+        future_id = str(uuid.uuid4())
+        future = self.futures[future_id]
+        seeds.update({"$futureID": future_id})
+        self.spider.put_seeds(seeds)
+        try:
+            if timeout == -1:
+                loop = range(1)
+                timeout = None
+            else:
+                loop = itertools.cycle([None])
+
+            for _ in loop:
+                yield future.get(timeout=timeout)
+
+        except queue.Empty:
+            return
+
+        finally:
+            self.futures.pop(future_id, None)
+
+    async def wait(self, seeds: Union[dict, Item], timeout: int = -1) -> Generator[Context, None, None]:
+        loop = asyncio.get_event_loop()
+        sync_gen = self.listen(seeds, timeout=timeout)
+
+        def next_item():
+            try:
+                return next(sync_gen)
+            except StopIteration:
+                return None
+
+        while True:
+            item = await loop.run_in_executor(None, next_item)
+            if item is None:
+                break
+            yield item
