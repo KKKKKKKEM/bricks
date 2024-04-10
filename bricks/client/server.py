@@ -4,8 +4,9 @@
 # @Desc    : 客户端, 让 bricks 支持 api 调用
 import asyncio
 import collections
+import inspect
 import uuid
-from typing import Dict, List, Callable
+from typing import Dict, List, Callable, Any
 
 from loguru import logger
 
@@ -191,8 +192,19 @@ class APP:
         func = getattr(self.router, method.lower())
         func(path, tags=tags, **options)(adapter or locals()[method.lower()])
 
-    def add_middleware(self, middleware: Callable, form: str = "http"):
-        self.app.middleware(form)(middleware)
+    def add_middleware(self, middleware: [Callable, type], form: str = "http", **options: Any):
+        """
+        添加中间件
+
+        :param middleware:
+        :param form:
+        :param options:
+        :return:
+        """
+        if inspect.isclass(middleware):
+            self.app.add_middleware(middleware, **options)
+        else:
+            self.app.middleware(form)(middleware)
 
 
 if __name__ == '__main__':
