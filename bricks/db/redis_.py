@@ -153,13 +153,9 @@ local function popItems(key, count, default_type, backup_key)
     end
 
     if #values > 0 and backup_key and backup_key ~= "" then
-        return backupItems(backup_key, values, keyType)
-    else
-        return ret
+        backupItems(backup_key, values, keyType)
     end
-
-    
-
+    return ret
 
 end
 
