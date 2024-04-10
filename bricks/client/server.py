@@ -19,20 +19,18 @@ import fastapi
 import uvicorn
 from starlette import requests, responses, websockets
 
-fast_app = fastapi.FastAPI()
-
 
 class APP:
     def __init__(
             self,
             port: int = 8888,
-            reload: bool = False,
             host: str = "0.0.0.0",
             router: fastapi.APIRouter = None,
+            **options
     ):
+        self.app = fastapi.FastAPI(**options)
         self.host = host
         self.port = port
-        self.reload = reload
         self.router = router or fastapi.APIRouter()
         self.connections: Dict[websockets.WebSocket, str] = {}
         self.futures: Dict[str, asyncio.Future] = collections.defaultdict(asyncio.Future)
@@ -131,29 +129,29 @@ class APP:
     def run(self):
         self.router.websocket('/ws/{client_id}')(self.websocket_endpoint)
         self.router.post("/invoke", name='发布指令/调用')(self.invoke)
-        fast_app.include_router(self.router)
-        uvicorn.run(f'{__name__}:fast_app', host=self.host, port=self.port, reload=self.reload)
-
-    @property
-    def app(self):
-        return fast_app
+        self.app.include_router(self.router)
+        uvicorn.run(self.app, host=self.host, port=self.port)
 
     def bind_listener(
             self,
             listener: Listener,
             path: str,
+            tags: list = None,
             method: str = "POST",
-            adapter: Callable = None
+            adapter: Callable = None,
+            **options
     ):
         """
         绑定 listener
 
+        :param tags:
         :param listener: 需要绑定的 listener
         :param path: 访问路径
         :param method: 访问方法
         :param adapter: 自定义视图函数
         :return:
         """
+
         def fmt_ret(future_type: str, context: Context):
             if future_type == '$items':
                 return responses.JSONResponse(content=context.items.data)
@@ -191,7 +189,10 @@ class APP:
                 )
 
         func = getattr(self.router, method.lower())
-        func(path)(adapter or locals()[method.lower()])
+        func(path, tags=tags, **options)(adapter or locals()[method.lower()])
+
+    def add_middleware(self, middleware: Callable, form: str = "http"):
+        self.app.middleware(form)(middleware)
 
 
 if __name__ == '__main__':
