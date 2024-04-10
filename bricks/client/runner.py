@@ -73,8 +73,13 @@ class BaseRunner:
     @staticmethod
     def run_local(argv: Argv):
         main: str = argv.main
-        func: Callable = pandora.load_objects(main)
-        return pandora.invoke(func=func, kwargs=argv.args, namespace=argv.extra)
+        if os.path.sep in main or os.path.exists(main):
+            with open(argv.main) as f:
+                exec(f.read(), {"__name__": "__main__", **argv.args, **argv.extra})
+                return
+        else:
+            func: Callable = pandora.load_objects(main)
+            return pandora.invoke(func=func, kwargs=argv.args, namespace=argv.extra)
 
     def run_task(self, argv: Argv):
         """

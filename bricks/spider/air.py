@@ -1043,7 +1043,7 @@ class Spider(Pangu):
 class Listener:
 
     def __init__(self, spider: Spider):
-        self.spider = spider
+        self.spider: Spider = spider
         self.futures = collections.defaultdict(queue.Queue)
 
     def run(self):
