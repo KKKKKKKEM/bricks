@@ -996,14 +996,13 @@ class Spider(Pangu):
             attrs.setdefault("concurrency", binding.concurrency)
             attrs.setdefault("downloader", binding.downloader)
 
-        class ListenContext(Context):
-            def success(self, shutdown=False):
-                future_id = self.seeds.get('$futureID')
-                if future_id in listener.futures:
-                    future: Optional[queue.Queue] = listener.futures[future_id]
-                    future.put(self)
+        def mock_on_success(self, shutdown=False):
+            future_id = self.seeds.get('$futureID')
+            if future_id in listener.futures:
+                future: Optional[queue.Queue] = listener.futures[future_id]
+                future.put(self)
 
-                return super().success(shutdown)
+            return super(self.__class__, self).success(shutdown)
 
         def mock_on_request(self, context: Context):
             future_type = context.seeds.get('$futureType', "$response")
@@ -1034,7 +1033,8 @@ class Spider(Pangu):
             "forever": True,
         })
         clazz = type("Listen", (cls,), modded)
-        clazz.Context = ListenContext
+
+        clazz.Context = type("ListenContext", (cls.Context,), {"success": mock_on_success})
         listen: Spider = clazz(**attrs)
         listener = Listener(listen)
         return listener.run()
