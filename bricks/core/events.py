@@ -206,7 +206,7 @@ def on(form: str, index: int = None, disposable: Optional[bool] = False, binding
         如果传入了对象, 则仅作用于该对象
 
     :param form: 事件类型, 可以传入 const 属性
-    :param index: 事件排序, 默认会在最后注册执行, 按照代码顺序索引一次递增
+    :param index: 事件排序, 默认会在最后注册执行, 按照代码顺序索引一次递增, 索引越大, 执行速度越靠后
     :param disposable: 是否为可弃用事件(仅运行一次)
     :return:
     """
