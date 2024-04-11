@@ -115,9 +115,9 @@ class EventManager:
 
     @classmethod
     def acquire(cls, context: Context):
-        disposable = []
         targets = [None, context.target]
         for target in targets:
+            disposable = []
             for event in REGISTERED_EVENTS.disposable[target][context.form]:
                 match = event.match
                 if match is None:
