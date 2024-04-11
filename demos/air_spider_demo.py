@@ -1,7 +1,9 @@
+import inspect
+
 from loguru import logger
 
 from bricks import Request, const
-from bricks.core import signals
+from bricks.core import signals, events
 from bricks.core.context import Error
 from bricks.spider import air
 from bricks.spider.air import Context
@@ -78,7 +80,9 @@ class MySpider(air.Spider):
         context.success()
 
     @staticmethod
+    @events.on(const.BEFORE_PIPELINE)
     def turn_page():
+        logger.debug('turn_page 执行了')
         context: Context = Context.get_context()
         # 判断是否存在下一页
         has_next = context.response.get('data.hasNextPage')
@@ -88,6 +92,7 @@ class MySpider(air.Spider):
             context.submit({**context.seeds, "page": context.seeds["page"] + 1})
 
     @staticmethod
+    @events.on(const.AFTER_REQUEST)
     def is_success(context: Context):
         """
         判断相应是否成功
@@ -95,56 +100,24 @@ class MySpider(air.Spider):
         :param context:
         :return:
         """
+        logger.debug('is_success 执行了')
         if context.seeds.get('$config', 0) == 0:
             # 不成功 -> 返回 False
             if context.response.get('code') != 0:
                 # 重试信号
                 raise signals.Retry
 
-    def install(self):
-        super().install()
-        self.use(const.BEFORE_PIPELINE, {"func": self.turn_page})
-        self.use(const.AFTER_REQUEST, {"func": self.is_success})
-
     def catch(self, exception: Error):
         super().catch(exception)
 
 
+@events.on(const.BEFORE_PIPELINE)
+def test():
+    context: Context = Context.get_context()
+    print(context)
+
+
 if __name__ == '__main__':
-    spider = MySpider(
-        concurrency=1,
-        # # 设置代理模式 1, 该模式适用于: 你已经将代理提取至 Redis 的 proxy 里面
-        # # 这样设置的话就会自动去取
-        # proxy={
-        #     "ref": "bricks.lib.proxies.RedisProxy",  # 指向 Redis
-        #     "key": "proxy",  # 指向代理 Key
-        #     # 这个不写默认指向本地 Redis, 无密码的
-        #     "options": {
-        #         "host": "127.0.0.1",
-        #         "port": 6379,
-        #         # "password": "xsxsxax"
-        #     },
-        #     "threshold": 100,  # 一个代理最多使用多少次, 到这个次数之后就会归还到Redis, 然后重新拿, 默认不归还
-        #     "scheme": "socks5"  # 代理协议, 默认是 http
-        # },
+    spider = MySpider()
+    spider.run()
 
-        # # 设置代理模式 2, 该模式适用于: 指向固定代理, 如 http://127.0.0.1:7890
-        # # 这样设置的话就会自动去取
-        # proxy={
-        #     "ref": "bricks.lib.proxies.CustomProxy",  # 指向 Redis
-        #     "key": "127.0.0.1:7890",  # 指向代理 Key
-        #     "threshold": 100,  # 一个代理最多使用多少次, 到这个次数之后就会归还到Redis, 然后重新拿, 默认不归还
-        #     # "scheme": "http"  # 代理协议, 默认是 http
-        # },
-
-        # # 设置代理模式 3, 该模式适用于: 你有一个提取 api,访问就会获取代理
-        # # 这样设置的话就会自动去取
-        # proxy={
-        #     "ref": "bricks.lib.proxies.ApiProxy",  # 指向 Redis
-        #     "key": "http://你的提取代理的网址",  # 指向代理 Key
-        #     "threshold": 100,  # 一个代理最多使用多少次, 到这个次数之后就会归还到Redis, 然后重新拿, 默认不归还
-        #     "scheme": "http"  # 代理协议, 默认是 http
-        # },
-        # task_queue=RedisQueue()
-    )
-    print(spider.run())
