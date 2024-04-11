@@ -7,7 +7,7 @@ import itertools
 import threading
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Optional, Union, Callable, Any, List, Literal
+from typing import Optional, Union, Callable, Any, List, Literal, Dict
 
 from loguru import logger
 
@@ -21,6 +21,8 @@ class RegisteredEvents:
         self.permanent = defaultdict(functools.partial(defaultdict, list))
         # 一次性事件
         self.disposable = defaultdict(functools.partial(defaultdict, list))
+
+        self.registed: Dict[str, List[Register]] = defaultdict(list)
 
         self._lock = threading.Lock()
 
@@ -114,29 +116,31 @@ class EventManager:
     @classmethod
     def acquire(cls, context: Context):
         disposable = []
-        for event in REGISTERED_EVENTS.disposable[context.target][context.form]:
-            match = event.match
-            if match is None:
-                disposable.append(event)
-                yield event
-            elif callable(match) and match(context):
-                disposable.append(event)
-                yield event
-            elif isinstance(match, str) and eval(match, globals(), {"context": context}):
-                disposable.append(event)
-                yield event
+        targets = [None, context.target]
+        for target in targets:
+            for event in REGISTERED_EVENTS.disposable[target][context.form]:
+                match = event.match
+                if match is None:
+                    disposable.append(event)
+                    yield event
+                elif callable(match) and match(context):
+                    disposable.append(event)
+                    yield event
+                elif isinstance(match, str) and eval(match, globals(), {"context": context}):
+                    disposable.append(event)
+                    yield event
 
-        for event in disposable:
-            REGISTERED_EVENTS.disposable[context.target][context.form].remove(event)
+            for event in disposable:
+                REGISTERED_EVENTS.disposable[target][context.form].remove(event)
 
-        for event in REGISTERED_EVENTS.permanent[context.target][context.form]:
-            match = event.match
-            if match is None:
-                yield event
-            elif callable(match) and match(context):
-                yield event
-            elif isinstance(match, str) and eval(match, globals(), {"context": context}):
-                yield event
+            for event in REGISTERED_EVENTS.permanent[target][context.form]:
+                match = event.match
+                if match is None:
+                    yield event
+                elif callable(match) and match(context):
+                    yield event
+                elif isinstance(match, str) and eval(match, globals(), {"context": context}):
+                    yield event
 
     @classmethod
     def _call(cls, event: Task, context: Context, errors: Literal['raise', 'ignore', 'output'] = "raise"):
@@ -175,6 +179,7 @@ class EventManager:
             event.index = next(counter) if event.index is None else event.index
 
             container[context.target][context.form].append(event)
+
             ret.append(Register(
 
                 task=event,
@@ -185,7 +190,38 @@ class EventManager:
 
         REGISTERED_EVENTS.disposable[context.target][context.form].sort(key=lambda x: x.index)
         REGISTERED_EVENTS.permanent[context.target][context.form].sort(key=lambda x: x.index)
+        REGISTERED_EVENTS.registed[context.target].extend(ret)
         return ret
+
+
+def on(form: str, index: int = None, disposable: Optional[bool] = False, binding: Any = ...):
+    """
+    使用装饰器的方式注册事件
+    如果有 staticmethod 之类的装饰器, 则需要紧贴着你的函数
+
+
+    :param binding: 事件作用对象, 默认为自动判断
+        如果是类相关的方法(静态方法, 类方法, 实例方法), 则会作用于该类的实例
+        如果是普通函数(则会作用于全局)
+        如果传入了对象, 则仅作用于该对象
+
+    :param form: 事件类型, 可以传入 const 属性
+    :param index: 事件排序, 默认会在最后注册执行, 按照代码顺序索引一次递增
+    :param disposable: 是否为可弃用事件(仅运行一次)
+    :return:
+    """
+
+    def inner(func):
+        if binding is ...:
+            if "." in func.__qualname__:
+                setattr(func, "$event", (form, Task(func=func, index=index, disposable=disposable)))
+            else:
+                EventManager.register(Context(form=form), Task(func=func, index=index, disposable=disposable))
+        else:
+            EventManager.register(Context(form=form, target=binding), Task(func=func, index=index, disposable=disposable))
+        return func
+
+    return inner
 
 
 # 已注册事件

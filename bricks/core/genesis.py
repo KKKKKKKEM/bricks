@@ -4,13 +4,13 @@
 # @Desc    :
 import functools
 import time
-from typing import Union, Literal, Callable, List
+from typing import Union, Literal, Callable
 
 from loguru import logger
 
 from bricks.core import signals, dispatch
 from bricks.core.context import Flow, Context, Error
-from bricks.core.events import EventManager, Task, Register
+from bricks.core.events import EventManager, Task, REGISTERED_EVENTS
 from bricks.state import const
 from bricks.utils import pandora
 from bricks.utils.scheduler import BaseTrigger, Scheduler
@@ -20,20 +20,27 @@ class MetaClass(type):
 
     def __call__(cls, *args, **kwargs):
         instance = type.__call__(cls, *args, **kwargs)
+        lazy_loading = []
 
         # 加载拦截器
-        interceptors = filter(lambda x: x.startswith('_when_'), dir(instance))
-        for interceptor in interceptors:
-            # 修改被拦截的方法
-            raw_method_name = interceptor.replace("_when_", "")
-            raw_method = getattr(instance, raw_method_name, None)
-            if not raw_method:
-                continue
+        for method in dir(instance):
+            if method.startswith('_when_'):
+                # 修改被拦截的方法
+                raw_method_name = method.replace("_when_", "")
+                raw_method = getattr(instance, raw_method_name, None)
+                if not raw_method:
+                    continue
 
-            method_wrapper = getattr(instance, interceptor)
-            raw_method and setattr(instance, raw_method_name, method_wrapper(raw_method))
+                method_wrapper = getattr(instance, method)
+                raw_method and setattr(instance, raw_method_name, method_wrapper(raw_method))
+
+            if hasattr(getattr(instance, method), "$event"):
+                lazy_loading.append(getattr(getattr(instance, method), "$event"))
+
         else:
             hasattr(instance, "install") and instance.install()
+            for form, event, in lazy_loading:
+                instance.use(form, event)
 
         return instance
 
@@ -179,7 +186,10 @@ class Pangu(Chaos):
             self.set(k, v, nx=True)
 
         self.dispatcher = dispatch.Dispatcher(max_workers=self.get("concurrency", 1))
-        self.plugins: List[Register] = []
+
+    @property
+    def plugins(self):
+        return REGISTERED_EVENTS.registed[self]
 
     def on_consume(self, context: Flow):
         context.doing.append(context)
@@ -271,7 +281,6 @@ class Pangu(Chaos):
         """
         context = self.make_context(form=form)
         register = EventManager.register(context, *events)
-        self.plugins.extend(register)
         return register
 
     def make_context(self, **kwargs):
