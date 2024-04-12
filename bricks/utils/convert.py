@@ -5,7 +5,10 @@
 import contextlib
 import inspect
 import json
-from typing import Union, Callable
+import os.path
+from typing import Union, Callable, Literal
+
+from loguru import logger
 
 from bricks.lib.items import Items
 from bricks.lib.request import Request
@@ -130,6 +133,45 @@ def source2items(
     )
 
 
+def curl2spider(curl: str, path: str, name: str = "MySpider", form: Literal['form', 'template'] = "form"):
+    """
+    通过 curl 生成爬虫模板文件
+
+    :param curl:
+    :param path: 生成的文件路径
+    :param name: 爬虫名称
+    :param form: 模板类型
+    :return:
+    """
+    request = Request.from_curl(curl)
+    tpath = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tpls", "spider", form + ".tpl")
+    with open(tpath) as f:
+        tpl = f.read()
+
+    tpl = tpl.format(**{
+        "SPIDER": name,
+        "URL": request.url,
+        "METHOD": request.method,
+        "PARAMS": request.params,
+        "BODY": request.body,
+        "HEADERS": request.headers,
+        "COOKIES": dict(request.cookies) if request.cookies else None,
+        "OPTIONS": request.options,
+        "ALLOW_REDIRECTS": request.allow_redirects,
+        "PROXIES": request.proxies,
+        "PROXY": request.proxy,
+        "MAX_RETRY": request.max_retry,
+        "USE_SESSION": request.use_session,
+
+    })
+    target_dir = os.path.dirname(path)
+    target_dir and not os.path.exists(target_dir) and os.makedirs(target_dir, exist_ok=True)
+    with open(path, "w") as f:
+        f.write(tpl)
+
+    logger.debug(f'生成成功, 路径为: {path}')
+
+
 if __name__ == '__main__':
     cmd = """curl 'https://www.baidu.com/home/weather/getweather?citycode=3873&bsToken=65d1dc2bea5bf3da7bcc670692baa1e4&indextype=manht&_req_seqid=0xa39c109600111838&asyn=1&t=1702368225746&sid=39712_39790_39679_39817_39837_39842_39904_39909_39934_39936_39933_39944_39940_39939_39930_39783' \
   -H 'Accept: text/plain, */*; q=0.01' \
@@ -150,5 +192,4 @@ if __name__ == '__main__':
   -H 'sec-ch-ua-mobile: ?0' \
   -H 'sec-ch-ua-platform: "macOS"' \
   --compressed"""
-    resp = curl2resp(cmd, options={"proxy": {"ref": "bricks.lib.proxies.CustomProxy", "key": "127.0.0.1:7890"}})
-    print(resp.text)
+    curl2spider(cmd, "a.py", form="form")
