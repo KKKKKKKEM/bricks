@@ -71,7 +71,7 @@ class Download(RenderNode):
     url: str = ...
     params: Optional[dict] = None
     method: str = 'GET'
-    body: Union[str, dict] = None
+    body: Optional[Union[str, dict]] = None
     headers: Union[Header, dict] = None
     cookies: Dict[str, str] = None
     options: dict = None
