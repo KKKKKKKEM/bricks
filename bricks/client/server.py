@@ -4,6 +4,7 @@
 # @Desc    : 客户端, 让 bricks 支持 api 调用
 import asyncio
 import collections
+import functools
 import inspect
 import uuid
 from typing import Dict, List, Callable, Any, Literal
@@ -161,10 +162,17 @@ class APP:
             else:
                 return responses.PlainTextResponse(content=context.request.curl if context.request else None)
 
-        async def post(request: fastapi.Request, form: str = '$response', timeout: int = None):
+        async def post(request: fastapi.Request, form: str = '$response', timeout: int = None, max_retry: int = 10):
             try:
                 seeds = await request.json()
-                async for ctx in listener.wait({**seeds, "$futureType": form}, timeout=timeout):
+                async for ctx in listener.wait(
+                        {
+                            **seeds,
+                            "$futureType": form,
+                            "$futureMaxRetry": max_retry
+                        },
+                        timeout=timeout
+                ):
                     return fmt_ret(form, ctx)
             except Exception as e:
                 return responses.JSONResponse(
@@ -175,10 +183,17 @@ class APP:
                     status_code=500
                 )
 
-        async def get(request: fastapi.Request, form: str = '$response', timeout: int = None):
+        async def get(request: fastapi.Request, form: str = '$response', timeout: int = None, max_retry: int = 10):
             try:
                 seeds = request.query_params
-                async for ctx in listener.wait({**seeds, "$futureType": form}, timeout=timeout):
+                async for ctx in listener.wait(
+                        {
+                            **seeds,
+                            "$futureType": form,
+                            "$futureMaxRetry": max_retry
+                        },
+                        timeout=timeout
+                ):
                     return fmt_ret(form, ctx)
             except Exception as e:
                 return responses.JSONResponse(
@@ -216,7 +231,7 @@ class APP:
 
         def inner(func):
             async def hook_req(request: fastapi.Request, call_next):
-                await pandora.invoke(
+                prepared = pandora.prepare(
                     func=func,
                     namespace={
                         "request": request,
@@ -225,30 +240,38 @@ class APP:
                         fastapi.Request: request,
                     }
                 )
-                return await call_next(request)
+                resp = await self._call(prepared.func, *prepared.args, **prepared.kwargs)
+                if resp:
+                    return resp
+                else:
+                    return await call_next(request)
 
             async def hook_resp(request: fastapi.Request, call_next):
                 response = await call_next(request)
-                mock_response = fastapi.Response(
+                raw_resp = fastapi.Response(
                     content=await get_body(response),
                     headers=response.headers,
                     status_code=response.status_code
                 )
-                await pandora.invoke(
+                prepared = pandora.invoke(
                     func=func,
                     namespace={
                         "request": request,
-                        "response": mock_response,
+                        "response": raw_resp,
                     },
                     annotations={
                         fastapi.Request: request,
-                        fastapi.Response: mock_response,
+                        fastapi.Response: raw_resp,
                     }
                 )
-                headers = dict(mock_response.headers)
-                headers.pop("content-length", None)
-                mock_response.init_headers(headers)
-                return mock_response
+                resp = await self._call(prepared.func, *prepared.args, **prepared.kwargs)
+                if resp:
+                    return resp
+                else:
+                    headers = dict(raw_resp.headers)
+                    headers.pop("content-length", None)
+                    raw_resp.init_headers(headers)
+                    return raw_resp
 
             if form == 'request':
                 self.add_middleware(hook_req)
@@ -258,6 +281,14 @@ class APP:
             return func
 
         return inner
+
+    @staticmethod
+    async def _call(func, *args, **kwargs):
+        if inspect.iscoroutinefunction(func):
+            return await func(*args, **kwargs)
+        else:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
 
 
 if __name__ == '__main__':
