@@ -31,7 +31,7 @@ class Request:
             proxy: Optional[dict] = None,
             is_success: Optional[str] = ...,
             retry: int = 0,
-            max_retry: int = 5,
+            max_retry: [int, float] = 5,
             use_session: bool = False,
     ) -> None:
         self.url = url
