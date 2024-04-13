@@ -1036,9 +1036,10 @@ class Spider(Pangu):
 
         modded.setdefault("on_request", mock_on_request)
         modded.setdefault("on_response", mock_on_response)
-
+        local = LocalQueue()
         attrs.update({
-            "task_queue": LocalQueue(),
+            "task_queue": local,
+            "spider.task_queue": local,
             "queue_name": f"{cls.__module__}.{cls.__name__}:listen",
             "forever": True,
         })
@@ -1138,7 +1139,7 @@ class Listener:
         future_id = str(uuid.uuid4())
         future = self.futures[future_id]
         seeds.update({"$futureID": future_id})
-        self.spider.put_seeds(seeds)
+        self.spider.put_seeds(seeds, task_queue=self.spider.get("spider.task_queue"))
         try:
             if timeout is None:
                 loop = range(1)
