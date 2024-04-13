@@ -1014,11 +1014,21 @@ class Spider(Pangu):
 
             return super(self.__class__, self).success(shutdown)
 
+        def mock_on_retry(self):
+            future_id = self.seeds.get('$futureID')
+            future_max_retry = self.seeds.get('$futureMaxRetry')
+            counter = listener.counter[future_id]
+            times = next(counter)
+            if times + 1 >= future_max_retry:
+                listener.counter.pop(future_id, None)
+                return self.success(shutdown=True)
+            else:
+                return super(self.__class__, self).retry()
+
         def mock_on_request(self, context: Context):
             future_type = context.seeds.get('$futureType', "$response")
             if future_type == '$request':
                 raise signals.Success
-
             return super(self.__class__, self).on_request(context)
 
         def mock_on_response(self, context: Context):
@@ -1045,7 +1055,7 @@ class Spider(Pangu):
         })
         clazz = type("Listen", (cls,), modded)
 
-        clazz.Context = type("ListenContext", (cls.Context,), {"success": mock_on_success})
+        clazz.Context = type("ListenContext", (cls.Context,), {"success": mock_on_success, "retry": mock_on_retry})
         listen: Spider = clazz(**attrs)
         listener = Listener(listen)
         return listener.run()
@@ -1111,6 +1121,7 @@ class Listener:
     def __init__(self, spider: Spider):
         self.spider: Spider = spider
         self.futures = collections.defaultdict(queue.Queue)
+        self.counter = collections.defaultdict(itertools.count)
 
     def run(self):
         self.spider.dispatcher.start()
