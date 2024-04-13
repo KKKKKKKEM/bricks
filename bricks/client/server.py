@@ -141,11 +141,15 @@ class APP:
             tags: list = None,
             method: str = "POST",
             adapter: Callable = None,
+            timeout: int = None,
+            max_retry: int = 10,
             **options
     ):
         """
         绑定 listener
 
+        :param max_retry: 种子最大重试次数
+        :param timeout: 接口超时时间
         :param tags:
         :param listener: 需要绑定的 listener
         :param path: 访问路径
@@ -162,7 +166,7 @@ class APP:
             else:
                 return responses.PlainTextResponse(content=context.request.curl if context.request else None)
 
-        async def post(request: fastapi.Request, form: str = '$response', timeout: int = None, max_retry: int = 10):
+        async def post(request: fastapi.Request, form: str = '$response'):
             try:
                 seeds = await request.json()
                 async for ctx in listener.wait(
@@ -183,7 +187,7 @@ class APP:
                     status_code=500
                 )
 
-        async def get(request: fastapi.Request, form: str = '$response', timeout: int = None, max_retry: int = 10):
+        async def get(request: fastapi.Request, form: str = '$response'):
             try:
                 seeds = request.query_params
                 async for ctx in listener.wait(
