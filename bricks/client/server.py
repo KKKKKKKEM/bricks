@@ -6,7 +6,7 @@ import asyncio
 import collections
 import inspect
 import uuid
-from typing import Dict, List, Callable, Any
+from typing import Dict, List, Callable, Any, Literal
 
 from loguru import logger
 
@@ -206,7 +206,72 @@ class APP:
         else:
             self.app.middleware(form)(middleware)
 
+    def on(self, form: Literal['request', 'response']):
+        async def get_body(resp):
+            original_body = b''
+            async for chunk in resp.body_iterator:
+                original_body += chunk
+            original_data = original_body.decode()
+            return original_data
+
+        def inner(func):
+            async def hook_req(request: fastapi.Request, call_next):
+                await pandora.invoke(
+                    func=func,
+                    namespace={
+                        "request": request,
+                    },
+                    annotations={
+                        fastapi.Request: request,
+                    }
+                )
+                return await call_next(request)
+
+            async def hook_resp(request: fastapi.Request, call_next):
+                response = await call_next(request)
+                mock_response = fastapi.Response(
+                    content=await get_body(response),
+                    headers=response.headers,
+                    status_code=response.status_code
+                )
+                await pandora.invoke(
+                    func=func,
+                    namespace={
+                        "request": request,
+                        "response": mock_response,
+                    },
+                    annotations={
+                        fastapi.Request: request,
+                        fastapi.Response: mock_response,
+                    }
+                )
+                headers = dict(mock_response.headers)
+                headers.pop("content-length", None)
+                mock_response.init_headers(headers)
+                return mock_response
+
+            if form == 'request':
+                self.add_middleware(hook_req)
+            else:
+                self.add_middleware(hook_resp)
+
+            return func
+
+        return inner
+
 
 if __name__ == '__main__':
     server = APP()
+
+
+    @server.on("response")
+    async def after_request(response: fastapi.Response):
+        print(response.body)
+
+
+    @server.on("request")
+    async def before_request(request: fastapi.Request):
+        print(request)
+
+
     server.run()
