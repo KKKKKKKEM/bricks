@@ -142,15 +142,15 @@ class APP:
             tags: list = None,
             method: str = "POST",
             adapter: Callable = None,
-            timeout: int = None,
+            form: str = '$response',
             max_retry: int = 10,
             **options
     ):
         """
         绑定 listener
 
+        :param form: 接口返回类型, $response-> 响应; $items -> items
         :param max_retry: 种子最大重试次数
-        :param timeout: 接口超时时间
         :param tags:
         :param listener: 需要绑定的 listener
         :param path: 访问路径
@@ -167,18 +167,21 @@ class APP:
             else:
                 return responses.PlainTextResponse(content=context.request.curl if context.request else None)
 
-        async def post(request: fastapi.Request, form: str = '$response'):
+        async def submit(seeds: dict, timeout: int = None):
+            async for ctx in listener.wait(seeds, timeout=timeout):
+                return fmt_ret(form, ctx)
+
+        async def post(request: fastapi.Request, timeout: int = None):
             try:
                 seeds = await request.json()
-                async for ctx in listener.wait(
-                        {
-                            **seeds,
-                            "$futureType": form,
-                            "$futureMaxRetry": max_retry
-                        },
-                        timeout=timeout
-                ):
-                    return fmt_ret(form, ctx)
+                return await submit(
+                    {
+                        **seeds,
+                        "$futureType": form,
+                        "$futureMaxRetry": max_retry
+                    },
+                    timeout
+                )
             except Exception as e:
                 return responses.JSONResponse(
                     content={
@@ -188,18 +191,17 @@ class APP:
                     status_code=500
                 )
 
-        async def get(request: fastapi.Request, form: str = '$response'):
+        async def get(request: fastapi.Request, timeout: int = None):
             try:
-                seeds = request.query_params
-                async for ctx in listener.wait(
-                        {
-                            **seeds,
-                            "$futureType": form,
-                            "$futureMaxRetry": max_retry
-                        },
-                        timeout=timeout
-                ):
-                    return fmt_ret(form, ctx)
+                seeds = dict(request.query_params)
+                return await submit(
+                    {
+                        **seeds,
+                        "$futureType": form,
+                        "$futureMaxRetry": max_retry
+                    },
+                    timeout
+                )
             except Exception as e:
                 return responses.JSONResponse(
                     content={
