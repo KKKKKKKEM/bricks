@@ -4,13 +4,13 @@
 # @Desc    :
 import functools
 import time
-from typing import Union, Literal, Callable
+from typing import Union, Literal, Callable, List
 
 from loguru import logger
 
 from bricks.core import signals, dispatch
 from bricks.core.context import Flow, Context, Error
-from bricks.core.events import EventManager, Task, REGISTERED_EVENTS
+from bricks.core.events import EventManager, Task, REGISTERED_EVENTS, Register
 from bricks.state import const
 from bricks.utils import pandora
 from bricks.utils.scheduler import BaseTrigger, Scheduler
@@ -40,6 +40,7 @@ class MetaClass(type):
         else:
             hasattr(instance, "install") and instance.install()
             for form, event, in lazy_loading:
+                event.func = getattr(instance, event.func)
                 instance.use(form, event)
 
         return instance
@@ -188,11 +189,11 @@ class Pangu(Chaos):
         self.dispatcher = dispatch.Dispatcher(max_workers=self.get("concurrency", 1))
 
     @property
-    def plugins(self):
+    def plugins(self) -> List[Register]:
         return REGISTERED_EVENTS.registed[self]
 
     def on_consume(self, context: Flow):
-        context.doing.append(context)
+        context.doing.appendleft(context)
         context.next.root == self.on_consume and context.flow()
 
         while True:
