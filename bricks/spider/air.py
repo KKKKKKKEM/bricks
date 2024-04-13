@@ -4,6 +4,7 @@
 # @Desc    :
 import asyncio
 import collections
+import contextlib
 import datetime
 import functools
 import inspect
@@ -193,7 +194,7 @@ class Spider(Pangu):
         self.number_of_failure_requests = FastWriteCounter()  # 发起请求失败数量
         self.number_of_new_seeds = FastWriteCounter()  # 动态新增的种子数量(翻页/拆分等等)
         self.number_of_seeds_obtained = FastWriteCounter()  # 获取得到的种子数量
-        self.number_of_seeds_pending = 0  # 获取得到的种子数量
+        self.number_of_seeds_pending = 0  # 待处理的种子数量
 
     is_master = property(
         fget=lambda self: getattr(self, "$isMaster", False),
@@ -886,13 +887,22 @@ class Spider(Pangu):
         raise NotImplementedError
 
     def make_request(self, context: Context) -> Request:
-        raise NotImplementedError
+        return pandora.invoke(Request, kwargs=context.seeds)
 
     def parse(self, context: Context) -> Union[List[dict], Items]:
-        raise NotImplementedError
+        return Items({
+            "request": context.request.curl,
+            "response": {
+                "url": context.response.url,
+                "headers": context.response.headers,
+                "status_code": context.response.status_code,
+                "text": context.response.text,
+            }
+        })
 
     def item_pipeline(self, context: Context):
         context.items and logger.debug(context.items)
+        context.success()
 
     def install(self):
         super().install()
@@ -1038,6 +1048,61 @@ class Spider(Pangu):
         listen: Spider = clazz(**attrs)
         listener = Listener(listen)
         return listener.run()
+
+    def fetch(self, request: [Request, dict], options: dict = None) -> Response:
+        """
+        发送请求获取响应
+
+        默认情况下, 只要response 的状态码不为-1( 框架内部错误/ 异常) 就会结束
+        如果失败五次, 也会结束, 所以需要一定成功可以将 request.max_retry = math.inf
+
+        :param request:
+        :param options: 其他选项, 覆盖 downloader / proxy 的时候可以使用
+        :return:
+        """
+        if isinstance(request, dict):
+            request = Request(**request)
+
+        if request.is_success is ...:
+            request.is_success = 'response.status_code != -1'
+
+        dispatcher = contextlib.nullcontext()
+        options = options or {}
+        plugins: Union[dict, type(...), None] = options.pop("plugins", ...)
+        options.setdefault("downloader", self.downloader)
+        options.setdefault("proxy", self.proxy)
+        spider = Spider(**options)
+
+        # 不需要任何插件
+        if not plugins:
+            for plugin in spider.plugins:
+                plugin.unregister()
+
+        # 使用默认插件
+        elif plugins is ...:
+            pass
+
+        else:
+            for plugin in spider.plugins:
+                plugin.unregister()
+            for form, plugin in plugins:
+                spider.use(form, *pandora.iterable(plugin))
+
+        if inspect.iscoroutinefunction(spider.downloader.fetch):
+            dispatcher = spider.dispatcher
+
+        with dispatcher:
+            context = spider.make_context(
+                request=request,
+                next=spider.on_request,
+                flows={
+                    spider.on_request: None,
+                    spider.on_retry: spider.on_request
+                },
+            )
+            context.failure = lambda shutdown: context.flow({"next": None})
+            spider.on_consume(context=context)
+            return context.response
 
 
 class Listener:
