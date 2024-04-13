@@ -214,11 +214,12 @@ def on(form: str, index: int = None, disposable: Optional[bool] = False, binding
     def inner(func):
         if binding is ...:
             if "." in func.__qualname__:
-                setattr(func, "$event", (form, Task(func=func, index=index, disposable=disposable)))
+                setattr(func, "$event", (form, Task(func=func.__name__, index=index, disposable=disposable)))
             else:
                 EventManager.register(Context(form=form), Task(func=func, index=index, disposable=disposable))
         else:
-            EventManager.register(Context(form=form, target=binding), Task(func=func, index=index, disposable=disposable))
+            EventManager.register(Context(form=form, target=binding),
+                                  Task(func=func, index=index, disposable=disposable))
         return func
 
     return inner
