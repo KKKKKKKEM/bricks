@@ -2,6 +2,7 @@
 # @Time    : 2023-11-15 12:19
 # @Author  : Kem
 # @Desc    :
+import collections
 import threading
 from collections import deque
 
@@ -77,7 +78,7 @@ class Context:
         self.clear_context()
 
 
-local = threading.local()
+local = collections.defaultdict(threading.local)
 
 
 class Flow(Context):
@@ -106,9 +107,6 @@ class Flow(Context):
             value = LinkNode(value, getattr(self, "next", LinkNode()))
 
         super().__setattr__(key, value)
-
-    def is_continue(self) -> bool:
-        return bool(self.doing)
 
     def produce(self) -> 'Flow':
         return self.doing.popleft() if self.doing else None
@@ -207,11 +205,15 @@ class Flow(Context):
 
     @property
     def doing(self) -> deque:
-        if not hasattr(local, "$doing"):
-            setattr(local, "$doing", deque())
+        if not hasattr(local[self.target], "$doing"):
+            setattr(local[self.target], "$doing", deque())
 
-        doing: deque = getattr(local, "$doing", None)
+        doing: deque = getattr(local[self.target], "$doing", None)
         return doing
+
+    @doing.setter
+    def doing(self, v):
+        setattr(local[self.target], "$doing", v)
 
 
 class Error(Context):
