@@ -32,11 +32,12 @@ class Before:
         """
         context: Context = Context.get_context()
         request = context.obtain("request")
-        proxy = request.proxy or context.target.proxy
-        proxy_ = proxies.manager.get(*pandora.iterable(proxy), timeout=timeout)
-        request.proxies = proxy_.proxy
-        callable(proxy_.auth) and proxy_.auth(request)
-        proxies.manager.use(proxy_)
+        if not request.proxies:
+            proxy = request.proxy or context.target.proxy
+            proxy_ = proxies.manager.get(*pandora.iterable(proxy), timeout=timeout)
+            request.proxies = proxy_.proxy
+            callable(proxy_.auth) and proxy_.auth(request)
+            proxies.manager.use(proxy_)
 
     @classmethod
     def fake_ua(cls):
