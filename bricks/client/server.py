@@ -6,6 +6,7 @@ import asyncio
 import collections
 import functools
 import inspect
+import re
 import uuid
 from typing import Dict, List, Callable, Any, Literal
 
@@ -225,7 +226,19 @@ class APP:
         else:
             self.app.middleware(form)(middleware)
 
-    def on(self, form: Literal['request', 'response']):
+    def on(self, form: Literal['request', 'response'], pattern: str = ""):
+        """
+        设置拦截器
+
+        :param form: request - 拦截请求; response - 拦截响应
+        :param pattern: 用于限制 url 的正则表达式
+        :return:
+        """
+        if pattern:
+            re_pattern = re.compile(pattern)
+        else:
+            re_pattern = None
+
         async def get_body(resp):
             original_body = b''
             async for chunk in resp.body_iterator:
@@ -235,6 +248,9 @@ class APP:
 
         def inner(func):
             async def hook_req(request: fastapi.Request, call_next):
+                if re_pattern and not re_pattern.search(str(request.url)):
+                    return await call_next(request)
+
                 prepared = pandora.prepare(
                     func=func,
                     namespace={
@@ -251,6 +267,9 @@ class APP:
                     return await call_next(request)
 
             async def hook_resp(request: fastapi.Request, call_next):
+                if re_pattern and not re_pattern.search(str(request.url)):
+                    return await call_next(request)
+
                 response = await call_next(request)
                 raw_resp = fastapi.Response(
                     content=await get_body(response),
