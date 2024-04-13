@@ -276,7 +276,7 @@ class APP:
                     headers=response.headers,
                     status_code=response.status_code
                 )
-                prepared = pandora.invoke(
+                prepared = pandora.prepare(
                     func=func,
                     namespace={
                         "request": request,
