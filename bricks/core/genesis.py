@@ -40,8 +40,12 @@ class MetaClass(type):
         else:
             hasattr(instance, "install") and instance.install()
             for form, event, in lazy_loading:
-                event.func = getattr(instance, event.func)
-                instance.use(form, event)
+                instance.use(form, Task(
+                    func=getattr(instance, event.func),
+                    match=event.match,
+                    index=event.index,
+                    disposable=event.disposable,
+                ))
 
         return instance
 
