@@ -155,11 +155,11 @@ class APP:
 
         def fmt_ret(future_type: str, context: Context):
             if future_type == '$items':
-                return responses.JSONResponse(content=context.items.data)
+                return responses.JSONResponse(content=context.items.data if context.items else None)
             elif future_type == '$response':
-                return responses.PlainTextResponse(content=context.response.content)
+                return responses.PlainTextResponse(content=context.response.content if context.response else None)
             else:
-                return responses.PlainTextResponse(content=context.request.curl)
+                return responses.PlainTextResponse(content=context.request.curl if context.request else None)
 
         async def post(request: fastapi.Request, form: str = '$response', timeout: int = None):
             try:
