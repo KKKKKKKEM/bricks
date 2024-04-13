@@ -16,7 +16,7 @@ from bricks.lib.items import Items
 from bricks.lib.nodes import RenderNode
 from bricks.lib.queues import Item
 from bricks.spider import air
-from bricks.utils import pandora, convert
+from bricks.utils import pandora
 
 
 class Context(air.Context):
@@ -103,9 +103,6 @@ class Download(RenderNode):
             max_retry=self.max_retry,
             use_session=self.use_session
         )
-
-    def to_response(self, options: dict = None) -> Response:
-        return convert.req2resp(self.to_request(), options)
 
 
 @dataclass
