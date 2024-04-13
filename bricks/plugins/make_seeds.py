@@ -31,10 +31,10 @@ def by_csv(
         record: Optional[dict] = None,
 ):
     """
-    从 CSV 中获取种子, csv 必须有表头
+    从 `CSV` 中获取种子, `csv` 必须有表头，可以使用 `SQL` 进行数据查询
 
     :param path: 文件路径
-    :param query: 查询 sql
+    :param query: 查询 `sql`， 使用 `<TABLE>` 关键字来代替当前表名
     :param batch_size: 一次获取多少条数据
     :param skip: 跳过初始多少种子
     :param reader_options: 初始化 csv reader 的其他参数
@@ -92,13 +92,26 @@ def by_csv(
 def by_mongo(
         path: str,
         conn,
-        query: str = None,
+        query: Optional[dict] = None,
         database: str = None,
         batch_size: int = 10000,
         skip: Union[str, int] = ...,
         record: Optional[dict] = None,
         sort: Optional[List[tuple]] = None,
 ):
+    """
+    从 `Mongo` 中加载数据作为种子
+
+    :param path: 文件路径
+    :param conn:`Mongo` 连接
+    :param query: 查询 `Query`， 使用的 `Mongo` 查询语法，是一个字典
+    :param database: `Mongo` 的数据库名称
+    :param batch_size: 一次获取多少条数据
+    :param skip: 跳过初始多少种子
+    :param record: 历史记录，记录投放状态的容器
+    :param sort: 排序方式
+    :return:
+    """
     from bricks.db.mongo import Mongo
     conn: Mongo
     record = record or {}
@@ -191,10 +204,10 @@ def by_redis(
         key_type: Literal["set", "list", "string"] = 'set',
 ):
     """
-    通过 redis 初始化种子, 仅支持小批量数据, 不支持断点续投
+    通过 `redis` 初始化种子, 仅支持小批量数据, 不支持断点续投
 
-    :param path: 键值, 当 key_type 为 string 时, 此参数为筛选条件, 如 *test*
-    :param conn: Redis 实例
+    :param path: 键值, 当 `key_type` 为 `string` 时, 此参数为筛选条件, 如 `*test*`
+    :param conn: `Redis` 实例
     :param batch_size: 一次获取多少条数据
     :param key_type: 存储类型
     :return:
