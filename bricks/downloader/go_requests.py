@@ -20,6 +20,7 @@ warnings.filterwarnings("ignore")
 pandora.require("requests-go")
 
 import requests_go  # noqa: E402
+from requests_go.tls_config import TLSConfig  # noqa: E402
 
 
 class Downloader(AbstractDownloader):
@@ -30,7 +31,7 @@ class Downloader(AbstractDownloader):
 
     """
 
-    def __init__(self, tls_config: dict = None) -> None:
+    def __init__(self, tls_config: [dict, TLSConfig] = None) -> None:
         self.tls_config = tls_config
 
     def fetch(self, request: Union[Request, dict]) -> Response:
