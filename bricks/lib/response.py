@@ -322,14 +322,14 @@ class Response:
 
         :return:
         """
-        is_success = self.request.is_success
+        ok = self.request.ok
 
         # None -> 所有状态码, 除了 -1 , -1 代表请求过程中发生了错误
-        if is_success is None:
+        if ok is None:
             return self.status_code != -1
 
-        elif isinstance(is_success, str):
-            return eval(is_success, {"status_code": self.status_code, "response": self})
+        elif isinstance(ok, str):
+            return eval(ok, {"status_code": self.status_code, "response": self})
 
         # 默认 -> 200 到 400
         else:

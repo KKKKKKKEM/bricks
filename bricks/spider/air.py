@@ -1075,8 +1075,8 @@ class Spider(Pangu):
         if isinstance(request, dict):
             request = Request(**request)
 
-        if request.is_success is ...:
-            request.is_success = 'response.status_code != -1'
+        if request.ok is ...:
+            request.ok = 'response.status_code != -1'
 
         dispatcher = contextlib.nullcontext()
         options = options or {}

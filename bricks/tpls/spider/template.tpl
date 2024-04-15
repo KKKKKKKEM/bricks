@@ -41,7 +41,7 @@ class {SPIDER}(template.Spider):
                     # 代理 Key
                     proxy={PROXY!r},
                     # 判断成功动态脚本, 字符串形式, 如通过 403 状态码可以写为: 200 <= response.status_code < 400 or response.status_code == 403
-                    is_success=...,
+                    ok=...,
                     # 最大重试次数, 默认为 5
                     max_retry={MAX_RETRY!r},
                     # 是否使用 session 进行请求, 默认为 False
