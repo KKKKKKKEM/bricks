@@ -34,6 +34,28 @@ class Request:
             max_retry: [int, float] = 5,
             use_session: bool = False,
     ) -> None:
+        """
+
+        :param url: 请求 URL
+        :param params: 请求 URL 参数
+        :param method: 请求方法, 默认 GET
+        :param body: 请求 Body, 支持字典 / 字符串, 传入为字典的时候, 具体编码方式看 headers 里面的 Content-type
+                    # 请求的 body, 全部设置为字典时需要和 headers 配合, 规则如下
+                    # 如果是 json 格式, headers 里面设置 Content-Type 为 application/json
+                    # 如果是 form urlencoded 格式, headers 里面设置 Content-Type 为 application/x-www-form-urlencoded
+                    # 如果是 form data 格式, headers 里面设置 Content-Type 为 multipart/form-data
+        :param headers: 请求头
+        :param cookies: 请求 cookies
+        :param options: 请求其他额外选项, 可以用于配合框架 / 下载器
+        :param timeout: 请求超时时间, 填入 ... 为默认
+        :param allow_redirects: 是否允许重定向
+        :param proxies: 请求代理 Optional[str], 如 http://127.0.0.1:7890, 理解为 current proxy
+        :param proxy: 代理 Key, 理解为 proxy from
+        :param ok: 判断成功动态脚本, 字符串形式, 如通过 403 状态码可以写为: 200 <= response.status_code < 400 or response.status_code == 403
+        :param retry: 当前重试次数
+        :param max_retry: 最大重试次数
+        :param use_session: 是否使用下载器的 session 模式
+        """
         self.url = url
         self.use_session = use_session
         self.params = params
