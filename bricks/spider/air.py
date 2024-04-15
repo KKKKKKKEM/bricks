@@ -646,11 +646,12 @@ class Spider(Pangu):
         self.number_of_failure_requests.increment()
         request: Request = context.request
         response: Response = context.response
+        error: str = response.error if response else ""
 
         if request.retry < request.max_retry - 1:
 
             # 如果是代理错误, 则不计算重试次数
-            if not IGNORE_RETRY_PATTERN.search(response.error):
+            if not IGNORE_RETRY_PATTERN.search(error):
                 request.retry += 1
 
             # 保留代理标志
