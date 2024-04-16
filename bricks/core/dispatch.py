@@ -12,12 +12,46 @@ import ctypes
 import queue
 import sys
 import threading
+import time
 from asyncio import futures, ensure_future
 from concurrent.futures import Future
 from typing import Union, Dict, Optional
 
-from bricks.core import events, context
+from bricks.core import events, context, signals
 from bricks.state import const
+
+
+class Exit(signals.Signal):
+    def __init__(self, target: 'Worker'):
+        self.target = target
+
+
+class _TaskQueue(queue.Queue):
+
+    def get(self, block=True, timeout=None, worker: 'Worker' = None) -> 'Task':
+        with self.not_empty:
+            while True:
+                if not block:
+                    if not self._qsize():
+                        raise queue.Empty
+                elif timeout is None:
+                    while not self._qsize():
+                        self.not_empty.wait()
+                elif timeout < 0:
+                    raise ValueError("'timeout' must be a non-negative number")
+                else:
+                    endtime = time.time() + timeout
+                    while not self._qsize():
+                        remaining = endtime - time.time()
+                        if remaining <= 0.0:
+                            raise queue.Empty
+                        self.not_empty.wait(remaining)
+                item: Task = self._get()
+                if item.worker in [None, worker]:
+                    self.not_full.notify()
+                    return item
+                else:
+                    self._put(item)
 
 
 class Task(Future):
@@ -26,13 +60,13 @@ class Task(Future):
 
     """
 
-    def __init__(self, func, args=None, kwargs=None, callback=None):
+    def __init__(self, func, args=None, kwargs=None, callback=None, worker: "Worker" = None):
         self.func = func
         self.args = args or []
         self.kwargs = kwargs or {}
         self.callback = callback
         self.dispatcher: Optional["Dispatcher"] = None
-        self.worker: Optional["Worker"] = None
+        self.worker: Optional["Worker"] = worker
         self.future: Optional["asyncio.Future"] = None
         callback and self.add_done_callback(callback)
         super().__init__()
@@ -55,7 +89,7 @@ class Worker(threading.Thread):
 
     def __init__(self, dispatcher: 'Dispatcher', name: str, timeout=5, daemon=True, trace=False, **kwargs):
         self.dispatcher = dispatcher
-        self._shutdown = False
+        self._shutdown = threading.Event()
         self.timeout = timeout
         self.trace = trace
         self._awaken = threading.Event()
@@ -63,22 +97,26 @@ class Worker(threading.Thread):
         super().__init__(daemon=daemon, name=name, **kwargs)
 
     def run(self) -> None:
-        events.EventManager.invoke(context.Context(const.BEFORE_WORKER_START), errors='output')
-
+        events.EventManager.invoke(context.Context(const.BEFORE_WORKER_START, target=...), errors='output')
         self.trace and sys.settrace(self._trace)
-        while self.dispatcher.is_running() and not self._shutdown:
+        while self.dispatcher.is_running() and not self._shutdown.is_set():
             not self.trace and self._awaken.wait()
             try:
-                task: Task = self.dispatcher.doing.get(timeout=self.timeout)
+                task: Task = self.dispatcher.doing.get(timeout=self.timeout, worker=self)
                 task.worker = self
 
             except queue.Empty:
+                self.clean()
                 self.dispatcher.stop_worker(self.name)
                 return
 
             try:
                 ret = task.func(*task.args, **task.kwargs)
                 task.set_result(ret)
+
+            except Exit:
+                self.clean()
+                return
 
             except (KeyboardInterrupt, SystemExit) as e:
                 raise e
@@ -88,14 +126,19 @@ class Worker(threading.Thread):
                 events.EventManager.invoke(context.Error(error=e))
 
             finally:
-                events.EventManager.invoke(context.Context(const.BEFORE_WORKER_CLOSE), errors='output')
                 self.dispatcher.doing.task_done()
 
     def stop(self) -> None:
-
-        if not self.is_alive():
+        if not self.is_alive() or self._shutdown.is_set():
             return
 
+        def main(obj): raise Exit(obj)
+
+        self.dispatcher.doing.put(Task(func=main, args=[self], worker=self))
+
+    def shutdown(self):
+        if not self.is_alive():
+            return
         exc = ctypes.py_object(SystemExit)
         tid = ctypes.c_long(self.ident)
 
@@ -106,7 +149,18 @@ class Worker(threading.Thread):
             ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, None)
             raise SystemError("PyThreadState_SetAsyncExc failed")
 
-        self._shutdown = True
+    def clean(self):
+        events.EventManager.invoke(
+            context.Context(const.BEFORE_WORKER_CLOSE, target=...),
+            errors='output'
+        )
+        self._shutdown.set()
+
+    def wait(self, timeout=None):
+        self._shutdown.wait(timeout=timeout)
+
+    def is_shutdown(self):
+        return self._shutdown.is_set()
 
     def pause(self) -> None:
         self._awaken.clear()
@@ -122,7 +176,7 @@ class Worker(threading.Thread):
 
     def _localtrace(self, frame, event, arg):  # noqa
         self._awaken.wait()
-        if self._shutdown and event == 'line':
+        if self._shutdown.is_set() and event == 'line':
             raise SystemExit()
         return self._localtrace
 
@@ -146,7 +200,7 @@ class Dispatcher:
         self.trace = trace
 
         self.loop: asyncio.AbstractEventLoop
-        self.doing: queue.Queue
+        self.doing: _TaskQueue
         self.workers: Dict[str, Worker]
 
         self._remain_workers: queue.Queue
@@ -161,7 +215,7 @@ class Dispatcher:
     def _set_env(self):
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
-        self.doing = queue.Queue()
+        self.doing = _TaskQueue()
         self.workers: Dict[str, Worker] = {}
         self._remain_workers = queue.Queue()
         for i in range(self.max_workers): self._remain_workers.put(f"Worker-{i}")
@@ -192,10 +246,14 @@ class Dispatcher:
         :param idents:
         :return:
         """
+        waiters = []
         for ident in idents:
             worker = self.workers.pop(ident, None)
             worker and self._remain_workers.put(worker.name)
             worker and worker.stop()
+            worker and waiters.append(worker)
+
+        for waiter in waiters: waiter.wait()
 
     def pause_worker(self, *idents: str):
         """
@@ -368,8 +426,8 @@ class Dispatcher:
         asyncio.run(main())
 
     def stop(self):
-        self.loop.call_soon_threadsafe(self._shutdown.set)
         self.stop_worker(*self.workers.keys())
+        self.loop.call_soon_threadsafe(self._shutdown.set)
         # note: It must be called this way, otherwise the thread is unsafe and the write over there cannot be closed
 
     def start(self) -> None:
