@@ -1,4 +1,4 @@
-import inspect
+import threading
 
 from loguru import logger
 
@@ -82,7 +82,6 @@ class MySpider(air.Spider):
     @staticmethod
     @events.on(const.BEFORE_PIPELINE)
     def turn_page():
-        logger.debug('turn_page 执行了')
         context: Context = Context.get_context()
         # 判断是否存在下一页
         has_next = context.response.get('data.hasNextPage')
@@ -100,7 +99,6 @@ class MySpider(air.Spider):
         :param context:
         :return:
         """
-        logger.debug('is_success 执行了')
         if context.seeds.get('$config', 0) == 0:
             # 不成功 -> 返回 False
             if context.response.get('code') != 0:
@@ -111,13 +109,16 @@ class MySpider(air.Spider):
         super().catch(exception)
 
 
-@events.on(const.BEFORE_PIPELINE)
+@events.on(const.BEFORE_WORKER_CLOSE)
 def test():
-    context: Context = Context.get_context()
-    print(context)
+    print(f'{threading.current_thread()} 要关闭啦')
+
+
+@events.on(const.BEFORE_WORKER_START)
+def test2():
+    print(f'{threading.current_thread()} 启动啦')
 
 
 if __name__ == '__main__':
     spider = MySpider()
     spider.run()
-
