@@ -1009,10 +1009,7 @@ class Spider(Pangu):
 
         def mock_on_success(self, shutdown=False):
             future_id = self.seeds.get('$futureID')
-            if future_id in listener.futures:
-                future: Optional[queue.Queue] = listener.futures[future_id]
-                future.put(self)
-
+            listener.recv(future_id, self)
             return super(self.__class__, self).success(shutdown)
 
         def mock_on_retry(self):
@@ -1121,7 +1118,7 @@ class Listener:
 
     def __init__(self, spider: Spider):
         self.spider: Spider = spider
-        self.futures = collections.defaultdict(queue.Queue)
+        self.futures = {}
         self.counter = collections.defaultdict(itertools.count)
 
     def run(self):
@@ -1132,7 +1129,11 @@ class Listener:
     def stop(self):
         self.spider.forever = False
 
-    def listen(self, seeds: Union[dict, Item], timeout: int = None) -> Generator[Context, Union[dict, Item], None]:
+    async def wait(
+            self,
+            seeds: Union[dict, Item],
+            timeout: int = None
+    ) -> Generator[Context, Union[dict, Item], None]:
         """
         给 listener 一个种子, 然后获取种子的消耗结果
         种子内特殊键值对说明:
@@ -1149,9 +1150,10 @@ class Listener:
         :return:
         """
         future_id = str(uuid.uuid4())
-        future = self.futures[future_id]
+        self.futures[future_id] = future = asyncio.Queue()
         seeds.update({"$futureID": future_id})
         self.spider.put_seeds(seeds, task_queue=self.spider.get("spider.task_queue"))
+
         try:
             if timeout is None:
                 loop = range(1)
@@ -1159,7 +1161,49 @@ class Listener:
                 loop = itertools.cycle([None])
 
             for _ in loop:
-                yield future.get(timeout=timeout)
+                yield await asyncio.wait_for(future.get(), timeout=timeout)
+
+        except GeneratorExit:
+            raise
+        except asyncio.QueueEmpty:
+            return
+        finally:
+            self.futures.pop(future_id, None)
+
+    def listen(
+            self,
+            seeds: Union[dict, Item],
+            timeout: int = None
+    ) -> Generator[Context, Union[dict, Item], None]:
+        """
+        给 listener 一个种子, 然后获取种子的消耗结果
+        种子内特殊键值对说明:
+        $futureID 当前任务 ID, 自动生成
+
+        $futureType 表示需要的类型, 可以自己设置, 默认为 $response
+            $request -> 表示只需要 request, 也就是消耗到了请求之前就会告知结果
+            $response -> 表示只要 response, 也就是消耗到了解析之前就会告知结果
+            $items -> 表示只要 items, 也就是消耗到了存储之前就会告知结果
+
+
+        :param seeds: 需要消耗的种子
+        :param timeout: 超时时间, 超时后还没有获取到结果则退出, 如果为 None 则表示必须等待一个结果才会结束
+        :return:
+        """
+        future_id = str(uuid.uuid4())
+        self.futures[future_id] = future = queue.Queue()
+        seeds.update({"$futureID": future_id})
+        self.spider.put_seeds(seeds, task_queue=self.spider.get("spider.task_queue"))
+
+        try:
+            if timeout is None:
+                loop = range(1)
+            else:
+                loop = itertools.cycle([None])
+
+            for _ in loop:
+                yield future.get(timeout=None)
+
         except GeneratorExit:
             raise
         except queue.Empty:
@@ -1167,25 +1211,19 @@ class Listener:
         finally:
             self.futures.pop(future_id, None)
 
-    async def wait(self, seeds: Union[dict, Item], timeout: int = None) -> Generator[Context, None, None]:
+    def recv(self, future_id: str, ctx: Context):
         """
-        listen 的 异步实现
+        接收结果
 
-        :param seeds:
-        :param timeout:
+        :param future_id:
+        :param ctx:
         :return:
         """
-        loop = asyncio.get_event_loop()
-        sync_gen = self.listen(seeds, timeout=timeout)
-
-        def next_item():
-            try:
-                return next(sync_gen)
-            except StopIteration as e:
-                return e
-
-        while True:
-            item = await loop.run_in_executor(None, next_item)
-            if isinstance(item, StopIteration):
-                break
-            yield item
+        if future_id in self.futures:
+            future: [asyncio.Queue, queue.Queue] = self.futures[future_id]
+            if isinstance(future, queue.Queue):
+                future.put(ctx)
+            else:
+                future.put_nowait(ctx)
+        else:
+            logger.warning(f'furure id 不存在, 放弃存储: {future_id}')
