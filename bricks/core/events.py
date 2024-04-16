@@ -42,12 +42,12 @@ class Task:
     match: Union[Callable, str] = None
     index: Optional[int] = None
     disposable: Optional[bool] = False
+    box: list = None
 
 
 @dataclass
 class Register:
     task: Task
-    container: list
     form: str
     target: Optional[Any] = None
 
@@ -57,7 +57,7 @@ class Register:
 
         :return:
         """
-        self.container.remove(self.task)
+        self.task.box.remove(self.task)
 
     def reindex(self, index: int):
         """
@@ -67,7 +67,7 @@ class Register:
         :return:
         """
         self.task.index = index
-        self.container.sort(key=lambda x: x.index)
+        self.task.box.sort(key=lambda x: x.index)
 
     def move2top(self):
         """
@@ -75,7 +75,7 @@ class Register:
 
         :return:
         """
-        index = min([x.index for x in self.container])
+        index = min([x.index for x in self.task.box])
         self.reindex(index - 1)
 
     def move2tail(self):
@@ -84,7 +84,7 @@ class Register:
 
         :return:
         """
-        index = max([x.index for x in self.container])
+        index = max([x.index for x in self.task.box])
         self.reindex(index + 1)
 
 
@@ -115,32 +115,34 @@ class EventManager:
 
     @classmethod
     def acquire(cls, context: Context):
-        targets = [None, context.target] if context.target else [None]
-        for target in targets:
-            disposable = []
-            for event in REGISTERED_EVENTS.disposable[target][context.form]:
-                match = event.match
-                if match is None:
-                    disposable.append(event)
-                    yield event
-                elif callable(match) and match(context):
-                    disposable.append(event)
-                    yield event
-                elif isinstance(match, str) and eval(match, globals(), {"context": context}):
-                    disposable.append(event)
-                    yield event
+        if context.target is None:
+            targets = [None]
 
-            for event in disposable:
-                REGISTERED_EVENTS.disposable[target][context.form].remove(event)
+        elif context.target is ...:
+            targets = [...]
+        else:
+            targets = [None, context.target]
 
-            for event in REGISTERED_EVENTS.permanent[target][context.form]:
-                match = event.match
-                if match is None:
-                    yield event
-                elif callable(match) and match(context):
-                    yield event
-                elif isinstance(match, str) and eval(match, globals(), {"context": context}):
-                    yield event
+        events_group = [REGISTERED_EVENTS.disposable[context.form], REGISTERED_EVENTS.permanent[context.form]]
+        for i, group in enumerate(events_group):
+            group: dict
+
+            for target in targets:
+                if target is ...:
+                    events = [e for es in group.values() for e in es]
+                else:
+                    events = list(group[target])
+
+                for event in events:
+                    match = event.match
+                    if (
+                            (match is None)
+                            or (callable(match) and match(context))
+                            or (isinstance(match, str) and eval(match, globals(), {"context": context}))
+
+                    ):
+                        event.disposable and event.box.remove(event)
+                        yield event
 
     @classmethod
     def _call(cls, event: Task, context: Context, errors: Literal['raise', 'ignore', 'output'] = "raise"):
@@ -177,19 +179,13 @@ class EventManager:
                 counter = cls.counter[f'{context.target}.{context.form}.permanent']
 
             event.index = next(counter) if event.index is None else event.index
+            event.box = container[context.form][context.target]
+            event.box.append(event)
 
-            container[context.target][context.form].append(event)
+            ret.append(Register(task=event, form=context.form, target=context.target))
 
-            ret.append(Register(
-
-                task=event,
-                container=container[context.target][context.form],
-                form=context.form,
-                target=context.target
-            ))
-
-        REGISTERED_EVENTS.disposable[context.target][context.form].sort(key=lambda x: x.index)
-        REGISTERED_EVENTS.permanent[context.target][context.form].sort(key=lambda x: x.index)
+        REGISTERED_EVENTS.disposable[context.form][context.target].sort(key=lambda x: x.index)
+        REGISTERED_EVENTS.permanent[context.form][context.target].sort(key=lambda x: x.index)
         REGISTERED_EVENTS.registed[context.target].extend(ret)
         return ret
 
