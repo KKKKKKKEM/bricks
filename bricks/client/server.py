@@ -4,10 +4,12 @@
 # @Desc    : 客户端, 让 bricks 支持 api 调用
 import asyncio
 import collections
-import functools
 import inspect
 import re
+import threading
+import time
 import uuid
+from concurrent.futures import Future
 from typing import Dict, List, Callable, Any, Literal
 
 from loguru import logger
@@ -309,11 +311,28 @@ class APP:
 
     @staticmethod
     async def _call(func, *args, **kwargs):
+        def sync2future():
+
+            def callback():
+                try:
+                    ret = func(*args, **kwargs)
+                    future.set_result(ret)
+                except (SystemExit, KeyboardInterrupt):
+                    raise
+                except BaseException as exc:
+                    if future.set_running_or_notify_cancel():
+                        future.set_exception(exc)
+                    raise
+
+            future = Future()
+            threading.Thread(target=callback, daemon=True).start()
+            return future
+
         if inspect.iscoroutinefunction(func):
             return await func(*args, **kwargs)
         else:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
+            fu = sync2future()
+            return await asyncio.wrap_future(fu)
 
 
 if __name__ == '__main__':
@@ -321,7 +340,8 @@ if __name__ == '__main__':
 
 
     @server.on("response")
-    async def after_request(response: fastapi.Response):
+    def after_request(response: fastapi.Response):
+        time.sleep(5)
         print(response.body)
 
 
