@@ -17,6 +17,7 @@ from concurrent.futures import Future
 from typing import Union, Dict, Optional
 
 from bricks.core import events, context
+from bricks.state import const
 
 
 class Task(Future):
@@ -62,6 +63,8 @@ class Worker(threading.Thread):
         super().__init__(daemon=daemon, name=name, **kwargs)
 
     def run(self) -> None:
+        events.EventManager.invoke(context.Context(const.BEFORE_WORKER_START), errors='output')
+
         self.trace and sys.settrace(self._trace)
         while self.dispatcher.is_running() and not self._shutdown:
             not self.trace and self._awaken.wait()
@@ -85,6 +88,7 @@ class Worker(threading.Thread):
                 events.EventManager.invoke(context.Error(error=e))
 
             finally:
+                events.EventManager.invoke(context.Context(const.BEFORE_WORKER_CLOSE), errors='output')
                 self.dispatcher.doing.task_done()
 
     def stop(self) -> None:
@@ -380,6 +384,3 @@ class Dispatcher:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.stop()
-
-
-
