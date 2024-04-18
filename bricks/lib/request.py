@@ -9,7 +9,7 @@ import shlex
 import urllib.parse
 from collections import OrderedDict
 from http.cookies import SimpleCookie
-from typing import Union, Optional, Dict
+from typing import Union, Optional, Dict, List
 
 from bricks.lib.headers import Header
 
@@ -28,7 +28,7 @@ class Request:
             timeout: int = ...,
             allow_redirects: bool = True,
             proxies: Optional[str] = None,
-            proxy: Optional[dict] = None,
+            proxy: Optional[Union[dict, str, List[Union[dict, str]]]] = None,
             ok: Optional[str] = ...,
             retry: int = 0,
             max_retry: [int, float] = 5,
@@ -67,7 +67,7 @@ class Request:
         self.timeout = timeout
         self.allow_redirects = allow_redirects
         self.proxies = proxies
-        self.proxy = proxy
+        self.proxy: Optional[Union[dict, str, List[Union[dict, str]]]] = proxy
         self.ok = ok
         self.retry = retry
         self.max_retry = max_retry
