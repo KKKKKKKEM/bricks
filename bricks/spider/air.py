@@ -175,19 +175,19 @@ class Spider(Pangu):
     def __init__(
             self,
             concurrency: Optional[int] = 1,
-            downloader: Optional[Union[str, AbstractDownloader]] = None,
+            downloader: Optional[AbstractDownloader] = None,
             task_queue: Optional[TaskQueue] = None,
             queue_name: Optional[str] = "",
-            proxy: Optional[Union[dict, BaseProxy]] = None,
+            proxy: Optional[Union[dict, BaseProxy, str, List[Union[dict, BaseProxy, str]]]] = None,
             forever: Optional[bool] = False,
             **kwargs
     ) -> None:
 
         self.concurrency = concurrency
         self.downloader = downloader or cffi.Downloader()
-        self.task_queue = LocalQueue() if not task_queue else task_queue
-        self.proxy = proxy
-        self.queue_name = queue_name or f'{self.__class__.__module__}.{self.__class__.__name__}'
+        self.task_queue: Optional[TaskQueue] = LocalQueue() if not task_queue else task_queue
+        self.proxy: Optional[Union[dict, BaseProxy, str, List[Union[dict, BaseProxy, str]]]] = proxy
+        self.queue_name: Optional[str] = queue_name or f'{self.__class__.__module__}.{self.__class__.__name__}'
         self.forever = forever
         super().__init__(**kwargs)
         self.number_of_total_requests = FastWriteCounter()  # 发起请求总数量
@@ -1058,15 +1058,25 @@ class Spider(Pangu):
         listener = Listener(listen)
         return listener.run()
 
-    def fetch(self, request: [Request, dict], options: dict = None) -> Response:
+    def fetch(
+            self,
+            request: [Request, dict],
+            downloader: Optional[AbstractDownloader] = None,
+            proxy: Optional[Union[dict, BaseProxy]] = None,
+            plugins: Union[dict, type(...), None] = ...,
+            **options
+    ) -> Response:
         """
         发送请求获取响应
 
         默认情况下, 只要response 的状态码不为-1( 框架内部错误/ 异常) 就会结束
         如果失败五次, 也会结束, 所以需要一定成功可以将 request.max_retry = math.inf
 
-        :param request:
-        :param options: 其他选项, 覆盖 downloader / proxy 的时候可以使用
+        :param plugins: 插件, 默认使用 fake_ua 和 set_proxy; 传入 None 表示什么都不用, 自定义则使用自定义的
+        :param proxy: 请求代理 Key(Rules), 不传的时候默认使用 self.proxy
+        :param downloader: 下载器, 不传的时候默认使用  self.downloader
+        :param request: 需要请求的 request, 可以是字典(key value 需要对应 request 对象的实例参数)
+        :param options: custom spider 实例化的其他选项
         :return:
         """
         if isinstance(request, dict):
@@ -1076,10 +1086,8 @@ class Spider(Pangu):
             request.ok = 'response.status_code != -1'
 
         dispatcher = contextlib.nullcontext()
-        options = options or {}
-        plugins: Union[dict, type(...), None] = options.pop("plugins", ...)
-        options.setdefault("downloader", self.downloader)
-        options.setdefault("proxy", self.proxy)
+        options.setdefault("downloader", downloader or self.downloader)
+        options.setdefault("proxy", proxy or self.proxy)
         spider = Spider(**options)
 
         # 不需要任何插件
