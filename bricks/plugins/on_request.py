@@ -5,13 +5,14 @@
 
 import threading
 import time
-from typing import Callable
+from typing import Callable, Union
 
 from loguru import logger
 
 from bricks.core import signals
 from bricks.core.context import Context
 from bricks.lib import proxies
+from bricks.lib.proxies import BaseProxy
 from bricks.utils import pandora, codes
 from bricks.utils.fake import user_agent
 
@@ -33,7 +34,13 @@ class Before:
         context: Context = Context.get_context()
         request = context.obtain("request")
         if not request.proxies:
-            proxy = request.proxy or context.target.proxy
+            proxy: Union[dict, BaseProxy, str] = request.proxy or context.target.proxy
+            if isinstance(proxy, str):
+                proxy = {
+                    "ref": "bricks.lib.proxies.CustomProxy",
+                    "key": proxy
+                }
+
             proxy_ = proxies.manager.get(*pandora.iterable(proxy), timeout=timeout)
             request.proxies = proxy_.proxy
             callable(proxy_.auth) and proxy_.auth(request)
