@@ -190,7 +190,10 @@ class Pangu(Chaos):
         for k, v in kwargs.items():
             self.set(k, v, nx=True)
 
-        self.dispatcher = dispatch.Dispatcher(max_workers=self.get("concurrency", 1))
+        self.dispatcher = dispatch.Dispatcher(
+            max_workers=self.get("concurrency", default=1),
+            options=self.get('dispatcher.options', default={})
+        )
 
     @property
     def plugins(self) -> List[Register]:
