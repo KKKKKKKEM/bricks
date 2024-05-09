@@ -37,7 +37,7 @@ def req2resp(request: Request, options: dict = None) -> Response:
     """
     options = options or {}
     spider = Spider(**options)
-    return spider.fetch(request, options)
+    return spider.fetch(request, **options)
 
 
 def resp2items(

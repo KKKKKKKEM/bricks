@@ -87,7 +87,7 @@ class Worker(threading.Thread):
 
     """
 
-    def __init__(self, dispatcher: 'Dispatcher', name: str, timeout=5, daemon=True, trace=False, **kwargs):
+    def __init__(self, dispatcher: 'Dispatcher', name: str, timeout=60, daemon=True, trace=False, **kwargs):
         self.dispatcher = dispatcher
         self._shutdown = threading.Event()
         self.timeout = timeout
@@ -195,10 +195,9 @@ class Dispatcher:
 
     """
 
-    def __init__(self, max_workers=1, trace=False):
+    def __init__(self, max_workers=1, options: dict = None):
         self.max_workers = max_workers
-        self.trace = trace
-
+        self.options = options or {}
         self.loop: asyncio.AbstractEventLoop
         self.doing: _TaskQueue
         self.workers: Dict[str, Worker]
@@ -233,9 +232,12 @@ class Dispatcher:
         :param size:
         :return:
         """
+        options = self.options or {}
+
         for _ in range(size):
             ident = self._remain_workers.get()
-            worker = Worker(self, name=ident, trace=self.trace)
+            options.setdefault('trace', False)
+            worker = Worker(self, name=ident, **options)
             self.workers[worker.name] = worker
             worker.start()
 
