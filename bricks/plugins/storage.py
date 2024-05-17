@@ -75,6 +75,8 @@ def to_csv(
     :return:
     """
     if not items: return
+    if not isinstance(items, Items):
+        items = Items(items)
     kwargs.setdefault("header", tuple(items.columns))
     conn = conn or Writer.create_safe_writer(path=path, encoding=encoding, **kwargs)
     return conn.writerows(*items)

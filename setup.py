@@ -32,9 +32,10 @@ setup(
     author_email='531144129@qq.com',
     # 指定包信息，还可以用find_packages()函数
     packages=find_packages(),
-    package_data={
-        'bricks': ['tpls/*']
-    },  # 读取需要的数据文件
+    # package_data={
+    #     'bricks': ['tpls/*']
+    # },  # 读取需要的数据文件
+    include_package_data=True,
     install_requires=read_requirements('requirements.txt'),  # 指定需要安装的依赖
     # 其他依赖版本
     extras_require={
