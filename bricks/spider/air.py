@@ -723,7 +723,19 @@ class Spider(Pangu):
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = state.const.BEFORE_REQUEST
-            events.EventManager.invoke(context)
+            events.EventManager.invoke(
+                context,
+                annotations={
+                    self.Context: context,
+                    Item: context.seeds,
+                    Request: context.request,
+                },
+                namespace={
+                    "context": context,
+                    "seeds": context.seeds,
+                    "request": context.request,
+                }
+            )
             context.form = state.const.ON_REQUEST
             self.number_of_total_requests.increment()
             pandora.invoke(
@@ -742,7 +754,21 @@ class Spider(Pangu):
                 }
             )
             context.form = state.const.AFTER_REQUEST
-            events.EventManager.invoke(context)
+            events.EventManager.invoke(
+                context,
+                annotations={
+                    self.Context: context,
+                    Item: context.seeds,
+                    Request: context.request,
+                    Response: context.response
+                },
+                namespace={
+                    "context": context,
+                    "seeds": context.seeds,
+                    "request": context.request,
+                    "response": context.response
+                }
+            )
 
         return wrapper
 
@@ -857,7 +883,23 @@ class Spider(Pangu):
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = state.const.BEFORE_PIPELINE
-            events.EventManager.invoke(context)
+            events.EventManager.invoke(
+                context,
+                annotations={
+                    self.Context: context,
+                    Item: context.seeds,
+                    Request: context.request,
+                    Response: context.response,
+                    Items: context.items
+                },
+                namespace={
+                    "context": context,
+                    "seeds": context.seeds,
+                    "request": context.request,
+                    "response": context.response,
+                    "items": context.items,
+                }
+            )
             context.form = state.const.ON_PIPELINE
             prepared = pandora.prepare(
                 func=raw_method,
@@ -880,7 +922,23 @@ class Spider(Pangu):
             )
             prepared.func(*prepared.args, **prepared.kwargs)
             context.form = state.const.AFTER_PIPELINE
-            events.EventManager.invoke(context)
+            events.EventManager.invoke(
+                context,
+                annotations={
+                    self.Context: context,
+                    Item: context.seeds,
+                    Request: context.request,
+                    Response: context.response,
+                    Items: context.items
+                },
+                namespace={
+                    "context": context,
+                    "seeds": context.seeds,
+                    "request": context.request,
+                    "response": context.response,
+                    "items": context.items,
+                }
+            )
 
         return wrapper
 
