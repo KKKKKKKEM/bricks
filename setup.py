@@ -31,7 +31,12 @@ setup(
     author="Kem",  # 作者相关信息
     author_email='531144129@qq.com',
     # 指定包信息，还可以用find_packages()函数
-    packages=find_packages(),
+    packages=[
+        *find_packages(),
+        "bricks",
+        "bricks/tpls",
+        "bricks/tpls/spider",
+    ],
     # 读取需要的数据文件
     package_data={
         'bricks': ['tpls/*']
