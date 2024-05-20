@@ -31,15 +31,10 @@ setup(
     author="Kem",  # 作者相关信息
     author_email='531144129@qq.com',
     # 指定包信息，还可以用find_packages()函数
-    packages=[
-        *find_packages(),
-        "bricks",
-        "bricks/tpls",
-        "bricks/tpls/spider",
-    ],
+    packages=find_packages(),
     # 读取需要的数据文件
     package_data={
-        'bricks': ['tpls/*']
+        'bricks': ['tpls/*', 'tpls/spider/*']
     },
     include_package_data=True,
     install_requires=read_requirements('requirements.txt'),  # 指定需要安装的依赖
