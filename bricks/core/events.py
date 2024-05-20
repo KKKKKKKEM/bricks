@@ -92,25 +92,39 @@ class EventManager:
     counter = defaultdict(itertools.count)
 
     @classmethod
-    def trigger(cls, context: Context, errors: Literal['raise', 'ignore', 'output'] = "raise"):
+    def trigger(
+            cls,
+            context: Context,
+            errors: Literal['raise', 'ignore', 'output'] = "raise",
+            annotations: dict = None,
+            namespace: dict = None,
+    ):
         """
         trigger events: interact with external functions
 
         """
 
         for event in cls.acquire(context):
-            yield cls._call(event, context, errors=errors)
+            yield cls._call(event, context, errors=errors, annotations=annotations, namespace=namespace)
 
     @classmethod
-    def invoke(cls, context: Context, errors: Literal['raise', 'ignore', 'output'] = "raise"):
+    def invoke(
+            cls,
+            context: Context,
+            errors: Literal['raise', 'ignore', 'output'] = "raise",
+            annotations: dict = None,
+            namespace: dict = None,
+    ):
         """
         invoke events: invoke all events
 
+        :param namespace:
+        :param annotations:
         :param errors:
         :param context:
         :return:
         """
-        for _ in cls.trigger(context, errors=errors):
+        for _ in cls.trigger(context, errors=errors, annotations=annotations, namespace=namespace):
             pass
 
     @classmethod
@@ -145,14 +159,23 @@ class EventManager:
                         yield event
 
     @classmethod
-    def _call(cls, event: Task, context: Context, errors: Literal['raise', 'ignore', 'output'] = "raise"):
+    def _call(
+            cls,
+            event: Task,
+            context: Context,
+            errors: Literal['raise', 'ignore', 'output'] = "raise",
+            annotations: dict = None,
+            namespace: dict = None,
+    ):
+        annotations = annotations or {}
+        namespace = namespace or {}
         try:
             return pandora.invoke(
                 event.func,
                 args=event.args,
                 kwargs=event.kwargs,
-                annotations={type(context): context},
-                namespace={"context": context}
+                annotations={type(context): context, **annotations},
+                namespace={"context": context, **namespace}
             )
         except Exception as e:
             if errors == "raise":
