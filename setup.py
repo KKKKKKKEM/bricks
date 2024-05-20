@@ -26,17 +26,12 @@ setup(
     url='https://github.com/KKKKKKKEM/bricks.git',
     long_description_content_type="text/markdown",
     long_description=open('README.md', encoding='utf-8').read(),
-    version="0.0.21.beta6",  # 包的版本
+    version="0.0.21.beta7",  # 包的版本
     description="quickly build your crawler",  # 包简介，显示在PyPI上
     author="Kem",  # 作者相关信息
     author_email='531144129@qq.com',
     # 指定包信息，还可以用find_packages()函数
-    packages=[
-        *find_packages(),
-        "bricks",
-        "bricks/tpls",
-        "bricks/tpls/spider",
-    ],
+    packages=find_packages(),
     # 读取需要的数据文件
     package_data={
         'bricks': ['tpls/*']
