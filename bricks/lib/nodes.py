@@ -137,3 +137,9 @@ class LinkNode:
 
     def __str__(self):
         return f'LinkNode({self.root})'
+
+    def __eq__(self, other):
+        if not isinstance(other, LinkNode):
+            return self.root == other
+        else:
+            return super().__eq__(other)
