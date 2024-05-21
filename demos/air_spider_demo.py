@@ -2,9 +2,9 @@ import threading
 
 from loguru import logger
 
+import bricks
 from bricks import Request, const
 from bricks.core import signals, events
-from bricks.core.context import Error
 from bricks.spider import air
 from bricks.spider.air import Context
 
@@ -45,6 +45,7 @@ class MySpider(air.Spider):
 
     def parse(self, context: Context):
         response = context.response
+        print(response.text)
         if context.seeds.get('$config', 0) == 0:
             return response.extract(
                 engine="json",
@@ -79,17 +80,22 @@ class MySpider(air.Spider):
         # 确认种子爬取完毕后删除, 不删除的话后面又会爬取
         context.success()
 
-    @staticmethod
-    @events.on(const.BEFORE_PIPELINE)
-    def turn_page():
-        context: Context = Context.get_context()
-        # 判断是否存在下一页
-        has_next = context.response.get('data.hasNextPage')
-        if has_next == 1:
-            context.submit({**context.seeds, "$config": 1})
-            # 提交翻页的种子
-            context.submit({**context.seeds, "page": context.seeds["page"] + 1})
+    @events.on(const.BEFORE_REQUEST)
+    def mock_resp(self, context: Context):
+        resp = bricks.Response(content=str({"code": 0, "msg": "mock_resp"}))
+        context.switch({"response": resp}, by="block")
 
+    # @staticmethod
+    # @events.on(const.BEFORE_PIPELINE)
+    # def turn_page():
+    #     context: Context = Context.get_context()
+    #     # 判断是否存在下一页
+    #     has_next = context.response.get('data.hasNextPage')
+    #     if has_next == 1:
+    #         context.submit({**context.seeds, "$config": 1})
+    #         # 提交翻页的种子
+    #         context.submit({**context.seeds, "page": context.seeds["page"] + 1})
+    #
     @staticmethod
     @events.on(const.AFTER_REQUEST)
     def is_success(context: Context):
@@ -104,9 +110,9 @@ class MySpider(air.Spider):
             if context.response.get('code') != 0:
                 # 重试信号
                 raise signals.Retry
-
-    def catch(self, exception: Error):
-        super().catch(exception)
+    #
+    # def catch(self, exception: Error):
+    #     super().catch(exception)
 
 
 @events.on(const.BEFORE_WORKER_CLOSE)

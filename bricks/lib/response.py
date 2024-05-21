@@ -30,7 +30,7 @@ class Response:
             cookies: Cookies = None,
             history: List['Response'] = None,
             request: 'Request' = ...,
-            error: Any = ...,
+            error: Any = "",
             callback: Callable = None
     ):
         self.content: Union[str, bytes] = content
