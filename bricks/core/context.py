@@ -189,11 +189,11 @@ class Flow(Context):
             self.flow(attrs)
         raise signals.Switch(by)
 
-    def done(self, attrs: dict = None):
+    def done(self, attrs: dict = None, shutdown=True):
         attrs = attrs or {}
         attrs.setdefault("next", None)
         self.flow(attrs)
-        raise signals.Switch()
+        if shutdown: raise signals.Switch()
 
     def update(self, attrs: dict = None):
         attrs = attrs or {}
