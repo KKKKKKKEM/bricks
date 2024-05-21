@@ -11,7 +11,7 @@ from typing import Optional, Union, Callable, Any, List, Literal, Dict
 
 from loguru import logger
 
-from bricks.core.context import Context
+from bricks.core.context import Context, Flow
 from bricks.utils import pandora
 
 
@@ -116,6 +116,23 @@ class EventManager:
         """
         for _ in cls.trigger(context, errors=errors, annotations=annotations, namespace=namespace):
             pass
+
+    @classmethod
+    def next(
+            cls,
+            ctx: Flow,
+            form: str,
+            annotations: dict = None,
+            namespace: dict = None,
+            callback: Callable = None
+    ):
+        def main(context: Flow):
+            EventManager.invoke(context, annotations=annotations, namespace=namespace)
+            callback and callback(context)
+
+        ctx.form = form
+        ctx.flow({"next": main})
+        return main
 
     @classmethod
     def acquire(cls, context: Context):
