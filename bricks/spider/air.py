@@ -41,6 +41,7 @@ class Context(Flow):
             self,
             target: "Spider",
             form: str = state.const.ON_CONSUME,
+            division: Optional[bool] = False,
             **kwargs
 
     ) -> None:
@@ -52,6 +53,7 @@ class Context(Flow):
         self.queue_name: str = kwargs.pop("queue_name", f'{self.__class__.__module__}.{self.__class__.__name__}')
         super().__init__(form, target, **kwargs)
         self.target: Spider = target
+        self.division: bool = division
 
     def __setattr__(self, key, value):
         if key == "seeds" and type(value) is not Item:
@@ -88,8 +90,14 @@ class Context(Flow):
         :return:
         """
         ret = self.task_queue.replace(self.queue_name, (self.seeds, new), qtypes=qtypes)
-        self.seeds.fingerprint = new
+        self.seeds = new
         return ret
+
+    def divisive(self, qtypes=("temp",)):
+        new = {**self.seeds, "$division": str(uuid.uuid4())}
+        self.task_queue.put(self.queue_name, new, qtypes=qtypes)
+        self.seeds = new
+        return new
 
     def submit(self, *obj: Union[Item, dict], call_later=False, attrs: dict = None) -> List["Context"]:
         """
@@ -627,15 +635,30 @@ class Spider(Pangu):
             if ret is None: raise signals.Empty
             context.seeds = ret
             context.form = state.const.AFTER_GET_SEEDS
-            events.EventManager.invoke(context)
+            events.EventManager.invoke(
+                context,
+                annotations={
+                    Context: context
+                },
+                namespace={
+                    "context": context,
+                    "seeds": context.seeds
+                }
+            )
 
             return ret
 
         return wrapper
 
     def on_seeds(self, context: Context):
-        request = self.make_request(context)
-        context.flow({"request": request})
+
+        for index, stuff in enumerate(pandora.iterable(self.make_request(context))):
+            ctx = context.branch({"request": stuff})
+            index != 0 and ctx.division and ctx.divisive()
+            ctx.flow()
+
+        else:
+            context.done()
 
     def on_retry(self, context: Context):
         """
@@ -716,33 +739,76 @@ class Spider(Pangu):
         else:
             response: Response = self.downloader.fetch(context.request)
 
-        context.flow({"response": response})
         return response
 
     def _when_on_request(self, raw_method):  # noqa
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = state.const.BEFORE_REQUEST
-            events.EventManager.invoke(context)
-            context.form = state.const.ON_REQUEST
-            self.number_of_total_requests.increment()
-            pandora.invoke(
-                func=raw_method,
-                args=args,
-                kwargs=kwargs,
-                annotations={
-                    self.Context: context,
-                    Item: context.seeds,
-                    Request: context.request,
-                },
-                namespace={
-                    "context": context,
-                    "seeds": context.seeds,
-                    "request": context.request
-                }
-            )
-            context.form = state.const.AFTER_REQUEST
-            events.EventManager.invoke(context)
+            try:
+                events.EventManager.invoke(
+                    context,
+                    annotations={
+                        self.Context: context,
+                        Item: context.seeds,
+                        Request: context.request,
+                    },
+                    namespace={
+                        "context": context,
+                        "seeds": context.seeds,
+                        "request": context.request
+                    }
+                )
+            except signals.Switch as jump:
+                if jump.by == 'func':
+                    raise
+                else:
+                    gen = context.response
+
+            else:
+                context.form = state.const.ON_REQUEST
+                self.number_of_total_requests.increment()
+                gen = pandora.invoke(
+                    func=raw_method,
+                    args=args,
+                    kwargs=kwargs,
+                    annotations={
+                        self.Context: context,
+                        Item: context.seeds,
+                        Request: context.request,
+                    },
+                    namespace={
+                        "context": context,
+                        "seeds": context.seeds,
+                        "request": context.request
+                    }
+                )
+
+            for index, stuff in enumerate(pandora.iterable(gen)):
+                stuff.request = context.request if stuff.request is ... else stuff.request
+                ctx = context.branch()
+                index != 0 and ctx.division and ctx.divisive()
+                ctx.flow({"response": stuff, "request": stuff.request}, ctx.next == self.on_request)
+                ctx.form = state.const.AFTER_REQUEST
+                with ctx:
+                    events.EventManager.invoke(
+                        ctx,
+                        annotations={
+                            self.Context: ctx,
+                            Item: ctx.seeds,
+                            Request: ctx.request,
+                            Response: ctx.response
+                        },
+                        namespace={
+                            "context": ctx,
+                            "seeds": ctx.seeds,
+                            "request": ctx.request,
+                            "response": ctx.response,
+                        }
+                    )
+
+            else:
+                context.done()
 
         return wrapper
 
@@ -784,14 +850,13 @@ class Spider(Pangu):
         else:
             items = prepared.func(*prepared.args, **prepared.kwargs)
 
-        context.flow({"items": items})
         return items
 
     def _when_on_response(self, raw_method):  # noqa
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = state.const.ON_PARSE
-            pandora.invoke(
+            gen = pandora.invoke(
                 func=raw_method,
                 args=args,
                 kwargs=kwargs,
@@ -808,6 +873,14 @@ class Spider(Pangu):
                     "seeds": context.seeds,
                 }
             )
+            if isinstance(gen, (list, Items)): gen = [gen]
+            for index, stuff in enumerate(pandora.iterable(gen)):
+                ctx = context.branch()
+                index != 0 and ctx.division and ctx.divisive()
+                ctx.flow({"items": stuff}, flag=ctx.next == self.on_response)
+
+            else:
+                context.done()
 
         return wrapper
 
@@ -851,13 +924,27 @@ class Spider(Pangu):
         else:
             prepared.func(*prepared.args, **prepared.kwargs)
 
-        context.flow()
-
     def _when_on_pipeline(self, raw_method):  # noqa
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
             context.form = state.const.BEFORE_PIPELINE
-            events.EventManager.invoke(context)
+            events.EventManager.invoke(
+                context,
+                annotations={
+                    Response: context.response,
+                    Request: context.request,
+                    Items: context.items,
+                    Item: context.seeds,
+                    Context: context
+                },
+                namespace={
+                    "context": context,
+                    "request": context.request,
+                    "response": context.response,
+                    "seeds": context.seeds,
+                    "items": context.items,
+                }
+            )
             context.form = state.const.ON_PIPELINE
             prepared = pandora.prepare(
                 func=raw_method,
@@ -880,7 +967,24 @@ class Spider(Pangu):
             )
             prepared.func(*prepared.args, **prepared.kwargs)
             context.form = state.const.AFTER_PIPELINE
-            events.EventManager.invoke(context)
+            events.EventManager.invoke(
+                context,
+                annotations={
+                    Response: context.response,
+                    Request: context.request,
+                    Items: context.items,
+                    Item: context.seeds,
+                    Context: context
+                },
+                namespace={
+                    "context": context,
+                    "request": context.request,
+                    "response": context.response,
+                    "seeds": context.seeds,
+                    "items": context.items,
+                }
+            )
+            context.flow(flag=context.next == self.on_pipeline)
 
         return wrapper
 
