@@ -193,7 +193,7 @@ class Spider(air.Spider):
             except IndexError:
                 context.flow({"next": None})
 
-                raise signals.Switch
+                raise signals.Switch()
             else:
                 context.seeds['$signpost'] += 1
 
@@ -207,18 +207,18 @@ class Spider(air.Spider):
                         context.seeds['$bookmark'] = signpost
                         node.archive and context.archive(signpost)
                         context.flow({"next": self.make_request})
-                    raise signals.Switch
+                    raise signals.Switch()
 
                 # Request -> Response
                 elif isinstance(node, Parse):
                     node.archive and context.archive(signpost)
                     context.flow({"next": self.on_response})
-                    raise signals.Switch
+                    raise signals.Switch()
 
                 elif isinstance(node, Pipeline):
                     node.archive and context.archive(signpost)
                     context.flow({"next": self.on_pipeline})
-                    raise signals.Switch
+                    raise signals.Switch()
 
                 elif isinstance(node, Task):
                     node.archive and context.archive(signpost)
