@@ -5,6 +5,7 @@
 import collections
 import threading
 from collections import deque
+from typing import Literal
 
 from bricks import const
 from bricks.core import signals
@@ -111,11 +112,11 @@ class Flow(Context):
     def produce(self) -> 'Flow':
         return self.doing.popleft() if self.doing else None
 
-    def flow(self, attrs=None):
+    def flow(self, attrs=None, flag=True):
         # 更新属性
         attrs = attrs or {}
-        for k, v in attrs.items():
-            setattr(self, k, v)
+        if not flag: attrs.setdefault("next", self.next)
+        self.update(attrs)
 
         if "next" not in attrs:
 
@@ -152,7 +153,7 @@ class Flow(Context):
         """
         attrs = attrs or {}
         context = self.copy()
-        for k, v in attrs.items(): setattr(context, k, v)
+        context.update(attrs)
         rollback and context.rollback()
         submit and self.doing.append(context)
         return context
@@ -182,9 +183,22 @@ class Flow(Context):
         context.future = future
         return context
 
-    def switch(self, attrs: dict = None):
+    def switch(self, attrs: dict = None, by: Literal['func', 'block'] = "func"):
+        if by == "block":
+            attrs.setdefault("next", self.next)
+            self.flow(attrs)
+        raise signals.Switch(by)
+
+    def done(self, attrs: dict = None):
+        attrs = attrs or {}
+        attrs.setdefault("next", None)
         self.flow(attrs)
-        raise signals.Switch
+        raise signals.Switch()
+
+    def update(self, attrs: dict = None):
+        attrs = attrs or {}
+        for k, v in attrs.items():
+            setattr(self, k, v)
 
     def retry(self):
         raise NotImplementedError
