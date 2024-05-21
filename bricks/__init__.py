@@ -8,6 +8,7 @@ from loguru import logger
 
 from bricks.lib.request import Request
 from bricks.lib.response import Response
+from bricks.lib.items import Items
 from bricks.state import *
 
 logger.remove()
