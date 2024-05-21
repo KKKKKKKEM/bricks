@@ -651,14 +651,14 @@ class Spider(Pangu):
         return wrapper
 
     def on_seeds(self, context: Context):
-
         for index, stuff in enumerate(pandora.iterable(self.make_request(context))):
-            ctx = context.branch({"request": stuff})
-            index != 0 and ctx.division and ctx.divisive()
-            ctx.flow()
+            if index == 0:
+                ctx = context
+            else:
+                ctx = context.branch()
+                ctx.division and ctx.divisive()
 
-        else:
-            context.done()
+            ctx.flow({"request": stuff})
 
     def on_retry(self, context: Context):
         """
@@ -742,8 +742,10 @@ class Spider(Pangu):
         return response
 
     def _when_on_request(self, raw_method):  # noqa
+
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
+
             context.form = state.const.BEFORE_REQUEST
             try:
                 events.EventManager.invoke(
@@ -783,32 +785,32 @@ class Spider(Pangu):
                         "request": context.request
                     }
                 )
-
             for index, stuff in enumerate(pandora.iterable(gen)):
                 stuff.request = context.request if stuff.request is ... else stuff.request
-                ctx = context.branch()
-                index != 0 and ctx.division and ctx.divisive()
-                ctx.flow({"response": stuff, "request": stuff.request}, ctx.next == self.on_request)
-                ctx.form = state.const.AFTER_REQUEST
-                with ctx:
-                    events.EventManager.invoke(
-                        ctx,
-                        annotations={
-                            self.Context: ctx,
-                            Item: ctx.seeds,
-                            Request: ctx.request,
-                            Response: ctx.response
-                        },
-                        namespace={
-                            "context": ctx,
-                            "seeds": ctx.seeds,
-                            "request": ctx.request,
-                            "response": ctx.response,
-                        }
-                    )
+                if index == 0:
+                    ctx = context
+                else:
+                    ctx = context.branch()
+                    ctx.division and ctx.divisive()
 
-            else:
-                context.done()
+                ctx.flow({"response": stuff, "request": stuff.request}, ctx.next == self.on_request)
+                events.EventManager.next(
+                    ctx,
+                    form=state.const.AFTER_REQUEST,
+                    annotations={
+                        self.Context: ctx,
+                        Item: ctx.seeds,
+                        Request: ctx.request,
+                        Response: ctx.response
+                    },
+                    namespace={
+                        "context": ctx,
+                        "seeds": ctx.seeds,
+                        "request": ctx.request,
+                        "response": ctx.response,
+                    },
+                    callback=lambda mctx: mctx.rollback()
+                )
 
         return wrapper
 
@@ -875,12 +877,13 @@ class Spider(Pangu):
             )
             if isinstance(gen, (list, Items)): gen = [gen]
             for index, stuff in enumerate(pandora.iterable(gen)):
-                ctx = context.branch()
-                index != 0 and ctx.division and ctx.divisive()
-                ctx.flow({"items": stuff}, flag=ctx.next == self.on_response)
+                if index == 0:
+                    ctx = context
+                else:
+                    ctx = context.branch()
+                    ctx.division and ctx.divisive()
 
-            else:
-                context.done()
+                ctx.flow({"items": stuff}, flag=ctx.next == self.on_response)
 
         return wrapper
 
