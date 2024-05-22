@@ -18,7 +18,7 @@ from typing import Optional, Union, Iterable, Callable, List, Generator
 
 from loguru import logger
 
-from bricks import state
+from bricks import state, const
 from bricks.core import dispatch, signals, events
 from bricks.core.context import Flow, Error
 from bricks.core.events import EventManager
@@ -1119,22 +1119,20 @@ class Spider(Pangu):
             listener.recv(future_id, self)
             return super(self.__class__, self).success(shutdown)
 
-        def mock_on_retry(self):
-            future_id = self.seeds.get('$futureID')
-            future_max_retry = self.seeds.get('$futureMaxRetry')
-            counter = listener.counter[future_id]
-            times = next(counter)
-            if times + 1 >= future_max_retry:
-                listener.counter.pop(future_id, None)
-                return self.success(shutdown=True)
-            else:
-                return super(self.__class__, self).retry()
-
         def mock_on_request(self, context: Context):
             future_type = context.seeds.get('$futureType', "$response")
             if future_type == '$request':
                 raise signals.Success
             return super(self.__class__, self).on_request(context)
+
+        def set_max_retry(context: Context):
+            future_id = context.seeds.get('$futureID')
+            future_max_retry = context.seeds.get('$futureMaxRetry')
+            counter = listener.counter[future_id]
+            times = next(counter)
+            if times >= future_max_retry:
+                listener.counter.pop(future_id, None)
+                raise signals.Success
 
         def mock_on_response(self, context: Context):
             future_type = context.seeds.get('$futureType', "$response")
@@ -1160,8 +1158,9 @@ class Spider(Pangu):
         })
         clazz = type("Listen", (cls,), modded)
 
-        clazz.Context = type("ListenContext", (cls.Context,), {"success": mock_on_success, "retry": mock_on_retry})
+        clazz.Context = type("ListenContext", (cls.Context,), {"success": mock_on_success})
         listen: Spider = clazz(**attrs)
+        listen.use(const.BEFORE_REQUEST, {"func": set_max_retry, "index": -math.inf})
         listener = Listener(listen)
         return listener.run()
 
