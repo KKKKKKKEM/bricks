@@ -809,7 +809,7 @@ class Spider(Pangu):
                         "request": ctx.request,
                         "response": ctx.response,
                     },
-                    callback=lambda mctx: mctx.rollback()
+                    callback=lambda mctx: mctx.rollback(recursion=False)
                 )
 
         return wrapper
