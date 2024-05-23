@@ -188,8 +188,8 @@ local function addItems(key, values, default_type, maxsize)
         maxScore = tonumber(maxScore)
         local ret = 0
         for i = 1, #values, 1 do
-            local currentValue = pcall(cjson.decode, values[i])
-            if currentValue and tonumber(currentValue["$score"]) then
+            local status, currentValue = pcall(cjson.decode, values[i])
+            if status and tonumber(currentValue["$score"]) then
                 ret = ret + redis.call('ZADD', key, currentValue["$score"], values[i])
             else
                 maxScore = maxScore + 1
@@ -668,4 +668,4 @@ return  redis.call("DEL", unpack(ARGV))
 
 if __name__ == '__main__':
     rds = Redis()
-    rds.add("test2", {"name": "kem", "$score": 999}, genre="zset")
+    rds.add("test2", "das", genre="zset")
