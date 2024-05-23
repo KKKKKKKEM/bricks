@@ -9,7 +9,7 @@ import datetime
 import functools
 import json
 import time
-from typing import Union, List
+from typing import Union, List, Literal
 
 import redis
 from loguru import logger
@@ -466,12 +466,12 @@ return ret
         db_num = self.database if db_num is None else db_num
 
         keys = names
-        args = [db_num]
+        args = [db_num, "none"]
         lua = """
 changeDataBase(ARGV[1])
 local ret = {}
 for flag = 1, #KEYS do
-    ret[flag] = getKeySize(KEYS[flag], "none")
+    ret[flag] = getKeySize(KEYS[flag], ARGV[2])
 end
 return ret
 """
@@ -497,7 +497,8 @@ return  redis.call("DEL", unpack(ARGV))
 '''
         return self.lua.run(lua=lua, keys=keys, args=args)
 
-    def add(self, name: Union[str, List[str]], *values, db_num=None, genre=None, maxsize=0):
+    def add(self, name: Union[str, List[str]], *values, db_num=None, genre: Literal['set', 'zset', 'list'] = "set",
+            maxsize=0):
         """
         添加 `values` 至 `name` 中
 
@@ -530,10 +531,11 @@ return  redis.call("DEL", unpack(ARGV))
 '''
         return self.lua.run(lua=lua, keys=keys, args=args)
 
-    def pop(self, name: Union[str, List[str]], count=1, db_num=None, backup=None):
+    def pop(self, name: Union[str, List[str]], count=1, db_num=None, backup=None, genre: Literal['set', 'zset', 'list'] = "set"):
         """
         从 `name` 中 pop 出 `count` 个值出来
 
+        :param genre:
         :param backup: pop 的同时加入到 backup 队列中
         :param name: 队列名称
         :param count: 数量;
@@ -543,7 +545,7 @@ return  redis.call("DEL", unpack(ARGV))
         if not name:
             return
         db_num = self.database if db_num is None else db_num
-        keys = [db_num, count, "set", backup or '']
+        keys = [db_num, count, genre, backup or '']
         args = [*pandora.iterable(name)]
         lua = '''
     local db_num = KEYS[1]
@@ -565,10 +567,11 @@ return  redis.call("DEL", unpack(ARGV))
             return ret[0] if len(ret) == 1 else ret
         return None
 
-    def remove(self, name: Union[str, List[str]], *values, db_num=None, backup: str = ""):
+    def remove(self, name: Union[str, List[str]], *values, db_num=None, backup: str = "", genre: Literal['set', 'zset', 'list'] = "set"):
         """
         从 `name` 中删除 `values`
 
+        :param genre:
         :param backup:
         :param name: 队列名称
         :param values: 需要删除的  values
@@ -578,7 +581,7 @@ return  redis.call("DEL", unpack(ARGV))
         if not name:
             return
         db_num = self.database if db_num is None else db_num
-        keys = [db_num, "none", backup, *pandora.iterable(name)]
+        keys = [db_num, genre, backup, *pandora.iterable(name)]
         args = _to_str(*values)
         lua = '''
     local db_num = KEYS[1]
@@ -595,10 +598,11 @@ return  redis.call("DEL", unpack(ARGV))
 '''
         return self.lua.run(lua=lua, keys=keys, args=args)
 
-    def replace(self, name: Union[str, List[str]], *values, db_num=None):
+    def replace(self, name: Union[str, List[str]], *values, db_num=None, genre: Literal['set', 'zset', 'list'] = "set"):
         """
         从 `name` 中 pop 出 `count` 个值出来
 
+        :param genre:
         :param name: 队列名称
         :param db_num: 数据库编号
         :return:
@@ -606,7 +610,7 @@ return  redis.call("DEL", unpack(ARGV))
         if not name:
             return
         db_num = self.database if db_num is None else db_num
-        keys = [db_num, "set", *pandora.iterable(name)]
+        keys = [db_num, genre, *pandora.iterable(name)]
         args = [j for i in values for j in _to_str(*i)]
         lua = '''
     local db_num = KEYS[1]
@@ -623,17 +627,18 @@ return  redis.call("DEL", unpack(ARGV))
 '''
         return self.lua.run(lua=lua, keys=keys, args=args)
 
-    def merge(self, dest, *sources, db_num=None):
+    def merge(self, dest, *sources, db_num=None, genre: Literal['set', 'zset', 'list'] = "set"):
         """
         合并队列
 
+        :param genre:
         :param dest: 目标队列
         :param sources: 源队列
         :param db_num: 数据库编号
         :return:
         """
         db_num = self.database if db_num is None else db_num
-        keys = [db_num, "set", dest]
+        keys = [db_num, genre, dest]
         args = sources
         lua = '''
     local db_num = KEYS[1]
@@ -668,4 +673,7 @@ return  redis.call("DEL", unpack(ARGV))
 
 if __name__ == '__main__':
     rds = Redis()
-    rds.add("test2", "das", genre="zset")
+    for i in range(100):
+        rds.add("test2", {"name": f"name-{i:02}"}, genre="zset")
+
+    rds.merge("ttt", "test2", genre="zset")
