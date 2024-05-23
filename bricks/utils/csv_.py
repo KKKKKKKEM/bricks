@@ -8,6 +8,7 @@
 import atexit
 import csv
 import functools
+import hashlib
 import os.path
 import re
 import threading
@@ -80,8 +81,8 @@ class Reader:
             if not os.path.exists(path):
                 raise FileNotFoundError(path)
 
-            table = NAME_PATTERN.sub("_", path[:-4])
-            database = NAME_PATTERN.sub("_", self.path)
+            table = NAME_PATTERN.sub("_", os.path.basename(path))
+            database = hashlib.md5(os.path.dirname(path).encode()).hexdigest()
             if self.structure:
                 with open(path, encoding=self.encoding) as f:
                     header = csv.DictReader(f, **self.options).fieldnames

@@ -148,7 +148,7 @@ class Sqlite:
             conn.execute(f'DROP TABLE IF EXISTS {table};')
         if structure:
             conn.create_table(table, structure=structure)
-        cmd = f'sqlite3 {database}.db ".mode csv" ".import {path} {table}"'
+        cmd = f'sqlite3 {database}.db ".mode csv" ".import {path!r} {table!r}"'
 
         options = {}
         if not debug:
