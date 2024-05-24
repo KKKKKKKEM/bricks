@@ -306,10 +306,9 @@ class Spider(Pangu):
             gen = [gen]
 
         for seeds in gen:
-            stuff: InitContext = context.copy()
-            stuff.seeds = seeds
-            stuff.flow({"next": self.produce_seeds})
-            self.on_consume(stuff)
+            ctx: InitContext = context.copy()
+            ctx.flow({"next": self.produce_seeds, "seeds": seeds})
+            self.on_consume(ctx)
 
         record.update(finish=str(datetime.datetime.now()))
         task_queue.command(queue_name, {"action": task_queue.COMMANDS.RELEASE_INIT, "time": int(time.time() * 1000)})
@@ -333,15 +332,14 @@ class Spider(Pangu):
             settings['success_size'] - settings['success'],
             len(seeds)
         ])]
-        context.seeds = seeds
+        context.update({
+            "maxsize": settings['queue_size'],
+            "seeds": seeds,
+        })
         fettle = pandora.invoke(
             func=self.put_seeds,
             args=[context.seeds],
             kwargs={
-                "maxsize": settings['queue_size'],
-                "task_queue": context.task_queue,
-                "queue_name": context.queue_name,
-                "priority": context.priority,
                 "where": "init"
             },
             annotations={InitContext: context},
