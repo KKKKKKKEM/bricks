@@ -77,7 +77,7 @@ def by_csv(
 
             # 没有 offset 但是有 limit
             elif not LIMIT_PATTERN.search(query):
-                query = query + f"LIMIT -1 OFFSET {skip}"
+                query = query + f" LIMIT -1 OFFSET {skip}"
 
             # offset 和 limit 都没有
             else:

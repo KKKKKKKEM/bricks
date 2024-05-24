@@ -12,6 +12,7 @@ import hashlib
 import os.path
 import re
 import threading
+import uuid
 from shutil import rmtree
 from typing import Optional, Callable, Literal
 
@@ -81,8 +82,8 @@ class Reader:
             if not os.path.exists(path):
                 raise FileNotFoundError(path)
 
-            table = NAME_PATTERN.sub("_", os.path.basename(path))
-            database = hashlib.md5(os.path.dirname(path).encode()).hexdigest()
+            table = "TEMP_TABLE"
+            database = str(uuid.uuid4().hex)
             if self.structure:
                 with open(path, encoding=self.encoding) as f:
                     header = csv.DictReader(f, **self.options).fieldnames
@@ -135,14 +136,14 @@ class Writer:
         self.encoding = encoding
         self.newline = newline
         self.schema = schema
-        self.table = NAME_PATTERN.sub("_", path[:-4])
+        self.table = "_" + NAME_PATTERN.sub("_", os.path.basename(path))
         self.conn: Optional[Sqlite] = None
         self.writer: Optional[csv.DictWriter] = None
         self.file = None
         self.writerows: Optional[Callable] = None
 
         if self.schema == "sqlite:storage":
-            self.database = NAME_PATTERN.sub("_", path)
+            self.database = hashlib.md5(os.path.dirname(path).encode()).hexdigest()
             self.install_sqlite()
         elif self.schema == "sqlite:memory":
             self.database = ":memory:"
@@ -208,7 +209,3 @@ class Writer:
             options['header'] = tuple(options['header'])
         with _lock:
             return _get_writer(path, **options)
-
-
-if __name__ == '__main__':
-    print(NAME_PATTERN.sub("_", 'dasdas\\\///...dsada', ))
