@@ -12,7 +12,6 @@ import hashlib
 import os.path
 import re
 import threading
-import uuid
 from shutil import rmtree
 from typing import Optional, Callable, Literal
 
@@ -21,9 +20,30 @@ from loguru import logger
 from bricks.db.sqlite import Sqlite
 
 TABLE_PATTERN = re.compile(r"<TABLE>", flags=re.IGNORECASE)
-NAME_PATTERN = re.compile(r'\W', flags=re.IGNORECASE)
 
 _lock = threading.Lock()
+
+
+def generate_hashed_name(input_string):
+    """
+    生成一个基于MD5哈希的字符串，适用于文件名或表名，确保不以数字开头。
+
+    参数:
+    input_string (str): 需要进行哈希处理的原始字符串。
+
+    返回:
+    str: 符合文件名或表名命名规范的哈希字符串，确保不以数字开头。
+    """
+    # 计算MD5哈希
+    md5_hash = hashlib.md5(input_string.encode('utf-8')).hexdigest()
+
+    # 从MD5哈希值中取前16位，以确保长度适中且相对唯一
+    hashed_name = md5_hash[:16]
+
+    # 检查是否以数字开头，并在是的情况下添加下划线
+    if hashed_name[0].isdigit():
+        hashed_name = '_' + hashed_name
+    return hashed_name
 
 
 @functools.lru_cache(maxsize=None)
@@ -82,8 +102,8 @@ class Reader:
             if not os.path.exists(path):
                 raise FileNotFoundError(path)
 
-            table = "TEMP_TABLE"
-            database = str(uuid.uuid4().hex)
+            table = generate_hashed_name(os.path.basename(path))
+            database = generate_hashed_name(os.path.dirname(path))
             if self.structure:
                 with open(path, encoding=self.encoding) as f:
                     header = csv.DictReader(f, **self.options).fieldnames
@@ -136,14 +156,14 @@ class Writer:
         self.encoding = encoding
         self.newline = newline
         self.schema = schema
-        self.table = "_" + NAME_PATTERN.sub("_", os.path.basename(path))
+        self.table = generate_hashed_name(os.path.basename(path))
         self.conn: Optional[Sqlite] = None
         self.writer: Optional[csv.DictWriter] = None
         self.file = None
         self.writerows: Optional[Callable] = None
 
         if self.schema == "sqlite:storage":
-            self.database = hashlib.md5(os.path.dirname(path).encode()).hexdigest()
+            self.database = generate_hashed_name(os.path.dirname(path))
             self.install_sqlite()
         elif self.schema == "sqlite:memory":
             self.database = ":memory:"
