@@ -454,7 +454,6 @@ class ClashProxy(BaseProxy):
         with self.lock:
             self.fresh_cache()
             self.now = next(self._nodes)
-            print(self.now)
             return self._proxy
 
     def clear(self, proxy: Proxy):
