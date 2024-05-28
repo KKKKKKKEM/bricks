@@ -244,7 +244,7 @@ class ClashProxy(BaseProxy):
             match: Optional[Callable] = ...,
             scheme: str = "http",
             auth: Optional[Callable] = None,
-            threshold: int = math.inf,
+            threshold: [int, float, Callable] = ...,
             recover: Optional[Callable] = ...
     ):
         """
@@ -268,15 +268,17 @@ class ClashProxy(BaseProxy):
         self.match = match
         self.secret = secret
         self.downloader = cffi.Downloader()
-        self._nodes = None
+        self._nodes = itertools.repeat(None)
         self._configs = None
         self.now = None
+        self._proxy: Proxy = Proxy()
+        self.lock = threading.Lock()
 
         super().__init__(
             scheme=scheme,
             auth=auth,
             threshold=threshold,
-            recover=self.clear if recover is ... else recover
+            recover=recover
         )
 
         if self.selector.upper() == "GLOBAL":
@@ -289,6 +291,7 @@ class ClashProxy(BaseProxy):
         :param name: 不传入则获取所有可以使用的代理节点名称
         :return:
         """
+
         if name:
             action = f'/proxies/{name}'
         else:
@@ -301,16 +304,69 @@ class ClashProxy(BaseProxy):
             nodes = resp.get(f'proxies.{self.selector}.all')
             if now in nodes:
                 nodes = [*nodes[nodes.index(now) + 1:], *nodes[:nodes.index(now) + 1]]
-            self._nodes = itertools.cycle(list(filter(self.match, nodes)))
+            self._nodes = self.iter_node(list(filter(self.match, nodes)))
             return nodes
         else:
             return data
+
+    def iter_node(self, nodes):
+        def get_times_policy():
+            count = itertools.count()
+
+            def inner():
+                nonlocal count
+                flag = next(count) >= self.threshold
+                if flag:
+                    count = itertools.count()
+                return flag
+
+            return inner
+
+        def get_time_policy():
+            t1 = time.time()
+
+            def inner():
+                nonlocal t1
+                flag = time.time() - t1 > self.threshold
+                if flag:
+                    t1 = time.time()
+
+                return flag
+
+            return inner
+
+        # 使用次数
+        if isinstance(self.threshold, int):
+            ju = get_times_policy()
+
+        elif isinstance(self.threshold, float):
+            ju = get_time_policy()
+        elif callable(self.threshold):
+            ju = self.threshold
+
+        else:
+            raise ValueError(f"error threshold type: {self.threshold}")
+
+        cycle = itertools.cycle(nodes)
+        node = next(cycle)
+        while True:
+            if ju():
+                node = next(cycle)
+                self.switch(node)
+            yield node
 
     @property
     def configs(self):
         if not self._configs:
             resp = self._run_cmd(f'/configs')
             self._configs = resp.json()
+            key_parsed = urllib.parse.urlparse(self.key)
+            if self.scheme == "http":
+                port = self._configs.get("mixed-port") or self._configs.get("port")
+            else:
+                port = self._configs.get("mixed-port") or self._configs.get("socks-port")
+            self._proxy.proxy = f'{key_parsed.hostname}:{port}'
+
         return self._configs
 
     @configs.setter
@@ -383,30 +439,28 @@ class ClashProxy(BaseProxy):
         else:
             raise RuntimeError(f"[clash 指令执行失败]: uri: {uri}, method: {method}")
 
-    def clear_cache(self, force: bool = False):
+    def fresh_cache(self, force: bool = False):
         if force or (self.cpolicy != -1 and time.time() - self.ts > self.cpolicy):
-            self._nodes = None
+            self._nodes = itertools.repeat(None)
             del self.configs
 
-    def clear(self, proxy: Proxy):
-        self.clear_cache()
-        if self._nodes is None:
-            self.nodes()
-            return
+        if not self._configs:
+            _ = self.configs
 
-        self.now = next(self._nodes)
-        self.switch(self.now)
+        if isinstance(self._nodes, itertools.repeat):
+            self.nodes()
 
     def get(self, timeout=None) -> Proxy:
-        self.clear_cache()
-        key_parsed = urllib.parse.urlparse(self.key)
-        configs = self.configs
-        if self.scheme == "http":
-            port = configs.get("mixed-port") or configs.get("port")
-        else:
-            port = configs.get("mixed-port") or configs.get("socks-port")
+        with self.lock:
+            self.fresh_cache()
+            self.now = next(self._nodes)
+            print(self.now)
+            return self._proxy
 
-        return Proxy(f'{key_parsed.hostname}:{port}')
+    def clear(self, proxy: Proxy):
+        prev = self.now
+        while prev == self.now:
+            next(self._nodes)
 
 
 class RedisProxy(BaseProxy):
