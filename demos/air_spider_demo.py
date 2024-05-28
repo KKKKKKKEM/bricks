@@ -1,8 +1,5 @@
-import threading
-
 from loguru import logger
 
-import bricks
 from bricks import Request, const
 from bricks.core import signals, events
 from bricks.spider import air
@@ -17,7 +14,7 @@ class MySpider(air.Spider):
         # 如果有多个, 你有两种方案
         # 1. 将种子全部放置在一个列表里面, yield 出去, 如 return [{"page":1}, {"page":2}, {"page":3}]
         # 2. 使用生成器, 每次生产一部分, 如 yield {"page":1}, yield {"page":2}, yield {"page":3}
-        return [{"page": 1}]
+        return [{"page": 1}, {"page": 2}, {"page": 3}, {"page": 4}]
 
     def make_request(self, context: Context) -> Request:
         # 之前定义的种子会被投放至任务队列, 之后会被取出来, 迁入至 context 对象内
@@ -80,22 +77,11 @@ class MySpider(air.Spider):
         # 确认种子爬取完毕后删除, 不删除的话后面又会爬取
         context.success()
 
-    @events.on(const.BEFORE_REQUEST)
-    def mock_resp(self, context: Context):
-        resp = bricks.Response(content=str({"code": 0, "msg": "mock_resp"}))
-        context.switch({"response": resp}, by="block")
+    # @events.on(const.BEFORE_REQUEST)
+    # def mock_resp(self, context: Context):
+    #     resp = bricks.Response(content=str({"code": 0, "msg": "mock_resp"}))
+    #     context.switch({"response": resp}, by="block")
 
-    # @staticmethod
-    # @events.on(const.BEFORE_PIPELINE)
-    # def turn_page():
-    #     context: Context = Context.get_context()
-    #     # 判断是否存在下一页
-    #     has_next = context.response.get('data.hasNextPage')
-    #     if has_next == 1:
-    #         context.submit({**context.seeds, "$config": 1})
-    #         # 提交翻页的种子
-    #         context.submit({**context.seeds, "page": context.seeds["page"] + 1})
-    #
     @staticmethod
     @events.on(const.AFTER_REQUEST)
     def is_success(context: Context):
@@ -115,16 +101,14 @@ class MySpider(air.Spider):
     #     super().catch(exception)
 
 
-@events.on(const.BEFORE_WORKER_CLOSE)
-def test():
-    print(f'{threading.current_thread()} 要关闭啦')
-
-
-@events.on(const.BEFORE_WORKER_START)
-def test2():
-    print(f'{threading.current_thread()} 启动啦')
-
-
 if __name__ == '__main__':
-    spider = MySpider()
+    spider = MySpider(
+        # proxy={
+        #     "ref": "bricks.lib.proxies.ClashProxy",
+        #     # 控制端地址
+        #     "key": "127.0.0.1:9097",
+        #     "threshold": 1
+        # },
+        # concurrency=5
+    )
     spider.run()
