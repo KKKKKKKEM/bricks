@@ -14,6 +14,6 @@ from bricks.state import *
 logger.remove()
 logger.add(
     sys.stdout,
-    format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level}</level>  | <level>{message}</level>",
+    format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <7}</level> | <cyan>{file}:{line}</cyan> - <level>{message}</level>",
     colorize=True,
 )
