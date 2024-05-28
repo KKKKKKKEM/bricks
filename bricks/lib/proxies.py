@@ -457,6 +457,9 @@ class ClashProxy(BaseProxy):
             return self._proxy
 
     def clear(self, proxy: Proxy):
+        if len(self.nodes()) == 1:
+            return
+
         prev = self.now
         while prev == self.now:
             next(self._nodes)
