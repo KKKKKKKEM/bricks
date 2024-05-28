@@ -229,6 +229,186 @@ class ApiProxy(BaseProxy):
         return f'<ApiProxy key={self.key}| options={self.options}>'
 
 
+class ClashProxy(BaseProxy):
+    """
+    针对 clash 做的一层封装, 会自动将 clash 切换为 global 模式后, 循环使用 global 内的节点
+
+    """
+
+    def __init__(
+            self,
+            key: str,
+            secret: Optional[str] = None,
+            cpolicy: int = -1,
+            selector: str = "GLOBAL",
+            match: Optional[Callable] = ...,
+            scheme: str = "http",
+            auth: Optional[Callable] = None,
+            threshold: int = math.inf,
+            recover: Optional[Callable] = ...
+    ):
+        """
+        直接从 API 获取代理的代理类型
+
+        :param key: clash 请求 api (配置文件的 external-controller), 如: 127.0.0.1:9090
+        :param scheme: 协议
+        :param auth: 其他认证回调
+        :param threshold: 代理使用阈值, 到达阈值会回收这个代理
+        :param recover: 回收, 一般不需要
+        """
+        if not key.startswith("http" + "://"):
+            key = "http" + "://" + key
+        if match is ...:
+            match = (lambda x: str(x) not in ['DIRECT', 'REJECT'])
+
+        self.key = key
+        self.selector = selector
+        self.cpolicy = cpolicy
+        self.ts = time.time()
+        self.match = match
+        self.secret = secret
+        self.downloader = cffi.Downloader()
+        self._nodes = None
+        self._configs = None
+        self.now = None
+
+        super().__init__(
+            scheme=scheme,
+            auth=auth,
+            threshold=threshold,
+            recover=self.clear if recover is ... else recover
+        )
+
+        if self.selector.upper() == "GLOBAL":
+            self.configs = {"mode": "Global"}
+
+    def nodes(self, name: str = ""):
+        """
+        查询代理信息
+
+        :param name: 不传入则获取所有可以使用的代理节点名称
+        :return:
+        """
+        if name:
+            action = f'/proxies/{name}'
+        else:
+            action = f'/proxies'
+
+        resp = self._run_cmd(action)
+        data = resp.json()
+        if "proxies" in data:
+            now = resp.get(f'proxies.{self.selector}.now')
+            nodes = resp.get(f'proxies.{self.selector}.all')
+            if now in nodes:
+                nodes = [*nodes[nodes.index(now) + 1:], *nodes[:nodes.index(now) + 1]]
+            self._nodes = itertools.cycle(list(filter(self.match, nodes)))
+            return nodes
+        else:
+            return data
+
+    @property
+    def configs(self):
+        if not self._configs:
+            resp = self._run_cmd(f'/configs')
+            self._configs = resp.json()
+        return self._configs
+
+    @configs.setter
+    def configs(self, v: dict):
+        if "path" in v:
+            force = v.get('force', 1)
+            path = v["path"]
+
+            self._run_cmd(
+                f'/configs',
+                method="PUT",
+                params={"force": force},
+                body={"path": path},
+                headers={"Content-Type": "application/json"}
+            )
+
+        else:
+            self._run_cmd(
+                f'/configs',
+                method="PATCH",
+                body=v,
+                headers={"Content-Type": "application/json"}
+            )
+
+        del self.configs
+
+    @configs.deleter
+    def configs(self):
+        self._configs = None
+
+    def delay(self, name: str, timeout: int = 1, url: str = "https://www.github.com"):
+        resp = self._run_cmd(
+            uri=f'/proxies/{name}/delay',
+            params={
+                "timeout": timeout,
+                "url": url
+            }
+        )
+        return resp.json()
+
+    def switch(self, name: str, selector: str = None):
+        resp = self._run_cmd(
+            f'/proxies/{selector or self.selector}',
+            body={"name": name},
+            method="PUT",
+            headers={"Content-Type": "application/json"}
+        )
+        return resp.ok
+
+    def rules(self):
+        resp = self._run_cmd(f'/rules')
+        return resp.json()
+
+    def _run_cmd(self, uri: str, method: str = "GET", retry: int = 5, **kwargs):
+        uri = urllib.parse.urljoin(self.key, uri)
+        headers = kwargs.setdefault('headers', {})
+        self.secret and headers.setdefault("Authorization", f'Bearer {self.secret}')
+        for _ in range(retry):
+            try:
+                resp = self.downloader.fetch({
+                    "url": uri,
+                    "method": method.upper(),
+                    **kwargs
+                })
+                assert resp.ok, f"请求失败: {resp.text}"
+            except Exception as e:
+                logger.warning(str(e))
+            else:
+                return resp
+        else:
+            raise RuntimeError(f"[clash 指令执行失败]: uri: {uri}, method: {method}")
+
+    def clear_cache(self, force: bool = False):
+        if force or (self.cpolicy != -1 and time.time() - self.ts > self.cpolicy):
+            self._nodes = None
+            del self.configs
+
+    def clear(self, proxy: Proxy):
+        self.clear_cache()
+        if self._nodes is None:
+            self.nodes()
+            return
+
+        self.now = next(self._nodes)
+        self.switch(self.now)
+
+    def get(self, timeout=None) -> Proxy:
+        self.clear_cache()
+        key_parsed = urllib.parse.urlparse(self.key)
+        configs = self.configs
+        if self.scheme == "http":
+            port = configs.get("mixed-port") or configs.get("port")
+        else:
+            port = configs.get("mixed-port") or configs.get("socks-port")
+
+        return Proxy(f'{key_parsed.hostname}:{port}')
+
+
 class RedisProxy(BaseProxy):
 
     def __init__(
@@ -440,6 +620,3 @@ class Manager:
 
 
 manager = Manager()
-if __name__ == '__main__':
-    p = CustomProxy("www.baidu.com", scheme="socks5")
-    print(manager.get(p))
