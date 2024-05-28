@@ -256,6 +256,7 @@ class ClashProxy(BaseProxy):
         :param threshold: 代理使用阈值, 到达阈值会回收这个代理
         :param recover: 回收, 一般不需要
         """
+        key = key.strip()
         if not key.startswith("http" + "://"):
             key = "http" + "://" + key
         if match is ...:
@@ -457,12 +458,11 @@ class ClashProxy(BaseProxy):
             return self._proxy
 
     def clear(self, proxy: Proxy):
-        if len(self.nodes()) == 1:
-            return
-
-        prev = self.now
-        while prev == self.now:
-            next(self._nodes)
+        resp = self._run_cmd("/proxies")
+        now = resp.get(f'proxies.{self.selector}.now')
+        nodes = resp.get(f'proxies.{self.selector}.all')
+        new = nodes[(nodes.index(now) + 1) % len(nodes)]
+        self.switch(new)
 
 
 class RedisProxy(BaseProxy):
@@ -676,3 +676,5 @@ class Manager:
 
 
 manager = Manager()
+if __name__ == '__main__':
+    p = ClashProxy("http://127.0.0.1:9097")
