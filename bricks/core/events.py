@@ -21,6 +21,7 @@ class RegisteredEvents:
         self.permanent = defaultdict(functools.partial(defaultdict, list))
         # 一次性事件
         self.disposable = defaultdict(functools.partial(defaultdict, list))
+        self.lazy_loading = defaultdict(functools.partial(defaultdict, list))
 
         self.registed: Dict[str, List[Register]] = defaultdict(list)
 
@@ -234,12 +235,17 @@ def on(form: str, index: int = None, disposable: Optional[bool] = False, binding
     def inner(func):
         if binding is ...:
             if "." in func.__qualname__:
-                setattr(func, "$event", (form, Task(func=func.__name__, index=index, disposable=disposable)))
+                REGISTERED_EVENTS.lazy_loading[func.__qualname__.rsplit('.', 1)[0]][form].append(Task(func=func.__name__, index=index, disposable=disposable))
             else:
-                EventManager.register(Context(form=form), Task(func=func, index=index, disposable=disposable))
+                EventManager.register(
+                    Context(form=form),
+                    Task(func=func, index=index, disposable=disposable)
+                )
         else:
-            EventManager.register(Context(form=form, target=binding),
-                                  Task(func=func, index=index, disposable=disposable))
+            EventManager.register(
+                Context(form=form, target=binding),
+                Task(func=func, index=index, disposable=disposable))
+
         return func
 
     return inner

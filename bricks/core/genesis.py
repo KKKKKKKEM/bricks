@@ -20,32 +20,28 @@ class MetaClass(type):
 
     def __call__(cls, *args, **kwargs):
         instance = type.__call__(cls, *args, **kwargs)
-        lazy_loading = []
 
         # 加载拦截器
-        for method in dir(instance):
-            if method.startswith('_when_'):
-                # 修改被拦截的方法
-                raw_method_name = method.replace("_when_", "")
-                raw_method = getattr(instance, raw_method_name, None)
-                if not raw_method:
-                    continue
+        for method in filter(lambda x: str(x).startswith('_when_'), dir(instance)):
+            # 修改被拦截的方法
+            raw_method_name = method.replace("_when_", "")
+            raw_method = getattr(instance, raw_method_name, None)
+            if not raw_method:
+                continue
 
-                method_wrapper = getattr(instance, method)
-                raw_method and setattr(instance, raw_method_name, method_wrapper(raw_method))
-
-            if hasattr(getattr(instance, method), "$event"):
-                lazy_loading.append(getattr(getattr(instance, method), "$event"))
+            method_wrapper = getattr(instance, method)
+            raw_method and setattr(instance, raw_method_name, method_wrapper(raw_method))
 
         else:
             hasattr(instance, "install") and instance.install()
-            for form, event, in lazy_loading:
-                instance.use(form, Task(
-                    func=getattr(instance, event.func),
-                    match=event.match,
-                    index=event.index,
-                    disposable=event.disposable,
-                ))
+            for form, events in REGISTERED_EVENTS.lazy_loading[cls.__name__].items():
+                for event in events:
+                    instance.use(form, Task(
+                        func=getattr(instance, event.func),
+                        match=event.match,
+                        index=event.index,
+                        disposable=event.disposable,
+                    ))
 
         return instance
 
