@@ -93,6 +93,7 @@ def by_mongo(
         path: str,
         conn,
         query: Optional[dict] = None,
+        projection: Optional[dict] = None,
         database: str = None,
         batch_size: int = 10000,
         skip: Union[str, int] = ...,
@@ -102,6 +103,7 @@ def by_mongo(
     """
     从 `Mongo` 中加载数据作为种子
 
+    :param projection: 过滤字段
     :param path: 文件路径
     :param conn:`Mongo` 连接
     :param query: 查询 `Query`， 使用的 `Mongo` 查询语法，是一个字典

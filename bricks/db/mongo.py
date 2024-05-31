@@ -94,12 +94,14 @@ class Mongo(pymongo.MongoClient):
             query: Optional[dict] = None,
             database: str = None,
             sort: Optional[List[tuple]] = None,
+            projection: Optional[dict] = None,
             skip: int = 0,
             count: int = 1000,
     ) -> Iterable[List[dict]]:
         """
         从 collection_name 获取迭代数据
 
+        :param projection: 过滤字段
         :param collection: 表名
         :param query: 过滤条件
         :param sort: 排序条件
@@ -124,6 +126,7 @@ class Mongo(pymongo.MongoClient):
 
         while True:
             pipline = []
+            projection and pipline.append({"$project": projection})
             sort_condition and pipline.append({"$sort": sort_condition})
             query and pipline.append({'$match': query})
             last_value and pipline.append({"$match": {"_id": {"$gt": last_value}}})
@@ -141,6 +144,7 @@ class Mongo(pymongo.MongoClient):
             self,
             collection: str,
             query: Optional[dict] = None,
+            projection: Optional[dict] = None,
             database: str = None,
             sort: Optional[List[tuple]] = None,
             skip: int = 0,
@@ -149,6 +153,7 @@ class Mongo(pymongo.MongoClient):
         """
         从 collection_name 获取迭代数据
 
+        :param projection: 过滤字段
         :param collection: 表名
         :param query: 过滤条件
         :param sort: 排序条件
@@ -165,6 +170,7 @@ class Mongo(pymongo.MongoClient):
         while True:
             data = list(self[database][collection].find(
                 filter=query,
+                projection=projection,
                 skip=skip,
                 sort=sort,
                 limit=count,
