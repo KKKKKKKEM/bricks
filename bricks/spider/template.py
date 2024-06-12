@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Union, List, Dict, Callable
 
 from bricks import Request, Response
-from bricks.core import events as _events
+from bricks.core import events as _events, signals
 from bricks.lib.headers import Header
 from bricks.lib.items import Items
 from bricks.lib.nodes import RenderNode
@@ -78,8 +78,12 @@ class Download(RenderNode):
     proxies: Optional[str] = None
     # proxy: 代理 Key, 理解为 proxy from
     proxy: Optional[dict] = None
-    # 判断成功动态脚本, 字符串形式, 如通过 403 状态码可以写为: 200 <= response.status_code < 400 or response.status_code == 403
-    ok: Optional[str] = ...
+    # 判断成功动态脚本, 字符串形式 / 字典形式 / None
+    # 字符串形式, 如通过 403 状态码可以写为: 200 <= response.status_code < 400 or response.status_code == 403
+    # 字典形式, 如 {"response.status_code == 404": signals.Success}, 标识状态码为 404 的时候直接删除种子
+    # 字典形式, 如 {"response.status_code == 403": signals.Pass}, 标识状态码为 403 的时候让其通过默认的拦截器
+    # 字典形式, 如 {"response.status_code == 403": Callable Func}, 标识状态码为 403 的时候让Callable Func 来处理后续逻辑
+    ok: Optional[Union[str, Dict[str, Union[type(signals.Signal), Callable]]]] = ...
     # 当前重试次数
     retry: int = 0
     # 最大重试次数
