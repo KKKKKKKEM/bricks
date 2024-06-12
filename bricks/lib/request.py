@@ -9,8 +9,9 @@ import shlex
 import urllib.parse
 from collections import OrderedDict
 from http.cookies import SimpleCookie
-from typing import Union, Optional, Dict, List
+from typing import Union, Optional, Dict, List, Callable
 
+from bricks.core import signals
 from bricks.lib.headers import Header
 
 
@@ -29,7 +30,7 @@ class Request:
             allow_redirects: bool = True,
             proxies: Optional[str] = None,
             proxy: Optional[Union[dict, str, List[Union[dict, str]]]] = None,
-            ok: Optional[str] = ...,
+            ok: Optional[Union[str, Dict[str, Union[type(signals.Signal), Callable]]]] = ...,
             retry: int = 0,
             max_retry: [int, float] = 5,
             use_session: bool = False,
