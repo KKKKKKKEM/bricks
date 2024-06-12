@@ -54,3 +54,7 @@ class Success(Signal):
 
 class Failure(Signal):
     ...
+
+
+class Pass(Signal):
+    ...
