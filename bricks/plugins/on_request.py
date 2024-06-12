@@ -2,7 +2,7 @@
 # @Time    : 2023-12-06 14:05
 # @Author  : Kem
 # @Desc    : 针对于 on request 的插件
-
+import inspect
 import threading
 import time
 from typing import Callable, Union
@@ -125,7 +125,7 @@ class After:
         return response
 
     @classmethod
-    def is_success(cls):
+    def bypass(cls):
         """
         通用的判断响应是否成功
 
@@ -133,7 +133,46 @@ class After:
         """
         context: Context = Context.get_context()
         response = context.obtain("response")
-        if not response.ok:
+        request = context.obtain("request")
+        ok = request.ok
+        namespace = {
+            "status_code": response.status_code,
+            "response": response,
+            "request": request,
+            "context": context,
+        }
+        annotations = {
+            type(response): response,
+            type(request): request,
+            type(context): context,
+        }
+        # None -> 所有状态码, 除了 -1 , -1 代表请求过程中发生了错误
+        if ok is None:
+            is_pass = response.status_code != -1
+
+        elif isinstance(ok, str):
+            is_pass = eval(ok, namespace)
+
+        elif isinstance(ok, dict):
+            for match, sig in ok.items():
+                if eval(match, namespace):
+                    if inspect.isclass(sig) and issubclass(sig, signals.Signal):
+                        if sig == signals.Pass:
+                            return
+                        else:
+                            raise sig
+
+                    if callable(sig):
+                        pandora.invoke(sig, args=[context], annotations=annotations, namespace=namespace)
+                        return
+            else:
+                is_pass = response.ok
+
+        # 默认 -> response.ok
+        else:
+            is_pass = response.ok
+
+        if not is_pass:
             raise signals.Retry
 
     @classmethod

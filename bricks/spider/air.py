@@ -1021,7 +1021,7 @@ class Spider(Pangu):
             state.const.AFTER_REQUEST,
             {"func": on_request.After.show_response},
             {"func": on_request.After.conditional_scripts},
-            {"func": on_request.After.is_success}
+            {"func": on_request.After.bypass}
         )
 
     @pandora.Method
