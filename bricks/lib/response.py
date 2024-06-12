@@ -322,18 +322,7 @@ class Response:
 
         :return:
         """
-        ok = self.request.ok
-
-        # None -> 所有状态码, 除了 -1 , -1 代表请求过程中发生了错误
-        if ok is None:
-            return self.status_code != -1
-
-        elif isinstance(ok, str):
-            return eval(ok, {"status_code": self.status_code, "response": self})
-
-        # 默认 -> 200 到 400
-        else:
-            return 200 <= self.status_code < 400
+        return 200 <= self.status_code < 400
 
     @classmethod
     def make_response(cls, **kwargs):
