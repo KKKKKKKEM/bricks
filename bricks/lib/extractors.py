@@ -10,7 +10,7 @@ import itertools
 import math
 import re
 import time
-from typing import Any, Optional, Callable, Union, Type
+from typing import Any, Optional, Callable, Union, Type, Literal, List
 
 import jmespath
 import jsonpath
@@ -43,31 +43,31 @@ class Rule:
         self.options = options or {}
         self.const = const
         self.default = default
-        self.engine: Optional["Extractor"] = self.to_engine(engine)
-        self.backup: Optional['Rule'] = None
+        self.engine: Optional["Extractor"] = None
+        self.build_engine(engine)
 
     @classmethod
-    def to_rule(cls, value, engine=None):
-        if isinstance(value, cls):
-            value.engine = cls.to_engine(value.engine or engine)
+    def parse(cls, value, engine=None):
+        if isinstance(value, (cls, Group)):
+            value.build_engine(engine)
             return value
         else:
             return cls(exprs=value, engine=engine)
 
-    @classmethod
-    def to_engine(cls, value):
-        if not value:
+    def build_engine(self, value):
+        if self.engine or not value:
             return
 
         if isinstance(value, Extractor) or (inspect.isclass(value) and issubclass(value, Extractor)):
-            return value
+            self.engine = value
+
         elif isinstance(value, str):
-            return globals()[f'{value.title()}Extractor']
+            self.engine = globals()[f'{value.title()}Extractor']
 
         else:
             raise ValueError("engine must be a string or Extractor instance")
 
-    def apply(self, obj):
+    def apply(self, obj, strict: Literal["ignore", "raise"] = "ignore"):
         # 常量
         if self.const is not ...:
             return self.const
@@ -81,10 +81,9 @@ class Rule:
 
         # 设置默认值
         if res in self.engine.empty:
-            if self.backup:
-                return self.backup.apply(obj)
-            else:
-                res = self.default
+            if strict == "raise":
+                raise Extractor.Empty
+            res = self.default
 
         # 后置处理脚本
         if callable(self.post_script):
@@ -107,18 +106,67 @@ class Rule:
             return True
 
         assert callable(self.condition), "condition must be a callable object"
-        return self.condition(obj)
-
-    def __or__(self, other):
-        if not self.backup:
-            self.backup = other
-        else:
-            self.backup = self.backup | other
-
-        return self
+        return bool(self.condition(obj))
 
     def __str__(self):
         return f"<Rule {self.exprs}>"
+
+    def __or__(self, other):
+        return Group([self, other])
+
+
+class Group:
+    """
+    用多多个 rule 的 or 结果
+
+    """
+
+    def __init__(
+            self,
+            exprs: List[Union[Rule, 'Group']],
+            pre_script: Optional[Callable] = None,
+            post_script: Optional[Callable] = None,
+    ):
+        self.exprs = pandora.iterable(exprs)
+        self.pre_script = pre_script
+        self.post_script = post_script
+
+    def apply(self, obj, strict: Literal["ignore", "raise"] = "ignore"):
+        # 前置处理脚本
+        if callable(self.pre_script):
+            obj = self.pre_script(obj)
+
+        for exprs in self.exprs:
+            try:
+                res = exprs.apply(obj, strict="raise")
+                break
+            except Extractor.Empty:
+                pass
+        else:
+            if strict == 'ignore':
+                res = self.exprs[-1].default
+            else:
+                raise Extractor.Empty
+
+        # 后置处理脚本
+        if callable(self.post_script):
+            res = self.post_script(res)
+
+        return res
+
+    def is_work(self, obj):
+        for exprs in self.exprs:
+            if exprs.is_work(obj):
+                return True
+        else:
+            return False
+
+    def build_engine(self, engine):
+        for exprs in self.exprs:
+            exprs.build_engine(engine)
+
+    def __or__(self, other):
+        return Group([self, other])
 
 
 class Extractor:
@@ -126,8 +174,12 @@ class Extractor:
     提取器抽象类
 
     """
+
     is_array = False
     empty = (None,)
+
+    class Empty(Exception):
+        ...
 
     @classmethod
     def extract(cls, obj: Any, exprs: str, **kwargs):
@@ -206,7 +258,7 @@ class Extractor:
             for k, v in rules.items():
 
                 if not isinstance(v, dict):
-                    rule = Rule.to_rule(v, engine=cls)
+                    rule = Rule.parse(v, engine=cls)
                     _rkey = (
                         rkey.split(".")[0],
                         pkey.count(".") + deep,
@@ -222,7 +274,7 @@ class Extractor:
                     elif rule.exprs == '@date':
                         yield k, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), *_rkey
 
-                    elif rule.is_work(_obj) is not False:
+                    elif rule.is_work(_obj):
                         _unpack_obj = rule.apply(_obj)
 
                         if k == '@unpack':
@@ -246,8 +298,8 @@ class Extractor:
                 # 代表进入下一级别 / 提取功能参数
                 else:
 
-                    rule = Rule.to_rule(k, engine=cls)
-                    if not rule.is_work(_obj) is False:
+                    rule = Rule.parse(k, engine=cls)
+                    if not rule.is_work(_obj):
                         sub_obj = rule.apply(_obj)
 
                         for i in cls._match(
@@ -368,52 +420,11 @@ class RegexExtractor(Extractor):
 
 
 if __name__ == '__main__':
-    r1 = {
-        "people": {
-            "name": "name",
-            "index": "@index",
-            "ts": "@ts",
-            "hobbies": {
-                "hobby": "name"
-            }
-        }
-    }
     data = {
-        "people": [
-            {
-                "name": "John",
-                "age": 30,
-                "hobbies": [
-                    {
-                        "name": "hobby1"
-                    },
-                    {
-                        "name": "hobby2"
-                    },
-                    {
-                        "name": "hobby3"
-                    },
-
-                ]
-            },
-            {
-                "name": "Jane",
-                "age": 25,
-                "hobbies": [
-                    {
-                        "name": "hobby4"
-                    },
-                    {
-                        "name": "hobby5"
-                    },
-                    {
-                        "name": "hobby6"
-                    },
-
-                ]
-            },
-            {"name": "Bob", "age": 20}
-        ]
+        "name1": "name1",
+        "name2": "name2",
+        "name3": "name3",
+        # "name4": "name4",
     }
 
-    print(JsonExtractor.match(data, r1))
+    print(JsonExtractor.match(data, {"res": Rule("name4") | Rule("name3") | Rule("name2") | Rule("name1")}))
