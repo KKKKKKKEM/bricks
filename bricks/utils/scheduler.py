@@ -6,7 +6,7 @@
 # @Desc    : 调度器
 
 # trigger 内的参数说明
-# t ype: 表示触发器的类型, 目前支持 cron / interval / date
+## type: 表示触发器的类型, 目前支持 cron / interval / date
 # exprs: 触发器调度规则
 # begin: 什么时候才开始调度, 日期字符串, 格式为 %Y-%m-%d %H:%M:%S
 # until: 调度到什么时候为止, 日期字符串, 格式为 %Y-%m-%d %H:%M:%S
