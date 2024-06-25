@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore")
 pandora.require("requests-go")
 
 import requests_go  # noqa: E402
-from requests_go.tls_config import TLSConfig  # noqa: E402
+from requests_go.tls_config import TLSConfig, to_tls_config  # noqa: E402
 
 
 class Downloader(AbstractDownloader):
@@ -60,6 +60,7 @@ class Downloader(AbstractDownloader):
         tls_config = request.options.get("tls_config")
         if not tls_config:
             tls_config = self.tls_config
+        tls_config = self.fmt_tls_config(tls_config)
 
         tls_config and options.update(tls_config=tls_config)
         next_url = request.real_url
@@ -104,6 +105,21 @@ class Downloader(AbstractDownloader):
 
     def make_session(self):
         return requests_go.Session()
+
+    @classmethod
+    def fmt_tls_config(cls, tls_config: [dict, TLSConfig] = None) -> TLSConfig:
+        """
+        将 tls_config 直接转为 TLSConfig, 因为有时候直接传 dict 给 request_go 有问题
+        :param tls_config:
+        :return:
+        """
+        if not tls_config:
+            return tls_config
+
+        if isinstance(tls_config, dict):
+            tls_config = to_tls_config(tls_config)
+        assert isinstance(tls_config, TLSConfig), f'tls_config 需要为 dict 或者 TLSConfig'
+        return tls_config
 
 
 if __name__ == '__main__':
