@@ -52,7 +52,8 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
             :param kwargs:
             :return:
             """
-            if isinstance(request, dict): request = Request(**request)
+            if isinstance(request, dict):
+                request = Request(**request)
 
             t = time.time()
 
@@ -77,7 +78,7 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
             return response
 
         @functools.wraps(func)
-        async def aswrapper(request: Union[Request, dict], *args, **kwargs):
+        async def async_wrapper(request: Union[Request, dict], *args, **kwargs):
             """
             异步下载器的装饰器方法
 
@@ -86,7 +87,8 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
             :param kwargs:
             :return:
             """
-            if isinstance(request, dict): request = Request(**request)
+            if isinstance(request, dict):
+                request = Request(**request)
 
             try:
                 t = time.time()
@@ -106,7 +108,7 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
 
             return response
 
-        return aswrapper if inspect.iscoroutinefunction(func) else wrapper
+        return async_wrapper if inspect.iscoroutinefunction(func) else wrapper
 
     @classmethod
     def parse_data(cls, request: Request):
@@ -194,7 +196,7 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
             return session
 
         @functools.wraps(func)
-        async def aswrapper(*args, **kwargs):
+        async def async_wrapper(*args, **kwargs):
             if inspect.iscoroutinefunction(self.clear_session):
                 await self.clear_session()  # noqa
             else:
@@ -204,7 +206,7 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
             setattr(self.local, f"{self.__class__}$session", session)
             return session
 
-        return aswrapper if inspect.iscoroutinefunction(func) else wrapper
+        return async_wrapper if inspect.iscoroutinefunction(func) else wrapper
 
     def get_session(self, **options):
         """
