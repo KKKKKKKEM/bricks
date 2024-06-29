@@ -17,13 +17,13 @@ import re
 import subprocess
 import sys
 import threading
-from typing import Any, List, Union, Mapping, Callable, Literal, Tuple
+from typing import Any, List, Union, Mapping, Callable, Literal, Tuple, Dict
 
 import better_exceptions
 from loguru import logger
 
 JSONP_REGEX = re.compile(r'\S+?\((?P<obj>[\s\S]*)\)')
-PACKAGE_REGEX = re.compile(r"([a-zA-Z0-9_\-]+)([<>=]*)([\d.]*)")
+PACKAGE_REGEX = re.compile(r"([a-zA-Z0-9_\-]+)([<>=]*)(.*)")
 
 # 一般而言, 是一个以 simple 结尾的 url
 PIPY_REGEX = re.compile(r"https?://.*/simple/?$")
@@ -97,7 +97,7 @@ def require(
         package_spec: str,
         action: Literal["raise", "fix"] = "fix",
         mirror_sources: str = "TUNA",
-        pip_kwargs: dict = None
+        pip_kwargs: Dict[str, str] = None
 ) -> str:
     """
     依赖 python 包
@@ -109,12 +109,13 @@ def require(
     :return: 安装的包版本号
     """
     # 分离包名和版本规范
+    package_spec = re.sub(r"\s+", "", package_spec)
     match = PACKAGE_REGEX.match(package_spec)
     mirror_sources = PYPI_MIRROR.get(mirror_sources, mirror_sources)
     pip_kwargs = pip_kwargs or {}
 
-    assert match, ValueError("无效的包规范")
-    assert not mirror_sources or PIPY_REGEX.match(mirror_sources), ValueError("无效的镜像源")
+    assert match, ValueError(f"无效的包规范: {package_spec}")
+    assert not mirror_sources or PIPY_REGEX.match(mirror_sources), ValueError(f"无效的镜像源: {mirror_sources}")
     mirror_sources and pip_kwargs.setdefault('-i', mirror_sources)
 
     package, operator, required_version = match.groups()
@@ -123,7 +124,9 @@ def require(
         # 获取已安装的包版本
         installed_version = importlib_metadata.version(package)
         # 检查是否需要安装或更新
-        if required_version and not eval(f'{installed_version!r} {operator} {required_version!r}'):
+        from bricks.utils.package import parse as version_parse  # noqa
+        if required_version and not eval(
+                f'version_parse({installed_version!r}) {operator} version_parse({required_version!r})'):
             raise importlib_metadata.PackageNotFoundError
         else:
             return installed_version
