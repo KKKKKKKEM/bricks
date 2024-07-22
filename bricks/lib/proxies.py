@@ -2,6 +2,7 @@
 # @Time    : 2023-11-17 22:20
 # @Author  : Kem
 # @Desc    :
+import base64
 import contextlib
 import itertools
 import json
@@ -10,6 +11,7 @@ import queue
 import re
 import threading
 import time
+import typing
 import urllib.parse
 from typing import Optional, Callable, Type, Literal
 
@@ -29,6 +31,7 @@ URL_MATCH_RULE = re.compile(
     r'(?::\d+)?'  # optional port
     r'(?:/?|[/?]\S+)$', re.IGNORECASE
 )
+DOWNLOADER = cffi.Downloader()
 
 
 class Proxy:
@@ -182,7 +185,6 @@ class ApiProxy(BaseProxy):
         """
         self.key = key
         self.options = options
-        self.downloader = cffi.Downloader()
         self.handle_response = handle_response or (lambda res: IP_EXTRACT_RULE.findall(res.text))
         self.container = queue.Queue()
         self.lock = threading.Lock()
@@ -214,7 +216,7 @@ class ApiProxy(BaseProxy):
         options.setdefault("method", "GET")
         start = time.time()
         while True:
-            res = self.downloader.fetch({"url": self.key, **options})
+            res = DOWNLOADER.fetch({"url": self.key, **options})
             if not res:
                 logger.warning(f"[获取代理失败]  ref: {self}")
                 if time.time() - start > timeout: raise TimeoutError
@@ -239,7 +241,7 @@ class ClashProxy(BaseProxy):
             self,
             key: str,
             secret: Optional[str] = None,
-            cpolicy: int = -1,
+            cache_ttl: int = -1,
             selector: str = "GLOBAL",
             match: Optional[Callable] = ...,
             scheme: str = "http",
@@ -251,7 +253,11 @@ class ClashProxy(BaseProxy):
         直接从 API 获取代理的代理类型
 
         :param key: clash 请求 api (配置文件的 external-controller), 如: 127.0.0.1:9090
-        :param scheme: 协议
+        :param secret: 访问 clash
+        :param cache_ttl: 缓存刷新时间，到了这个时间后会刷新缓存，重新获取配置和节点
+        :param selector: 使用的节点组
+        :param match: 用于过滤 selector 的函数， 默认是： lambda x: str(x) not in ['DIRECT', 'REJECT']
+        :param scheme: 访问控制端的时候需要输入的 Authorization， Bearer 后面这一截
         :param auth: 其他认证回调
         :param threshold: 代理使用阈值, 到达阈值会回收这个代理
         :param recover: 回收, 一般不需要
@@ -264,11 +270,10 @@ class ClashProxy(BaseProxy):
 
         self.key = key
         self.selector = selector
-        self.cpolicy = cpolicy
+        self.cache_ttl = cache_ttl
         self.ts = time.time()
         self.match = match
         self.secret = secret
-        self.downloader = cffi.Downloader()
         self._nodes = itertools.repeat(None)
         self._configs = None
         self.now = None
@@ -427,7 +432,7 @@ class ClashProxy(BaseProxy):
         self.secret and headers.setdefault("Authorization", f'Bearer {self.secret}')
         for _ in range(retry):
             try:
-                resp = self.downloader.fetch({
+                resp = DOWNLOADER.fetch({
                     "url": uri,
                     "method": method.upper(),
                     **kwargs
@@ -441,7 +446,7 @@ class ClashProxy(BaseProxy):
             raise RuntimeError(f"[clash 指令执行失败]: uri: {uri}, method: {method}")
 
     def fresh_cache(self, force: bool = False):
-        if force or (self.cpolicy != -1 and time.time() - self.ts > self.cpolicy):
+        if force or (self.cache_ttl != -1 and time.time() - self.ts > self.cache_ttl):
             self._nodes = itertools.repeat(None)
             del self.configs
 
@@ -463,6 +468,170 @@ class ClashProxy(BaseProxy):
         nodes = resp.get(f'proxies.{self.selector}.all')
         new = nodes[(nodes.index(now) + 1) % len(nodes)]
         self.switch(new)
+
+    @staticmethod
+    def cfg_tpl(http_port: int = 7890, socks_port: int = 7891):
+        return {
+            "port": http_port,
+            "socks-port": socks_port,
+            "redir-port": 14334,
+            "allow-lan": True,
+            "bind-address": "*",
+            "mode": "rule",
+            "log-level": "info",
+            "external-controller": "0.0.0.0:9090",
+            "proxies": [],
+            "proxy-groups": [
+                {
+                    "name": "Proxy",
+                    "type": "select",
+                    "proxies": []
+                }
+            ],
+            "tun": {
+                "enable": False,
+                "stack": "system",
+                "macOS-auto-route": True,
+                "macOS-auto-detect-interface": True,
+                "dns-hijack": [
+                    "tcp://8.8.8.8:53",
+                    "tcp://8.8.4.4:53"
+                ]
+            },
+            "rules": [
+                "MATCH,Proxy"
+            ]
+        }
+
+    @staticmethod
+    def extract_nodes(
+            path: str,
+            form: typing.Literal["clash-sub", "clash", "v2ray", "v2ray-sub"] = 'clash-sub',
+            env: dict = None,
+    ):
+        try:
+            import yaml
+        except ImportError:
+            raise ImportError("请先安装 yaml")
+
+        def extract_from_v2ray(content: bytes):
+            data = base64.b64decode(content).decode()
+            data = [json.loads(base64.b64decode(i.replace("vmess://", "", 1)).decode()) for i in data.split()]
+            ret = []
+            for i in data:
+                node = {
+                    "name": i['ps'],
+                    "server": i['add'],
+                    "port": int(i['port']),
+                    "type": "vmess",
+                    "uuid": i['id'],
+                    "alterId": int(i['aid']),
+                    "cipher": "auto",
+                    "tls": bool(i['tls']),
+                    "skip-cert-verify": False
+                }
+                if i.get("path"):
+                    node.update({
+                        "network": "ws",
+                        "ws-opts": {
+                            "path": i['path'],
+                            "headers": {
+                                "Host": i['host']
+                            }
+                        },
+                        "ws-path": i['path'],
+                        "headers": {
+                            "ws-headers": i['host']
+                        }
+                    })
+
+                ret.append(node)
+
+            return ret
+
+        def extract_from_clash(content: str):
+            def fmt(x):
+                if isinstance(x, str) and x.isdigit():
+                    return f'str: {x}'
+                else:
+                    return x
+
+            data = yaml.safe_load(content) or {}
+            return [{k: fmt(v) for k, v in i.items()} for i in (data.get("proxies") or [])]
+
+        def send_req(req: dict, retry: int = 5):
+            headers = req.setdefault("headers", {})
+            headers.setdefault("User-Agent", "ClashforWindows/0.19.10")
+            req.setdefault('timeout', 30)
+            req.setdefault('method', "GET")
+
+            for _ in range(retry):
+                try:
+                    res = DOWNLOADER.fetch(req)
+                    assert res.ok, f"响应失败，状态码为：{res.status_code}"
+                    logger.debug(f"【请求成功】, req: {req['url']}")
+                    return res
+                except Exception as e:
+                    logger.error(f"【请求失败】, req: {req}, error: {e}")
+                    time.sleep(1)
+
+            raise RuntimeError(f'【请求失败】, req: {req}')
+
+        env = env or {}
+
+        if form == 'clash-sub':
+            resp = send_req({"url": path, **env})
+            return extract_from_clash(resp.text)
+        elif form == 'v2ray-sub':
+            resp = send_req({"url": path, **env})
+            return extract_from_v2ray(resp.content)
+        elif form == 'v2ray':
+            return extract_from_v2ray(path.encode())
+        elif form == 'clash':
+            return extract_from_clash(path)
+        else:
+            raise RuntimeError(f"不支持的订阅类型 path: {path}, form: {form}")
+
+    @classmethod
+    def subscribe(
+            cls,
+            *subs: dict,
+            http_port: int = 7890,
+            socks_port: int = 7891,
+    ):
+        """
+        获取订阅， 生成一个配置文件（字符串形式）
+
+        :param subs: 订阅列表
+        :param http_port:
+        :param socks_port:
+        :return:
+        """
+        try:
+            import yaml
+        except ImportError:
+            raise ImportError("请先安装 yaml")
+
+        config = cls.cfg_tpl(http_port=http_port, socks_port=socks_port)
+        counter = itertools.count()
+        for sub in subs:
+            try:
+                nodes = cls.extract_nodes(sub['uri'], sub['type'])
+            except Exception as e:
+                logger.warning(f'提取节点失败: {e}')
+                continue
+
+            for node in nodes:
+                node['name'] = f"{node['name']}-{next(counter)}"
+                node not in config['proxies'] and config['proxies'].append(node)
+
+        nodes_name = [i["name"] for i in config['proxies']]
+        for group in config['proxy-groups']: group['proxies'] = nodes_name
+
+        if not config['proxies']:
+            return ""
+
+        return yaml.safe_dump(config, default_flow_style=False, encoding='utf-8', allow_unicode=True).decode()
 
 
 class RedisProxy(BaseProxy):
@@ -677,4 +846,9 @@ class Manager:
 
 manager = Manager()
 if __name__ == '__main__':
-    p = ClashProxy("http://127.0.0.1:9097")
+    # p = ClashProxy("http://127.0.0.1:9097")
+    cfg = ClashProxy.subscribe({
+        "uri": "https://sub1.smallstrawberry.com/api/v1/client/subscribe?token=xxx&flag=clash",
+        "type": "clash-sub"
+    })
+    print(cfg)
