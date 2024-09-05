@@ -299,7 +299,7 @@ class Extractor:
                 else:
 
                     rule = Rule.parse(k, engine=cls)
-                    if not rule.is_work(_obj):
+                    if rule.is_work(_obj):
                         sub_obj = rule.apply(_obj)
 
                         for i in cls._match(
@@ -421,10 +421,13 @@ class RegexExtractor(Extractor):
 
 if __name__ == '__main__':
     data = {
-        "name1": "name1",
-        "name2": "name2",
-        "name3": "name3",
-        # "name4": "name4",
+        "data": [
+            {"id": i, "name": f"name-{i}"} for i in range(10)
+        ]
     }
 
-    print(JsonExtractor.match(data, {"res": Rule("name4") | Rule("name3") | Rule("name2") | Rule("name1")}))
+    print(JsonExtractor.match(data, {
+        "data": {
+            "id": "id"
+        }
+    }))
