@@ -87,7 +87,7 @@ class Worker(threading.Thread):
 
     """
 
-    def __init__(self, dispatcher: 'Dispatcher', name: str, timeout=60, daemon=True, trace=False, **kwargs):
+    def __init__(self, dispatcher: 'Dispatcher', name: str, timeout=None, daemon=True, trace=False, **kwargs):
         self.dispatcher = dispatcher
         self._shutdown = threading.Event()
         self.timeout = timeout
