@@ -45,6 +45,7 @@ class Response:
         self.error = error
         self.callback = callback
         self._cache = {}
+        self.cost = 0
 
     headers: Header = property(
         fget=lambda self: self._headers,
