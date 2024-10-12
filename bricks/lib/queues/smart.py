@@ -53,7 +53,7 @@ class SmartQueue(queue.Queue):
 
         """
 
-        before = self.unfinished_tasks
+        count = 0
         unique = self.unique if unique is None else unique
         for item in items:
 
@@ -81,10 +81,10 @@ class SmartQueue(queue.Queue):
                             self.not_full.wait(remaining)
 
                 self._put(item) if head is False else self._put_head(item)
-                self.unfinished_tasks += 1
+                count += 1
                 self.not_empty.notify()
 
-        return self.unfinished_tasks - before
+        return count
 
     def _put_head(self, item):
         """
@@ -162,14 +162,13 @@ class SmartQueue(queue.Queue):
         """
         count = 0
         with self.mutex:
-            try:
-                for value in values:
+            for value in values:
+                try:
                     self.queue.remove(value)
-            except:  # noqa
-                pass
-            else:
-                count += 1
-
+                except:  # noqa
+                    pass
+                else:
+                    count += 1
         return count
 
     def _get_tail(self):
