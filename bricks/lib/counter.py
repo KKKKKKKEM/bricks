@@ -7,24 +7,33 @@ class FastWriteCounter:
     __slots__ = (
         "_de_counter",
         "_in_counter",
+        "_disable",
         "_lock",
     )
 
     def __init__(self, init=0, step=1):
         self._de_counter = itertools.count(init, step)
         self._in_counter = itertools.count(init, step)
+        self._disable = False
         self._lock = threading.Lock()
 
     def increment(self, step: int = 1):
+        if self._disable:
+            return
         for _ in range(step): next(self._in_counter)
 
     def decrement(self, step: int = 1):
+        if self._disable:
+            return
         for _ in range(step): next(self._de_counter)
 
     @property
     def value(self):
         with self._lock:
             return next(self._in_counter) - next(self._de_counter)
+
+    def disable(self):
+        self._disable = True
 
 
 class FastReadCounter:
