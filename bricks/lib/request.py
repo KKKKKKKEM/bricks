@@ -31,7 +31,7 @@ class Request:
             proxies: Optional[str] = None,
             proxy: Optional[Union[dict, str, List[Union[dict, str]]]] = None,
             ok: Optional[Union[str, Dict[str, Union[type(signals.Signal), Callable]]]] = ...,
-            retry: int = 0,
+            retry: int = 1,
             max_retry: [int, float] = 5,
             use_session: bool = False,
     ) -> None:
