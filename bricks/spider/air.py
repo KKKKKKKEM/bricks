@@ -3,25 +3,25 @@
 # @Author  : Kem
 # @Desc    :
 import asyncio
-import collections
+import concurrent.futures
 import contextlib
+import ctypes
 import datetime
 import functools
 import inspect
-import itertools
 import math
 import queue
 import re
 import time
 import uuid
-from typing import Optional, Union, Iterable, Callable, List, Generator
+from typing import Optional, Union, Iterable, Callable, List
 
 from loguru import logger
 
 from bricks import state, const
 from bricks.core import dispatch, signals, events
 from bricks.core.context import Flow, Error
-from bricks.core.events import EventManager
+from bricks.core.events import EventManager, REGISTERED_EVENTS
 from bricks.core.genesis import Pangu
 from bricks.downloader import cffi, AbstractDownloader
 from bricks.lib.counter import FastWriteCounter
@@ -92,6 +92,9 @@ class Context(Flow):
         ret = self.task_queue.replace(self.queue_name, (self.seeds, new), qtypes=qtypes)
         self.seeds = new
         return ret
+
+    def save(self):
+        return self.replace({**self.seeds})
 
     def divisive(self, qtypes=("temp",)):
         new = {**self.seeds, "$division": str(uuid.uuid4())}
@@ -545,7 +548,7 @@ class Spider(Pangu):
                             logger.debug(f"[翻转队列] 队列名称: {queue_name}")
 
                         else:
-                            if time.time() - output > 60:
+                            if time.time() - output > 3600:
                                 logger.debug(f"[等待任务] 队列名称: {queue_name}")
                                 output = time.time()
 
@@ -669,7 +672,7 @@ class Spider(Pangu):
         response: Response = context.response
         error: str = response.error if response else ""
 
-        if request.retry < request.max_retry - 1:
+        if request.retry < request.max_retry:
 
             # 如果是代理错误, 则不计算重试次数
             if not IGNORE_RETRY_PATTERN.search(error):
@@ -688,7 +691,7 @@ class Spider(Pangu):
             msg = f'[超过重试次数] {f"SEEDS: {context.seeds}, " if context.seeds else ""} URL: {request.real_url}'
             logger.warning(msg)
 
-            if request.retry > request.get_options("$maxRetry", math.inf):
+            if request.retry >= request.get_options("$maxRetry", math.inf):
                 raise signals.Success
 
             else:
@@ -1112,10 +1115,19 @@ class Spider(Pangu):
             attrs.setdefault("concurrency", binding.concurrency)
             attrs.setdefault("downloader", binding.downloader)
 
-        def mock_on_success(self, shutdown=False):
+        def mock_success(self, shutdown=False):
             future_id = self.seeds.get('$futureID')
             listener.recv(future_id, self)
             return super(self.__class__, self).success(shutdown)
+
+        def mock_failure(self, shutdown=False):
+            future_max_retry = self.seeds.get('$futureMaxRetry')
+            future_retry = self.seeds.get('$futureRetry') or 0
+            if future_retry >= future_max_retry:
+                return self.success(shutdown)
+            else:
+                self.save()
+                return super(self.__class__, self).failure(shutdown)
 
         def mock_on_request(self, context: Context):
             future_type = context.seeds.get('$futureType', "$response")
@@ -1123,14 +1135,20 @@ class Spider(Pangu):
                 raise signals.Success
             return super(self.__class__, self).on_request(context)
 
-        def set_max_retry(context: Context):
-            future_id = context.seeds.get('$futureID')
+        def mock_make_request(self, context: Context):
             future_max_retry = context.seeds.get('$futureMaxRetry')
-            counter = listener.counter[future_id]
-            times = next(counter)
-            if times >= future_max_retry:
-                listener.counter.pop(future_id, None)
-                raise signals.Success
+            future_retry = context.seeds.get('$futureRetry') or 0
+            request = super(self.__class__, self).make_request(context)
+            request.max_retry = future_max_retry
+            request.retry = future_retry + 1
+            request.put_options("$maxRetry", future_max_retry)
+            return request
+
+        def set_max_retry(context: Context):
+            future_max_retry = context.seeds.get('$futureMaxRetry')
+            context.request.max_retry = future_max_retry
+            context.request.put_options("$maxRetry", future_max_retry)
+            context.seeds["$futureRetry"] = context.request.retry
 
         def mock_on_response(self, context: Context):
             future_type = context.seeds.get('$futureType', "$response")
@@ -1147,6 +1165,7 @@ class Spider(Pangu):
 
         modded.setdefault("on_request", mock_on_request)
         modded.setdefault("on_response", mock_on_response)
+        modded.setdefault("make_request", mock_make_request)
         local = LocalQueue()
         attrs.update({
             "task_queue": local,
@@ -1155,9 +1174,12 @@ class Spider(Pangu):
             "forever": True,
         })
         clazz = type("Listen", (cls,), modded)
+        REGISTERED_EVENTS.lazy_loading[clazz.__name__] = REGISTERED_EVENTS.lazy_loading[cls.__name__].copy()
 
-        clazz.Context = type("ListenContext", (cls.Context,), {"success": mock_on_success})
+        clazz.Context = type("ListenContext", (cls.Context,), {"success": mock_success, "failure": mock_failure})
         listen: Spider = clazz(**attrs)
+        listen.disable_statistics()
+
         listen.use(const.BEFORE_REQUEST, {"func": set_max_retry, "index": -math.inf})
         listener = Listener(listen)
         return listener.run()
@@ -1225,13 +1247,21 @@ class Spider(Pangu):
             spider.on_consume(context=context)
             return context.response
 
+    def disable_statistics(self):
+        counters = [
+            "number_of_total_requests",
+            "number_of_failure_requests",
+            "number_of_new_seeds",
+            "number_of_seeds_obtained",
+        ]
+        for count_name in counters:
+            self.get(count_name).disable()
+
 
 class Listener:
 
     def __init__(self, spider: Spider):
         self.spider: Spider = spider
-        self.futures = {}
-        self.counter = collections.defaultdict(itertools.count)
 
     def run(self):
         self.spider.dispatcher.start()
@@ -1245,7 +1275,7 @@ class Listener:
             self,
             seeds: Union[dict, Item],
             timeout: int = None
-    ) -> Generator[Context, Union[dict, Item], None]:
+    ) -> Context:
         """
         给 listener 一个种子, 然后获取种子的消耗结果
         种子内特殊键值对说明:
@@ -1261,32 +1291,16 @@ class Listener:
         :param timeout: 超时时间, 超时后还没有获取到结果则退出, 如果为 None 则表示必须等待一个结果才会结束
         :return:
         """
-        future_id = str(uuid.uuid4())
-        self.futures[future_id] = future = asyncio.Queue()
-        seeds.update({"$futureID": future_id})
+        future = asyncio.Future()
+        seeds.update({"$futureID": id(future)})
         self.spider.put_seeds(seeds, task_queue=self.spider.get("spider.task_queue"))
-
-        try:
-            if timeout is None:
-                loop = range(1)
-            else:
-                loop = itertools.cycle([None])
-
-            for _ in loop:
-                yield await asyncio.wait_for(future.get(), timeout=timeout)
-
-        except GeneratorExit:
-            raise
-        except asyncio.QueueEmpty:
-            return
-        finally:
-            self.futures.pop(future_id, None)
+        return await asyncio.wait_for(future, timeout=timeout)
 
     def listen(
             self,
             seeds: Union[dict, Item],
             timeout: int = None
-    ) -> Generator[Context, Union[dict, Item], None]:
+    ) -> Context:
         """
         给 listener 一个种子, 然后获取种子的消耗结果
         种子内特殊键值对说明:
@@ -1302,28 +1316,13 @@ class Listener:
         :param timeout: 超时时间, 超时后还没有获取到结果则退出, 如果为 None 则表示必须等待一个结果才会结束
         :return:
         """
-        future_id = str(uuid.uuid4())
-        self.futures[future_id] = future = queue.Queue()
-        seeds.update({"$futureID": future_id})
+        future = concurrent.futures.Future()
+        seeds.update({"$futureID": id(future)})
         self.spider.put_seeds(seeds, task_queue=self.spider.get("spider.task_queue"))
+        return future.result(timeout=timeout)
 
-        try:
-            if timeout is None:
-                loop = range(1)
-            else:
-                loop = itertools.cycle([None])
-
-            for _ in loop:
-                yield future.get(timeout=None)
-
-        except GeneratorExit:
-            raise
-        except queue.Empty:
-            return
-        finally:
-            self.futures.pop(future_id, None)
-
-    def recv(self, future_id: str, ctx: Context):
+    @staticmethod
+    def recv(future_id: int, ctx: Context):
         """
         接收结果
 
@@ -1331,11 +1330,9 @@ class Listener:
         :param ctx:
         :return:
         """
-        if future_id in self.futures:
-            future: [asyncio.Queue, queue.Queue] = self.futures[future_id]
-            if isinstance(future, queue.Queue):
-                future.put(ctx)
-            else:
-                future.put_nowait(ctx)
-        else:
-            logger.warning(f'furure id 不存在, 放弃存储: {future_id}')
+        try:
+            ptr = ctypes.cast(future_id, ctypes.py_object)
+            future: [asyncio.Future, concurrent.futures.Future] = ptr.value
+            future.set_result(ctx)
+        except Exception as e:
+            logger.warning(f'future id 不存在, 放弃存储: {future_id}, error: {e}')
