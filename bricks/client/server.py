@@ -170,8 +170,8 @@ class APP:
                 return responses.PlainTextResponse(content=context.request.curl if context.request else None)
 
         async def submit(seeds: dict, timeout: int = None):
-            async for ctx in listener.wait(seeds, timeout=timeout):
-                return fmt_ret(form, ctx)
+            ctx = await listener.wait(seeds, timeout=timeout)
+            return fmt_ret(form, ctx)
 
         async def post(request: fastapi.Request, timeout: int = None):
             try:
