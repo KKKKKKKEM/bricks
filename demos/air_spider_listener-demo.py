@@ -106,8 +106,7 @@ class MySpider(air.Spider):
 if __name__ == '__main__':
     # 开始跟踪
     tracemalloc.start()
-    spider = MySpider()
-    listener = spider.listen()
+    listener = MySpider.listen()
     app = APP()
 
 
