@@ -59,7 +59,7 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
 
             try:
                 response: Response = func(request, *args, **kwargs)
-                response.rt = time.time() - t
+                response.cost = time.time() - t
 
             except KeyboardInterrupt as e:
                 raise e
