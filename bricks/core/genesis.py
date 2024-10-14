@@ -34,7 +34,8 @@ class MetaClass(type):
 
         else:
             hasattr(instance, "install") and instance.install()
-            for form, events in REGISTERED_EVENTS.lazy_loading[cls.__name__].items():
+            key = f'{cls.__module__}.{cls.__name__}'
+            for form, events in REGISTERED_EVENTS.lazy_loading[key].items():
                 for event in events:
                     instance.use(form, Task(
                         func=getattr(instance, event.func),

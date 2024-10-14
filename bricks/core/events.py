@@ -235,7 +235,8 @@ def on(form: str, index: int = None, disposable: Optional[bool] = False, binding
     def inner(func):
         if binding is ...:
             if "." in func.__qualname__:
-                REGISTERED_EVENTS.lazy_loading[func.__qualname__.rsplit('.', 1)[0]][form].append(Task(func=func.__name__, index=index, disposable=disposable))
+                key = f"{func.__module__}.{func.__qualname__.rsplit('.', 1)[0]}"
+                REGISTERED_EVENTS.lazy_loading[key][form].append(Task(func=func.__name__, index=index, disposable=disposable))
             else:
                 EventManager.register(
                     Context(form=form),

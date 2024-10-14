@@ -1079,6 +1079,8 @@ class Spider(Pangu):
         attrs.setdefault("task_queue", LocalQueue())
         attrs.setdefault("queue_name", f"{cls.__module__}.{cls.__name__}:survey")
         clazz = type("Survey", (cls,), modded)
+        key = f'{cls.__module__}.{cls.__name__}'
+        REGISTERED_EVENTS.lazy_loading[f'{clazz.__module__}.{clazz.__name__}'] = REGISTERED_EVENTS.lazy_loading[key].copy()
         survey: Spider = clazz(**attrs)
         survey.run()
         return list(collect.queue) if not extract else [{k: getattr(c, k) for k in extract} for c in collect.queue]
@@ -1174,7 +1176,8 @@ class Spider(Pangu):
             "forever": True,
         })
         clazz = type("Listen", (cls,), modded)
-        REGISTERED_EVENTS.lazy_loading[clazz.__name__] = REGISTERED_EVENTS.lazy_loading[cls.__name__].copy()
+        key = f'{cls.__module__}.{cls.__name__}'
+        REGISTERED_EVENTS.lazy_loading[f'{clazz.__module__}.{clazz.__name__}'] = REGISTERED_EVENTS.lazy_loading[key].copy()
 
         clazz.Context = type("ListenContext", (cls.Context,), {"success": mock_success, "failure": mock_failure})
         listen: Spider = clazz(**attrs)
