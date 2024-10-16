@@ -3,7 +3,7 @@
 # @Author  : Kem
 # @Desc    : 客户端, 让 bricks 支持 api 调用
 import asyncio
-import collections
+import ctypes
 import inspect
 import re
 import threading
@@ -38,7 +38,6 @@ class APP:
         self.port = port
         self.router = router or fastapi.APIRouter()
         self.connections: Dict[websockets.WebSocket, str] = {}
-        self.futures: Dict[str, asyncio.Future] = collections.defaultdict(asyncio.Future)
 
     async def websocket_endpoint(self, websocket: websockets.WebSocket, client_id: str):
         """
@@ -54,7 +53,10 @@ class APP:
             self.connections[websocket] = client_id
             logger.debug(f'[连接成功] {client_id} | {websocket}')
             async for msg in websocket.iter_json():
-                self.futures[f'{msg["CID"]}|{msg["MID"]}'].set_result(msg)
+                future_id = msg["MID"]
+                ptr = ctypes.cast(future_id, ctypes.py_object)
+                future: [asyncio.Future] = ptr.value
+                future.set_result(msg)
 
         except fastapi.WebSocketDisconnect:
             await websocket.close()
@@ -77,7 +79,7 @@ class APP:
 
         request_id: str = headers.get("request_id") or str(uuid.uuid4())
 
-        future = asyncio.ensure_future(self._invoke(request_id, orders))
+        future = asyncio.ensure_future(self._invoke(orders, timeout=timeout))
         if timeout == 0:
             ret = {
                 "code": 0,
@@ -87,7 +89,7 @@ class APP:
         else:
 
             try:
-                await asyncio.wait_for(future, timeout=timeout)
+                await future
                 ret = {
                     "code": 0,
                     "msg": "任务执行成功",
@@ -107,27 +109,24 @@ class APP:
 
         )
 
-    async def _invoke(self, request_id: str, orders: Dict[str, List[dict]]):
+    async def _invoke(self, orders: Dict[str, List[dict]], timeout: int = None):
         futures = []
         for ws, cid in self.connections.items():
             if cid in orders:
+                future = asyncio.Future()
                 ctx = {
-                    "MID": request_id,
+                    "MID": id(future),
                     "CID": cid,
                     "CTX": orders[cid]
                 }
-                fid = f'{cid}|{request_id}'
-                future = self.futures[fid]
                 await ws.send_json(ctx)
                 futures.append(future)
 
         else:
-            futures and await asyncio.wait(futures)
             ret = []
-            for index, fu in enumerate(futures):
-                ctx = fu.result()
+            for fu in asyncio.as_completed(futures, timeout=timeout):
+                ctx = await fu
                 ret.append(ctx)
-                del self.futures[f"{ctx['CID']}|{ctx['MID']}"]
 
             return ret
 
