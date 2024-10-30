@@ -20,12 +20,12 @@
 # 安装
 ## 安装最新代码
 ```
-pip install git+https://github.com/KKKKKKKEM/bricks.git
+pip install -U git+https://github.com/KKKKKKKEM/bricks.git
 ```
 
 ## 安装正式版
 ```
-pip install bricks-py
+pip install -U bricks-py
 ```
 
 # 使用文档
