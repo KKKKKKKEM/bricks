@@ -1,11 +1,10 @@
-import tracemalloc
-
 from loguru import logger
 
 from bricks import Request, const
 from bricks.client.server import APP
 from bricks.core import signals, events
 from bricks.spider import air
+from bricks.spider.addon import Rpc, Listener
 from bricks.spider.air import Context
 
 
@@ -79,11 +78,6 @@ class MySpider(air.Spider):
         # 确认种子爬取完毕后删除, 不删除的话后面又会爬取
         context.success()
 
-    # @events.on(const.BEFORE_REQUEST)
-    # def mock_resp(self, context: Context):
-    #     resp = bricks.Response(content=str({"code": 0, "msg": "mock_resp"}))
-    #     context.switch({"response": resp}, by="block")
-
     @staticmethod
     @events.on(const.AFTER_REQUEST)
     def is_success(context: Context):
@@ -98,28 +92,34 @@ class MySpider(air.Spider):
             if context.response.get('code') != 0:
                 # 重试信号
                 raise signals.Retry
-    #
-    # def catch(self, exception: Error):
-    #     super().catch(exception)
 
 
 if __name__ == '__main__':
-    # 开始跟踪
-    tracemalloc.start()
-    listener = MySpider.listen()
+    # 写好一个爬虫快速转换为一个外部可调用的接口，可以分为两种模式
+
+    # 【 推荐 】1. 使用 rpc 模式，直接调用spider的核心方法，消耗种子，得到数据后返回接口
+    # 导入 api 服务类
     app = APP()
 
+    # 绑定api
 
-    @app.router.get('/api/memory')
-    def get_memory():
-        # 获取当前快照
-        snapshot = tracemalloc.take_snapshot()
-        return [{
-            "traceback": str(i.traceback),
-            "size": i.size,
-            "count": i.count,
-        } for i in snapshot.statistics('lineno')]
+    # 转为 rpc 模型，还可以传入一些参数定制爬虫
+    # 这里可以指定一些参数，查看源码可知
+    # :param concurrency: 接口并发数量，超出该数量时会返回429
+    # :param form: 接口返回类型, $response-> 响应; $items -> items
+    # :param max_retry: 种子最大重试次数
+    # :param tags: 接口标签
+    # :param obj: 需要绑定的 Rpc
+    # :param path: 访问路径
+    # :param method: 访问方法
+    # :param adapter: 自定义视图函数
+    app.bind_addon(Rpc.wrap(MySpider), path="/demo/rpc")  # rpc模式
 
+    # 2. 是用 listener 模式
+    # 转为 listener 模型，还可以传入一些参数定制爬虫
+    app.bind_addon(Listener.wrap(MySpider), path="/demo/listener")  # listener模式
 
-    app.bind_listener(listener, path='/api/demo', tags=['listen'])
+    # 启动api服务，data 就是你需要爬取的种子
+    # 访问： curl --location '127.0.0.1:8888/demo/rpc' --header 'Content-Type: application/json'  --data '{"page":1}'
+    # 访问： curl --location '127.0.0.1:8888/demo/listener' --header 'Content-Type: application/json'  --data '{"page":1}'
     app.run()
