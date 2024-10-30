@@ -7,14 +7,14 @@ import ctypes
 import inspect
 import re
 import threading
-import time
 import uuid
-from concurrent.futures import Future
-from typing import Dict, List, Callable, Any, Literal
+from concurrent.futures import Future, ThreadPoolExecutor
+from typing import Dict, List, Callable, Any, Literal, Union
 
 from loguru import logger
 
-from bricks.spider.air import Listener, Context
+from bricks.spider.addon import Listener, Rpc
+from bricks.spider.air import Context
 from bricks.utils import pandora
 
 pandora.require("fastapi==0.105.0")
@@ -23,6 +23,23 @@ pandora.require("uvicorn")
 import fastapi
 import uvicorn
 from starlette import requests, responses, websockets
+
+
+def parse_ctx(future_type: str, context: Context):
+    if future_type == '$items':
+        return responses.JSONResponse(content=context.items.data if context.items else None)
+
+    elif future_type == '$response':
+        if context.response:
+            if context.response.is_json():
+                return responses.JSONResponse(content=context.response.json())
+            else:
+                return responses.PlainTextResponse(content=context.response.content)
+        else:
+            return responses.PlainTextResponse(None)
+
+    else:
+        return responses.PlainTextResponse(content=context.request.curl if context.request else None)
 
 
 class APP:
@@ -38,6 +55,67 @@ class APP:
         self.port = port
         self.router = router or fastapi.APIRouter()
         self.connections: Dict[websockets.WebSocket, str] = {}
+
+    def _add_handler(self, method, path, tags, adapter, options, submit, form, max_retry, concurrency: int = 1):
+        async def post(request: fastapi.Request, timeout: int = None):
+            if concurrency and semaphore.locked():
+                return responses.JSONResponse(
+                    content={
+                        "code": -1,
+                        "msg": "the concurrency limit is exceeded"
+                    },
+                    status_code=429
+                )
+
+            try:
+                semaphore and await semaphore.acquire()
+                seeds = await request.json()
+                return await submit(
+                    {
+                        **seeds,
+                        "$futureType": form,
+                        "$futureMaxRetry": max_retry
+                    },
+                    timeout
+                )
+            except Exception as e:
+                return responses.JSONResponse(
+                    content={
+                        "code": -1,
+                        "msg": str(e)
+                    },
+                    status_code=500
+                )
+            finally:
+                semaphore and semaphore.release()
+
+        async def get(request: fastapi.Request, timeout: int = None):
+            try:
+                seeds = dict(request.query_params)
+                return await submit(
+                    {
+                        **seeds,
+                        "$futureType": form,
+                        "$futureMaxRetry": max_retry
+                    },
+                    timeout
+                )
+            except Exception as e:
+                return responses.JSONResponse(
+                    content={
+                        "code": -1,
+                        "msg": str(e)
+                    },
+                    status_code=500
+                )
+
+        if concurrency:
+            semaphore = asyncio.Semaphore(concurrency)
+        else:
+            semaphore = None
+
+        func = getattr(self.router, method.lower())
+        func(path, tags=tags, **options)(adapter or locals()[method.lower()])
 
     async def websocket_endpoint(self, websocket: websockets.WebSocket, client_id: str):
         """
@@ -136,84 +214,54 @@ class APP:
         self.app.include_router(self.router)
         uvicorn.run(self.app, host=self.host, port=self.port)
 
-    def bind_listener(
+    def bind_addon(
             self,
-            listener: Listener,
+            obj: Union[Rpc, Listener],
             path: str,
             tags: list = None,
             method: str = "POST",
             adapter: Callable = None,
             form: str = '$response',
             max_retry: int = 10,
+            concurrency: int = None,
             **options
     ):
         """
-        绑定 listener
+        绑定 listener / rpc
 
+        :param concurrency: 接口并发数量，超出该数量时会返回429
         :param form: 接口返回类型, $response-> 响应; $items -> items
         :param max_retry: 种子最大重试次数
-        :param tags:
-        :param listener: 需要绑定的 listener
+        :param tags: 接口标签
+        :param obj: 需要绑定的 Rpc
         :param path: 访问路径
         :param method: 访问方法
         :param adapter: 自定义视图函数
         :return:
         """
 
-        def fmt_ret(future_type: str, context: Context):
-            if future_type == '$items':
-                return responses.JSONResponse(content=context.items.data if context.items else None)
-            elif future_type == '$response':
-                return responses.PlainTextResponse(content=context.response.content if context.response else None)
-            else:
-                return responses.PlainTextResponse(content=context.request.curl if context.request else None)
-
         async def submit(seeds: dict, timeout: int = None):
-            ctx = await listener.wait(seeds, timeout=timeout)
-            return fmt_ret(form, ctx)
+            loop = asyncio.get_event_loop()
+            fu = loop.run_in_executor(pool, obj.execute, seeds, timeout)
+            ctx = await asyncio.wait_for(fu, timeout=timeout)
+            return parse_ctx(form, ctx)
 
-        async def post(request: fastapi.Request, timeout: int = None):
-            try:
-                seeds = await request.json()
-                return await submit(
-                    {
-                        **seeds,
-                        "$futureType": form,
-                        "$futureMaxRetry": max_retry
-                    },
-                    timeout
-                )
-            except Exception as e:
-                return responses.JSONResponse(
-                    content={
-                        "code": -1,
-                        "msg": str(e)
-                    },
-                    status_code=500
-                )
+        pool = ThreadPoolExecutor(max_workers=concurrency)
+        if concurrency and concurrency > 0:
+            obj.spider.dispatcher.max_workers = concurrency
 
-        async def get(request: fastapi.Request, timeout: int = None):
-            try:
-                seeds = dict(request.query_params)
-                return await submit(
-                    {
-                        **seeds,
-                        "$futureType": form,
-                        "$futureMaxRetry": max_retry
-                    },
-                    timeout
-                )
-            except Exception as e:
-                return responses.JSONResponse(
-                    content={
-                        "code": -1,
-                        "msg": str(e)
-                    },
-                    status_code=500
-                )
-
-        func = getattr(self.router, method.lower())
-        func(path, tags=tags, **options)(adapter or locals()[method.lower()])
+        not obj.running and obj.run()
+        self._add_handler(
+            method=method,
+            path=path,
+            tags=tags,
+            adapter=adapter,
+            form=form,
+            max_retry=max_retry,
+            options=options,
+            submit=submit,
+            concurrency=concurrency
+        )
 
     def add_middleware(self, middleware: [Callable, type], form: str = "http", **options: Any):
         """
@@ -332,21 +380,3 @@ class APP:
         else:
             fu = sync2future()
             return await asyncio.wrap_future(fu)
-
-
-if __name__ == '__main__':
-    server = APP()
-
-
-    @server.on("response")
-    def after_request(response: fastapi.Response):
-        time.sleep(5)
-        print(response.body)
-
-
-    @server.on("request")
-    async def before_request(request: fastapi.Request):
-        print(request)
-
-
-    server.run()
