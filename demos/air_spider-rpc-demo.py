@@ -1,7 +1,8 @@
+import sanic
 from loguru import logger
 
 from bricks import Request, const
-from bricks.client.server import APP
+from bricks.client.server import app
 from bricks.core import signals, events
 from bricks.spider import air
 from bricks.spider.addon import Rpc, Listener
@@ -94,32 +95,55 @@ class MySpider(air.Spider):
                 raise signals.Retry
 
 
+# 写好一个爬虫快速转换为一个外部可调用的接口，可以分为两种模式
+
+# 【 推荐 】1. 使用 rpc 模式，直接调用spider的核心方法，消耗种子，得到数据后返回接口
+# 导入 api 服务类
+
+# 请求中间件
+@app.on("request")
+def hook(request: sanic.Request):
+    # 判断客户端是否已经断开了连接
+    print(request, request.transport.is_closing())
+
+    # 获取url参数
+    print(request.args)
+
+    # 获取请求json body
+    print(request.json)
+
+
+# 响应中间件
+@app.on("response")
+def hook(response: sanic.HTTPResponse):
+    # 修改响应头
+    print(response.headers)
+    response.headers["aaa"] = 1
+
+    # 获取请求body -》 是bytes类型
+    print(response.body)
+
+
+# 绑定api
+
+# 转为 rpc 模型，还可以传入一些参数定制爬虫
+# 这里可以指定一些参数，查看源码可知
+# :param concurrency: 接口并发数量，超出该数量时会返回429
+# :param form: 接口返回类型, $response-> 响应; $items -> items
+# :param max_retry: 种子最大重试次数
+# :param tags: 接口标签
+# :param obj: 需要绑定的 Rpc
+# :param path: 访问路径
+# :param method: 访问方法
+# :param adapter: 自定义视图函数
+app.bind_addon(Rpc.wrap(MySpider), path="/demo/rpc", concurrency=1)  # rpc模式，并发限制为1
+
+# 2. 是用 listener 模式
+# 转为 listener 模型，还可以传入一些参数定制爬虫
+app.bind_addon(Listener.wrap(MySpider), path="/demo/listener")  # listener模式
+
+# 启动api服务，data 就是你需要爬取的种子
+# 访问： curl --location '127.0.0.1:8888/demo/rpc' --header 'Content-Type: application/json'  --data '{"page":1}'
+# 访问： curl --location '127.0.0.1:8888/demo/listener' --header 'Content-Type: application/json'  --data '{"page":1}'
 if __name__ == '__main__':
-    # 写好一个爬虫快速转换为一个外部可调用的接口，可以分为两种模式
-
-    # 【 推荐 】1. 使用 rpc 模式，直接调用spider的核心方法，消耗种子，得到数据后返回接口
-    # 导入 api 服务类
-    app = APP()
-
-    # 绑定api
-
-    # 转为 rpc 模型，还可以传入一些参数定制爬虫
-    # 这里可以指定一些参数，查看源码可知
-    # :param concurrency: 接口并发数量，超出该数量时会返回429
-    # :param form: 接口返回类型, $response-> 响应; $items -> items
-    # :param max_retry: 种子最大重试次数
-    # :param tags: 接口标签
-    # :param obj: 需要绑定的 Rpc
-    # :param path: 访问路径
-    # :param method: 访问方法
-    # :param adapter: 自定义视图函数
-    app.bind_addon(Rpc.wrap(MySpider), path="/demo/rpc")  # rpc模式
-
-    # 2. 是用 listener 模式
-    # 转为 listener 模型，还可以传入一些参数定制爬虫
-    app.bind_addon(Listener.wrap(MySpider), path="/demo/listener")  # listener模式
-
-    # 启动api服务，data 就是你需要爬取的种子
-    # 访问： curl --location '127.0.0.1:8888/demo/rpc' --header 'Content-Type: application/json'  --data '{"page":1}'
-    # 访问： curl --location '127.0.0.1:8888/demo/listener' --header 'Content-Type: application/json'  --data '{"page":1}'
     app.run()
