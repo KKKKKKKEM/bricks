@@ -77,6 +77,8 @@ class APP:
                     },
                     timeout
                 )
+            except (SystemExit, KeyboardInterrupt):
+                raise
             except Exception as e:
                 return sanic.response.json(
                     body={
@@ -99,6 +101,8 @@ class APP:
                     },
                     timeout
                 )
+            except (SystemExit, KeyboardInterrupt):
+                raise
             except Exception as e:
                 return sanic.response.json(
                     body={
@@ -143,7 +147,8 @@ class APP:
 
         except sanic.exceptions.WebsocketClosed:
             await ws.close()
-
+        except (SystemExit, KeyboardInterrupt):
+                raise
         finally:
             self.connections.pop(ws, None)
             logger.debug(f'[断开连接] {client_id} | {ws} ')
@@ -178,6 +183,8 @@ class APP:
                     "msg": "任务执行成功",
                     "result": future.result()
                 }
+            except (SystemExit, KeyboardInterrupt):
+                    raise
             except asyncio.TimeoutError:
                 ret = {
                     "code": 1,
