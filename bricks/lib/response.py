@@ -19,6 +19,22 @@ _HEADER_ENCODING_RE = re.compile(r"charset=([\w-]+)", re.I)
 
 
 class Response:
+    __slots__ = (
+        'content',
+        'status_code',
+        '_headers',
+        'url',
+        'encoding',
+        'reason',
+        'cookies',
+        'history',
+        'request',
+        'error',
+        'callback',
+        '_cache',
+        'cost',
+    )
+
     def __init__(
             self,
             content: Any = None,
@@ -385,6 +401,9 @@ class Response:
                 return self._cache[item]
 
         return object.__getattribute__(self, item)
+
+    def __del__(self):
+        del self._cache
 
 
 if __name__ == '__main__':

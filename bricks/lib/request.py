@@ -16,6 +16,23 @@ from bricks.lib.headers import Header
 
 
 class Request:
+    __slots__ = (
+        'url',
+        'use_session',
+        'params',
+        'cookies',
+        'method',
+        'body',
+        '_headers',
+        'options',
+        'timeout',
+        'allow_redirects',
+        'proxies',
+        'proxy',
+        'ok',
+        'retry',
+        'max_retry',
+    )
 
     def __init__(
             self,
