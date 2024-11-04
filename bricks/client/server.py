@@ -226,7 +226,7 @@ class APP:
             tags: list = None,
             method: str = "POST",
             adapter: Callable = None,
-            form: str = '$response',
+            form: Literal['$response', '$items', '$request'] = '$response',
             max_retry: int = 10,
             concurrency: int = None,
             **options
@@ -235,7 +235,7 @@ class APP:
         绑定 listener / rpc
 
         :param concurrency: 接口并发数量，超出该数量时会返回429
-        :param form: 接口返回类型, $response-> 响应; $items -> items
+        :param form: 接口返回类型, 要在响应完了就返回就填 $response，要在解析完就返回就填 $items，要在请求前就返回就填 $request
         :param max_retry: 种子最大重试次数
         :param tags: 接口标签
         :param obj: 需要绑定的 Rpc
