@@ -876,6 +876,7 @@ class Spider(Pangu):
                     "seeds": context.seeds,
                 }
             )
+            gen = gen or []
             if isinstance(gen, (list, Items)): gen = [gen]
             for index, stuff in enumerate(pandora.iterable(gen)):
                 if index == 0:
