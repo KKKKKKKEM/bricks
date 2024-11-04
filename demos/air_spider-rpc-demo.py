@@ -1,4 +1,5 @@
-import sanic
+import math
+
 from loguru import logger
 
 from bricks import Request, const
@@ -101,27 +102,27 @@ class MySpider(air.Spider):
 # 导入 api 服务类
 
 # 请求中间件
-@app.on("request")
-def hook(request: sanic.Request):
-    # 判断客户端是否已经断开了连接
-    print(request, request.transport.is_closing())
-
-    # 获取url参数
-    print(request.args)
-
-    # 获取请求json body
-    print(request.json)
-
-
-# 响应中间件
-@app.on("response")
-def hook(response: sanic.HTTPResponse):
-    # 修改响应头
-    print(response.headers)
-    response.headers["aaa"] = 1
-
-    # 获取请求body -》 是bytes类型
-    print(response.body)
+# @app.on("request")
+# def hook(request: sanic.Request):
+#     # 判断客户端是否已经断开了连接
+#     print(request, request.transport.is_closing())
+#
+#     # 获取url参数
+#     print(request.args)
+#
+#     # 获取请求json body
+#     print(request.json)
+#
+#
+# # 响应中间件
+# @app.on("response")
+# def hook(response: sanic.HTTPResponse):
+#     # 修改响应头
+#     print(response.headers)
+#     response.headers["aaa"] = 1
+#
+#     # 获取请求body -》 是bytes类型
+#     print(response.body)
 
 
 # 绑定api
@@ -136,11 +137,11 @@ def hook(response: sanic.HTTPResponse):
 # :param path: 访问路径
 # :param method: 访问方法
 # :param adapter: 自定义视图函数
-app.bind_addon(Rpc.wrap(MySpider), path="/demo/rpc", concurrency=1)  # rpc模式，并发限制为1
+app.bind_addon(Rpc.wrap(MySpider), path="/demo/rpc", concurrency=200)  # rpc模式，并发限制为1
 
 # 2. 是用 listener 模式
 # 转为 listener 模型，还可以传入一些参数定制爬虫
-app.bind_addon(Listener.wrap(MySpider), path="/demo/listener")  # listener模式
+# app.bind_addon(Listener.wrap(MySpider), path="/demo/listener")  # listener模式
 
 # 启动api服务，data 就是你需要爬取的种子
 # 访问： curl --location '127.0.0.1:8888/demo/rpc' --header 'Content-Type: application/json'  --data '{"page":1}'
