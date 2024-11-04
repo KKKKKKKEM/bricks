@@ -5,11 +5,12 @@
 import asyncio
 import ctypes
 import inspect
+import json
 import re
 import threading
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Dict, List, Callable, Any, Literal, Union
+from typing import Dict, List, Callable, Literal, Union
 
 from loguru import logger
 
@@ -17,59 +18,57 @@ from bricks.spider.addon import Listener, Rpc
 from bricks.spider.air import Context
 from bricks.utils import pandora
 
-pandora.require("fastapi==0.105.0")
-pandora.require("websockets==12.0")
-pandora.require("uvicorn")
-import fastapi
-import uvicorn
-from starlette import requests, responses, websockets
+pandora.require("sanic==24.6.0")
+import sanic
+
+_sanic = sanic.Sanic(name="bricks-api")
 
 
 def parse_ctx(future_type: str, context: Context):
     if future_type == '$items':
-        return responses.JSONResponse(content=context.items.data if context.items else None)
+        if context.items:
+            return sanic.response.json(context.items.data, ensure_ascii=False)
+        else:
+            return sanic.response.empty()
 
     elif future_type == '$response':
         if context.response:
             if context.response.is_json():
-                return responses.JSONResponse(content=context.response.json())
+                return sanic.response.text(context.response.text, content_type="application/json", )
             else:
-                return responses.PlainTextResponse(content=context.response.content)
+                return sanic.response.text(context.response.content)
         else:
-            return responses.PlainTextResponse(None)
+            return sanic.response.empty()
 
     else:
-        return responses.PlainTextResponse(content=context.request.curl if context.request else None)
+        if context.request:
+            return sanic.response.text(context.request.curl)
+        else:
+            return sanic.response.empty()
 
 
 class APP:
-    def __init__(
-            self,
-            port: int = 8888,
-            host: str = "0.0.0.0",
-            router: fastapi.APIRouter = None,
-            **options
-    ):
-        self.app = fastapi.FastAPI(**options)
-        self.host = host
-        self.port = port
-        self.router = router or fastapi.APIRouter()
-        self.connections: Dict[websockets.WebSocket, str] = {}
+    def __init__(self):
+        self.connections: Dict[sanic.Websocket, str] = {}
+        self.router = _sanic
+        _sanic.add_route(self.invoke, uri="/invoke", methods=["POST"], name='发布指令/调用')
+        _sanic.add_websocket_route(self.websocket_endpoint, uri="/ws/<client_id>")
 
-    def _add_handler(self, method, path, tags, adapter, options, submit, form, max_retry, concurrency: int = 1):
-        async def post(request: fastapi.Request, timeout: int = None):
+    @staticmethod
+    def _add_handler(method, path, tags, adapter, options, submit, form, max_retry, concurrency: int = 1):
+        async def post(request: sanic.Request, timeout: int = None):
             if concurrency and semaphore.locked():
-                return responses.JSONResponse(
-                    content={
+                return sanic.response.json(
+                    body={
                         "code": -1,
                         "msg": "the concurrency limit is exceeded"
                     },
-                    status_code=429
+                    status=429
                 )
 
             try:
                 semaphore and await semaphore.acquire()
-                seeds = await request.json()
+                seeds = request.json
                 return await submit(
                     {
                         **seeds,
@@ -79,19 +78,19 @@ class APP:
                     timeout
                 )
             except Exception as e:
-                return responses.JSONResponse(
-                    content={
+                return sanic.response.json(
+                    body={
                         "code": -1,
                         "msg": str(e)
                     },
-                    status_code=500
+                    status=500
                 )
             finally:
                 semaphore and semaphore.release()
 
-        async def get(request: fastapi.Request, timeout: int = None):
+        async def get(request: sanic.Request, timeout: int = None):
             try:
-                seeds = dict(request.query_params)
+                seeds = request.get_args()
                 return await submit(
                     {
                         **seeds,
@@ -101,12 +100,12 @@ class APP:
                     timeout
                 )
             except Exception as e:
-                return responses.JSONResponse(
-                    content={
+                return sanic.response.json(
+                    body={
                         "code": -1,
                         "msg": str(e)
                     },
-                    status_code=500
+                    status=500
                 )
 
         if concurrency:
@@ -114,40 +113,46 @@ class APP:
         else:
             semaphore = None
 
-        func = getattr(self.router, method.lower())
-        func(path, tags=tags, **options)(adapter or locals()[method.lower()])
+        _sanic.add_route(
+            adapter or locals()[method.lower()],
+            uri=path,
+            methods=[method.upper()],
+            name=path,
+            **options
+        )
 
-    async def websocket_endpoint(self, websocket: websockets.WebSocket, client_id: str):
+    async def websocket_endpoint(self, _: sanic.Request, ws: sanic.Websocket, client_id: str):
         """
         websocket endpoint
 
-        :param websocket:
         :param client_id:
+        :param ws:
+        :param _:
         :return:
         """
 
         try:
-            await websocket.accept()
-            self.connections[websocket] = client_id
-            logger.debug(f'[连接成功] {client_id} | {websocket}')
-            async for msg in websocket.iter_json():
+            # client_id = request.args.get("client_id")
+            self.connections[ws] = client_id
+            logger.debug(f'[连接成功] {client_id} | {ws}')
+            async for msg in ws:
                 future_id = msg["MID"]
                 ptr = ctypes.cast(future_id, ctypes.py_object)
                 future: [asyncio.Future] = ptr.value
                 future.set_result(msg)
 
-        except fastapi.WebSocketDisconnect:
-            await websocket.close()
+        except sanic.exceptions.WebsocketClosed:
+            await ws.close()
 
         finally:
-            self.connections.pop(websocket, None)
-            logger.debug(f'[断开连接] {client_id} | {websocket} ')
+            self.connections.pop(ws, None)
+            logger.debug(f'[断开连接] {client_id} | {ws} ')
 
     async def invoke(
             self,
             orders: Dict[str, List[dict]],
             timeout: int = None,
-            request: requests.Request = None
+            request: sanic.Request = None
     ):
 
         if request:
@@ -179,8 +184,8 @@ class APP:
                     "msg": "任务执行超时"
                 }
 
-        return responses.JSONResponse(
-            content=ret,
+        return sanic.response.json(
+            body=ret,
             headers={
                 "request_id": request_id
             }
@@ -197,7 +202,7 @@ class APP:
                     "CID": cid,
                     "CTX": orders[cid]
                 }
-                await ws.send_json(ctx)
+                await ws.send(json.dumps(ctx, default=str))
                 futures.append(future)
 
         else:
@@ -208,11 +213,11 @@ class APP:
 
             return ret
 
-    def run(self):
-        self.router.websocket('/ws/{client_id}')(self.websocket_endpoint)
-        self.router.post("/invoke", name='发布指令/调用')(self.invoke)
-        self.app.include_router(self.router)
-        uvicorn.run(self.app, host=self.host, port=self.port)
+    @staticmethod
+    def run(host: str = "0.0.0.0", port: int = 8888, **options):
+        # options.setdefault("single_process", True)
+        _sanic.prepare(host=host, port=port, **options)
+        _sanic.serve()
 
     def bind_addon(
             self,
@@ -263,20 +268,6 @@ class APP:
             concurrency=concurrency
         )
 
-    def add_middleware(self, middleware: [Callable, type], form: str = "http", **options: Any):
-        """
-        添加中间件
-
-        :param middleware:
-        :param form:
-        :param options:
-        :return:
-        """
-        if inspect.isclass(middleware):
-            self.app.add_middleware(middleware, **options)
-        else:
-            self.app.middleware(form)(middleware)
-
     def on(self, form: Literal['request', 'response'], pattern: str = ""):
         """
         设置拦截器
@@ -290,17 +281,10 @@ class APP:
         else:
             re_pattern = None
 
-        async def get_body(resp):
-            original_body = b''
-            async for chunk in resp.body_iterator:
-                original_body += chunk
-            original_data = original_body.decode()
-            return original_data
-
         def inner(func):
-            async def hook_req(request: fastapi.Request, call_next):
+            async def hook_request(request: sanic.Request):
                 if re_pattern and not re_pattern.search(str(request.url)):
-                    return await call_next(request)
+                    return
 
                 prepared = pandora.prepare(
                     func=func,
@@ -308,49 +292,35 @@ class APP:
                         "request": request,
                     },
                     annotations={
-                        fastapi.Request: request,
+                        sanic.Request: request,
                     }
                 )
                 resp = await self._call(prepared.func, *prepared.args, **prepared.kwargs)
                 if resp:
                     return resp
-                else:
-                    return await call_next(request)
 
-            async def hook_resp(request: fastapi.Request, call_next):
+            async def hook_response(request: sanic.Request, response: sanic.response.HTTPResponse):
                 if re_pattern and not re_pattern.search(str(request.url)):
-                    return await call_next(request)
+                    return
 
-                response = await call_next(request)
-                raw_resp = fastapi.Response(
-                    content=await get_body(response),
-                    headers=response.headers,
-                    status_code=response.status_code
-                )
                 prepared = pandora.prepare(
                     func=func,
                     namespace={
                         "request": request,
-                        "response": raw_resp,
+                        "response": response,
                     },
                     annotations={
-                        fastapi.Request: request,
-                        fastapi.Response: raw_resp,
+                        sanic.Request: request,
+                        sanic.response.HTTPResponse: response,
                     }
                 )
                 resp = await self._call(prepared.func, *prepared.args, **prepared.kwargs)
                 if resp:
                     return resp
                 else:
-                    headers = dict(raw_resp.headers)
-                    headers.pop("content-length", None)
-                    raw_resp.init_headers(headers)
-                    return raw_resp
+                    return response
 
-            if form == 'request':
-                self.add_middleware(hook_req)
-            else:
-                self.add_middleware(hook_resp)
+            _sanic.middleware(form)(locals()[f"hook_{form}"])
 
             return func
 
@@ -380,3 +350,6 @@ class APP:
         else:
             fu = sync2future()
             return await asyncio.wrap_future(fu)
+
+
+app = APP()
