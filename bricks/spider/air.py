@@ -1155,7 +1155,8 @@ class Spider(Pangu):
         if request.ok is ...:
             request.ok = 'response.status_code != -1'
 
-        request.proxy = proxy
+        if not request.proxy:
+            request.proxy = proxy or self.proxy
 
         ctx, spider = self.create_fetcher(downloader, plugins, **options)
 
