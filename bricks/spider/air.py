@@ -6,6 +6,7 @@ import contextlib
 import datetime
 import functools
 import inspect
+import json
 import math
 import queue
 import re
@@ -31,6 +32,7 @@ from bricks.plugins import on_request
 from bricks.utils import pandora
 
 IGNORE_RETRY_PATTERN = re.compile("ProxyError", re.IGNORECASE)
+_fetchers_cache = {}
 
 
 class Context(Flow):
@@ -1084,6 +1086,47 @@ class Spider(Pangu):
         survey.run()
         return list(collect.queue) if not extract else [{k: getattr(c, k) for k in extract} for c in collect.queue]
 
+    def create_fetcher(
+            self,
+            downloader: Optional[AbstractDownloader] = None,
+            plugins: Union[dict, type(...), None] = ...,
+            **options
+    ):
+
+        key = json.dumps(
+            {"downloader": id(downloader), "plugins": plugins, **options},
+            default=str,
+            separators=(",", ":"),
+            sort_keys=True
+        )
+        if key not in _fetchers_cache:
+            options.setdefault("downloader", downloader or self.downloader)
+            spider = Spider(**options)
+
+            # 不需要任何插件
+            if not plugins:
+                for plugin in spider.plugins:
+                    plugin.unregister()
+
+            # 使用默认插件
+            elif plugins is ...:
+                pass
+
+            else:
+                for plugin in spider.plugins:
+                    plugin.unregister()
+                for form, plugin in plugins:
+                    spider.use(form, *pandora.iterable(plugin))
+
+            if inspect.iscoroutinefunction(spider.downloader.fetch):
+                ctx = spider.dispatcher
+            else:
+                ctx = contextlib.nullcontext()
+
+            _fetchers_cache[key] = ctx, spider
+
+        return _fetchers_cache[key]
+
     def fetch(
             self,
             request: [Request, dict],
@@ -1111,30 +1154,11 @@ class Spider(Pangu):
         if request.ok is ...:
             request.ok = 'response.status_code != -1'
 
-        dispatcher = contextlib.nullcontext()
-        options.setdefault("downloader", downloader or self.downloader)
-        options.setdefault("proxy", proxy or self.proxy)
-        spider = Spider(**options)
+        request.proxy = proxy
 
-        # 不需要任何插件
-        if not plugins:
-            for plugin in spider.plugins:
-                plugin.unregister()
+        ctx, spider = self.create_fetcher(downloader, plugins, **options)
 
-        # 使用默认插件
-        elif plugins is ...:
-            pass
-
-        else:
-            for plugin in spider.plugins:
-                plugin.unregister()
-            for form, plugin in plugins:
-                spider.use(form, *pandora.iterable(plugin))
-
-        if inspect.iscoroutinefunction(spider.downloader.fetch):
-            dispatcher = spider.dispatcher
-
-        with dispatcher:
+        with ctx:
             context = spider.make_context(
                 request=request,
                 next=spider.on_request,
@@ -1156,5 +1180,3 @@ class Spider(Pangu):
         ]
         for count_name in counters:
             self.get(count_name).disable()
-
-
