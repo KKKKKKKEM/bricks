@@ -215,9 +215,9 @@ class APP:
 
     @staticmethod
     def run(host: str = "0.0.0.0", port: int = 8888, **options):
-        # options.setdefault("single_process", True)
-        _sanic.prepare(host=host, port=port, **options)
-        _sanic.serve()
+        options.setdefault("single_process", True)
+        options.setdefault("access_log", False)
+        _sanic.run(host=host, port=port, **options)
 
     def bind_addon(
             self,
@@ -295,9 +295,7 @@ class APP:
                         sanic.Request: request,
                     }
                 )
-                resp = await self._call(prepared.func, *prepared.args, **prepared.kwargs)
-                if resp:
-                    return resp
+                return await self._call(prepared.func, *prepared.args, **prepared.kwargs)
 
             async def hook_response(request: sanic.Request, response: sanic.response.HTTPResponse):
                 if re_pattern and not re_pattern.search(str(request.url)):
