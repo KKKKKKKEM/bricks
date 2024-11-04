@@ -33,10 +33,10 @@ def parse_ctx(future_type: str, context: Context):
 
     elif future_type == '$response':
         if context.response:
-            if context.response.is_json():
-                return sanic.response.text(context.response.text, content_type="application/json", )
-            else:
-                return sanic.response.text(context.response.content)
+            return sanic.response.text(
+                context.response.text,
+                content_type=context.response.headers.get("Content-Type", "text/plain")
+            )
         else:
             return sanic.response.empty()
 
