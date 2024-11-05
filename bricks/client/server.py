@@ -32,13 +32,20 @@ def parse_ctx(future_type: str, context: Context):
             return sanic.response.empty()
 
     elif future_type == '$response':
-        if context.response:
+        if context.response.status_code != -1:
             return sanic.response.text(
                 context.response.text,
-                content_type=context.response.headers.get("Content-Type", "text/plain")
+                content_type=context.response.headers.get("Content-Type", "text/plain"),
+                status=context.response.status_code
             )
         else:
-            return sanic.response.empty()
+            return sanic.response.json(
+                {
+                    "code": -1,
+                    "msg": f"error: {context.response.error}, reason: {context.response.reason}"
+                },
+                status=500
+            )
 
     else:
         if context.request:
@@ -148,7 +155,7 @@ class APP:
         except sanic.exceptions.WebsocketClosed:
             await ws.close()
         except (SystemExit, KeyboardInterrupt):
-                raise
+            raise
         finally:
             self.connections.pop(ws, None)
             logger.debug(f'[断开连接] {client_id} | {ws} ')
@@ -184,7 +191,7 @@ class APP:
                     "result": future.result()
                 }
             except (SystemExit, KeyboardInterrupt):
-                    raise
+                raise
             except asyncio.TimeoutError:
                 ret = {
                     "code": 1,
