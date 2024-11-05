@@ -157,8 +157,16 @@ class Listener:
         REGISTERED_EVENTS.lazy_loading[f'{spider.__module__}.{spider.__name__}'] = REGISTERED_EVENTS.lazy_loading[
             key].copy()
 
-        spider.Context = type("ListenContext", (spider.Context,),
-                              {"success": mock_success, "failure": mock_failure, **ctx_modded})
+        spider.Context = type(
+            "ListenContext",
+            (spider.Context,),
+            {
+                "success": mock_success,
+                "failure": mock_failure,
+                "error": mock_failure,
+                **ctx_modded
+            }
+        )
         listen: Spider = spider(**attrs)
         listen.disable_statistics()
 
@@ -245,5 +253,6 @@ class Rpc:
                 return super(self.__class__, self).retry()
 
         ctx_modded.setdefault("failure", mock_failure)
+        ctx_modded.setdefault("error", mock_failure)
         listener = Listener.wrap(spider, attrs, modded, ctx_modded)
         return cls(listener.spider)
