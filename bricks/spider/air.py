@@ -233,9 +233,9 @@ class Spider(Pangu):
         task_queue: TaskQueue = self.get("init.task_queue", self.task_queue)
         queue_name: str = self.get("init.queue_name", self.queue_name)
         # 判断是否有初始化权限
-        pinfo: dict = task_queue.command(queue_name, {"action": task_queue.COMMANDS.GET_PERMISSION})
-        if not pinfo['state']:
-            logger.debug(f"[停止投放] 当前机器 ID: {state.MACHINE_ID}, 原因: {pinfo['msg']}")
+        permission_info: dict = task_queue.command(queue_name, {"action": task_queue.COMMANDS.GET_PERMISSION})
+        if not permission_info['state']:
+            logger.debug(f"[停止投放] 当前机器 ID: {state.MACHINE_ID}, 原因: {permission_info['msg']}")
             return
 
         self.is_master = True
@@ -1132,7 +1132,7 @@ class Spider(Pangu):
             self,
             request: [Request, dict],
             downloader: Optional[AbstractDownloader] = None,
-            proxy: Optional[Union[dict, BaseProxy]] = None,
+            proxy: Optional[Union[dict, BaseProxy]] = ...,
             plugins: Union[dict, type(...), None] = ...,
             **options
     ) -> Response:
@@ -1156,7 +1156,12 @@ class Spider(Pangu):
             request.ok = 'response.status_code != -1'
 
         if not request.proxy:
-            request.proxy = proxy or self.proxy
+            if proxy is ...:
+                request.proxy = self.proxy
+            elif proxy:
+                request.proxy = proxy
+            else:
+                pass
 
         ctx, spider = self.create_fetcher(downloader, plugins, **options)
 

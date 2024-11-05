@@ -93,7 +93,7 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
             try:
                 t = time.time()
                 response: Response = await func(request, *args, **kwargs)
-                response.rt = time.time() - t
+                response.cost = time.time() - t
 
             except Exception as e:
                 logger.error(f'[请求失败] 失败原因: {str(e) or str(e.__class__.__name__)}')
