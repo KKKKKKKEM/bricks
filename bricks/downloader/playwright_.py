@@ -114,8 +114,8 @@ class Downloader(AbstractDownloader):
         response_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get('response') or []
         browser_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get('browser') or []
         context_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get('context') or []
-        bgoto_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get('before_goto') or []
-        agoto_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get('after_goto') or []
+        before_goto_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get('before_goto') or []
+        after_goto_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get('after_goto') or []
 
         if self.mode == "automation":
             timeout = 60 * 1000 if request.timeout is ... else request.timeout * 1000
@@ -170,7 +170,7 @@ class Downloader(AbstractDownloader):
                 context = request.get_options("$session")
                 if not context:
                     context = await self.get_session(**{
-                        "$brwoser": browser,
+                        "browser": browser,
                         **context_options,
                         "proxy": proxies,
                         "user_agent": request.headers.get("user-agent"),
@@ -228,7 +228,7 @@ class Downloader(AbstractDownloader):
                     else:
                         await page.route('**', self.on_request(page_url=request.real_url, raw_request=request))
 
-                    for interceptor in bgoto_interceptors:
+                    for interceptor in before_goto_interceptors:
                         assert inspect.isasyncgenfunction(interceptor)
                         await pandora.invoke(
                             interceptor,
@@ -260,7 +260,7 @@ class Downloader(AbstractDownloader):
                     res.status_code = response.status
                     res.cookies = Cookies.by_jar(await context.cookies())
 
-                    for interceptor in agoto_interceptors:
+                    for interceptor in after_goto_interceptors:
                         assert inspect.isasyncgenfunction(interceptor)
                         await pandora.invoke(
                             interceptor,
@@ -348,7 +348,7 @@ class Downloader(AbstractDownloader):
             await conn.add_init_script(**_script)
 
     async def make_session(self, **kwargs):
-        browser = kwargs.pop('$brwoser')
+        browser = kwargs.pop('browser')
         return await browser.new_context(**kwargs)
 
     async def get_session(self, **options):

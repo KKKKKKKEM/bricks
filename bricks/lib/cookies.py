@@ -178,7 +178,7 @@ class Cookies(typing.MutableMapping[str, str]):
     @classmethod
     def by_jar(cls, jar):
         cookies = cls()
-        for cookie in jar:
+        for cookie in (jar or []):
             if isinstance(cookie, dict):
                 cookies.set(name=cookie["name"], value=cookie["value"], domain=cookie.get('domain'), path=cookie.get('path'))
             else:
