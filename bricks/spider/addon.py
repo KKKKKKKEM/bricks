@@ -1,4 +1,5 @@
 import asyncio
+import collections
 import concurrent.futures
 import math
 from typing import Union, Type
@@ -12,6 +13,8 @@ from bricks.lib.items import Items
 from bricks.lib.queues import Item, LocalQueue, TaskQueue
 from bricks.spider.air import Spider, Context
 
+_futures = collections.defaultdict(concurrent.futures.Future)
+
 
 def task_done(future_id: str, ctx: Context):
     """
@@ -23,9 +26,8 @@ def task_done(future_id: str, ctx: Context):
     """
     try:
         # ptr = ctypes.cast(future_id, ctypes.py_object)
-        if future_id in globals():
-            future: [asyncio.Future, concurrent.futures.Future] = globals()[future_id]
-            future.set_result(ctx)
+        future: [asyncio.Future, concurrent.futures.Future] = _futures.pop(future_id, None)
+        future and future.set_result(ctx)
 
     except Exception as e:
         logger.warning(f'future id 不存在, 放弃存储: {future_id}, error: {e}')
@@ -65,12 +67,9 @@ class Listener:
         future = concurrent.futures.Future()
         future_id = f'future-{id(future)}'
         seeds.update({"$futureID": future_id})
-        globals()[future_id] = future
-        try:
-            self.spider.put_seeds(seeds)
-            return future.result(timeout=timeout)
-        finally:
-            del globals()[future_id]
+        _futures[future_id] = future
+        self.spider.put_seeds(seeds)
+        return future.result(timeout=timeout)
 
     @classmethod
     def wrap(cls, spider: Type[Spider], attrs: dict = None, modded: dict = None, ctx_modded: dict = None):
@@ -157,20 +156,17 @@ class Rpc:
         future = concurrent.futures.Future()
         future_id = f'future-{id(future)}'
         seeds.update({"$futureID": future_id})
-        globals()[future_id] = future
-        try:
-            task_queue: TaskQueue = self.spider.get("spider.task_queue") or self.spider.task_queue
-            queue_name: str = self.spider.get("spider.queue_name") or self.spider.queue_name
-            context: Context = self.spider.make_context(
-                task_queue=task_queue,
-                queue_name=queue_name,
-                seeds=seeds
-            )
-            context.flow({"next": self.spider.on_consume, "seeds": seeds})
-            self.spider.on_consume(context=context)
-            return future.result(timeout=timeout)
-        finally:
-            del globals()[future_id]
+        _futures[future_id] = future
+        task_queue: TaskQueue = self.spider.get("spider.task_queue") or self.spider.task_queue
+        queue_name: str = self.spider.get("spider.queue_name") or self.spider.queue_name
+        context: Context = self.spider.make_context(
+            task_queue=task_queue,
+            queue_name=queue_name,
+            seeds=seeds
+        )
+        context.flow({"next": self.spider.on_consume, "seeds": seeds})
+        self.spider.on_consume(context=context)
+        return future.result(timeout=timeout)
 
     @classmethod
     def wrap(cls, spider: Type[Spider], attrs: dict = None, modded: dict = None, ctx_modded: dict = None):

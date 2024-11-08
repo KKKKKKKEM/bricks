@@ -3,6 +3,7 @@
 # @Author  : Kem
 # @Desc    : 客户端, 让 bricks 支持 api 调用
 import asyncio
+import collections
 import ctypes
 import inspect
 import json
@@ -22,6 +23,7 @@ pandora.require("sanic==24.6.0")
 import sanic
 
 _sanic = sanic.Sanic(name="bricks-api")
+_futures = collections.defaultdict(asyncio.Future)
 
 
 def parse_ctx(future_type: str, context: Context):
@@ -148,11 +150,9 @@ class APP:
             logger.debug(f'[连接成功] {client_id} | {ws}')
             async for msg in ws:
                 future_id = msg["MID"]
-                if future_id in globals():
-                    # ptr = ctypes.cast(future_id, ctypes.py_object)
-                    future: [asyncio.Future] = globals()[future_id]
-                    future.set_result(msg)
-                    del globals()[future_id]
+                # ptr = ctypes.cast(future_id, ctypes.py_object)
+                future: [asyncio.Future] = _futures.pop(future_id, None)
+                future and future.set_result(msg)
 
         except sanic.exceptions.WebsocketClosed:
             await ws.close()
@@ -214,7 +214,7 @@ class APP:
             if cid in orders:
                 future = asyncio.Future()
                 future_id = f'future-{id(future)}'
-                globals()[future_id] = future
+                _futures[future_id] = future
                 ctx = {
                     "MID": future_id,
                     "CID": cid,
