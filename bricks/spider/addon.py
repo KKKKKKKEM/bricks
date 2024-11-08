@@ -112,12 +112,11 @@ class Listener:
                 **ctx_modded
             }
         )
-        listen: Spider = spider(**attrs)
-        listen.disable_statistics()
+        ins: Spider = spider(**attrs)
+        ins.disable_statistics()
 
-        listen.use(state.const.BEFORE_REQUEST, {"func": set_max_retry, "index": -math.inf})
-        listener = cls(listen)
-        return listener
+        ins.use(state.const.BEFORE_REQUEST, {"func": set_max_retry, "index": -math.inf})
+        return cls(ins)
 
 
 class Rpc:
