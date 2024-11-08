@@ -12,7 +12,7 @@ import queue
 import re
 import time
 import uuid
-from typing import Optional, Union, Iterable, Callable, List
+from typing import Optional, Union, Iterable, Callable, List, Literal
 
 from loguru import logger
 
@@ -594,8 +594,7 @@ class Spider(Pangu):
     def run_all(self):
         with self.dispatcher:
             t1 = int(time.time() * 1000)
-            init_task = dispatch.Task(func=self.run_init)
-            future = self.active(init_task)
+            future = self.active(dispatch.Task(func=self.run_init))
             task_queue: TaskQueue = self.get("init.task_queue", self.task_queue)
             queue_name: str = self.get("init.queue_name", self.queue_name)
             task_queue.command(queue_name, {"action": task_queue.COMMANDS.WAIT_INIT, "time": t1})
@@ -998,6 +997,62 @@ class Spider(Pangu):
 
     def make_request(self, context: Context) -> Request:
         return pandora.invoke(Request, kwargs=context.seeds)
+
+    def _when_make_request(self, raw_method):  # noqa
+        @functools.wraps(raw_method)
+        def wrapper(context: Context):
+            context.form = state.const.BEFORE_MAKE_REQUEST
+            events.EventManager.invoke(
+                context,
+                annotations={
+                    Item: context.seeds,
+                    Context: context
+                },
+                namespace={
+                    "context": context,
+                    "seeds": context.seeds,
+                }
+            )
+            context.form = state.const.ON_MAKE_REQUEST
+            prepared = pandora.prepare(
+                func=raw_method,
+                annotations={
+                    Item: context.seeds,
+                    Context: context
+                },
+                namespace={
+                    "context": context,
+                    "seeds": context.seeds,
+                }
+            )
+            future_max_retry = context.seeds.get('$futureMaxRetry')
+            future_retry = context.seeds.get('$futureRetry') or 0
+            request = prepared.func(*prepared.args, **prepared.kwargs)
+            if future_max_retry:
+                request.max_retry = future_max_retry
+                request.put_options("$maxRetry", future_max_retry)
+
+            if future_retry:
+                request.retry = future_retry + 1
+
+            context.form = state.const.AFTER_MAKE_REQUEST
+            events.EventManager.invoke(
+                context,
+                annotations={
+                    Request: request,
+                    Item: context.seeds,
+                    Context: context
+                },
+                namespace={
+                    "context": context,
+                    "request": request,
+                    "seeds": context.seeds,
+                }
+            )
+
+            return request
+
+        return wrapper
 
     def parse(self, context: Context) -> Union[List[dict], Items]:
         return Items({
