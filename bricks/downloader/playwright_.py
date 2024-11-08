@@ -114,8 +114,10 @@ class Downloader(AbstractDownloader):
         response_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get('response') or []
         browser_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get('browser') or []
         context_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get('context') or []
-        before_goto_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get('before_goto') or []
-        after_goto_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get('after_goto') or []
+        before_goto_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get(
+            'before_goto') or []
+        after_goto_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get(
+            'after_goto') or []
 
         if self.mode == "automation":
             timeout = 60 * 1000 if request.timeout is ... else request.timeout * 1000
