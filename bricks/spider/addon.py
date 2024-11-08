@@ -232,7 +232,7 @@ class Rpc:
         attrs.update({
             "task_queue": local,
             "spider.task_queue": local,
-            "queue_name": f"{cls.__module__}.{cls.__name__}:listen",
+            "queue_name": f"{cls.__module__}.{cls.__name__}:rpc",
             "forever": True,
         })
         key = f'{spider.__module__}.{spider.__name__}'
