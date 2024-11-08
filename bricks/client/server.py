@@ -148,9 +148,11 @@ class APP:
             logger.debug(f'[连接成功] {client_id} | {ws}')
             async for msg in ws:
                 future_id = msg["MID"]
-                ptr = ctypes.cast(future_id, ctypes.py_object)
-                future: [asyncio.Future] = ptr.value
-                future.set_result(msg)
+                if future_id in globals():
+                    # ptr = ctypes.cast(future_id, ctypes.py_object)
+                    future: [asyncio.Future] = globals()[future_id]
+                    future.set_result(msg)
+                    del globals()[future_id]
 
         except sanic.exceptions.WebsocketClosed:
             await ws.close()
@@ -211,8 +213,10 @@ class APP:
         for ws, cid in self.connections.items():
             if cid in orders:
                 future = asyncio.Future()
+                future_id = f'future-{id(future)}'
+                globals()[future_id] = future
                 ctx = {
-                    "MID": id(future),
+                    "MID": future_id,
                     "CID": cid,
                     "CTX": orders[cid]
                 }
