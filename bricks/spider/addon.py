@@ -98,7 +98,6 @@ class Listener:
             task_done(future_id, self)
             return super(self.__class__, self).success(shutdown)
 
-        attrs.update({"forever": True})
         key = f'{spider.__module__}.{spider.__name__}'
         spider = type("Listen", (spider,), modded)
         REGISTERED_EVENTS.lazy_loading[f'{spider.__module__}.{spider.__name__}'] = REGISTERED_EVENTS.lazy_loading[
@@ -113,6 +112,11 @@ class Listener:
             }
         )
         ins: Spider = spider(**attrs)
+        default_attrs = {
+            "forever": True,
+        }
+        for k, v in default_attrs.items():
+            ins.set(k, v)
         ins.disable_statistics()
 
         ins.use(state.const.BEFORE_REQUEST, {"func": set_max_retry, "index": -math.inf})
@@ -228,12 +232,6 @@ class Rpc:
         modded.setdefault("on_request", mock_on_request)
         modded.setdefault("on_response", mock_on_response)
         local = LocalQueue()
-        attrs.update({
-            "task_queue": local,
-            "spider.task_queue": local,
-            "queue_name": f"{cls.__module__}.{cls.__name__}:rpc",
-            "forever": True,
-        })
         key = f'{spider.__module__}.{spider.__name__}'
         spider = type("RPC", (spider,), modded)
         REGISTERED_EVENTS.lazy_loading[f'{spider.__module__}.{spider.__name__}'] = REGISTERED_EVENTS.lazy_loading[
@@ -250,6 +248,14 @@ class Rpc:
             }
         )
         ins: Spider = spider(**attrs)
+        default_attrs = {
+            "task_queue": local,
+            "spider.task_queue": local,
+            "queue_name": f"{cls.__module__}.{cls.__name__}:rpc",
+            "forever": True,
+        }
+        for k, v in default_attrs.items():
+            ins.set(k, v)
         ins.disable_statistics()
         ins.use(state.const.BEFORE_REQUEST, {"func": set_max_retry, "index": -math.inf})
         return cls(ins)
