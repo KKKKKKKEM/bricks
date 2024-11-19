@@ -97,9 +97,11 @@ class MySpider(air.Spider):
 
 # 写好一个爬虫快速转换为一个外部可调用的接口，可以分为两种模式
 
-# 【 推荐 】1. 使用 rpc 模式，直接调用spider的核心方法，消耗种子，得到数据后返回接口
 # 导入 api 服务类
 from bricks.client.server.starlette_ import app
+
+# 也可以使用 sanic 的app, 效率更高, 逼近 golang, 可是没有 starlette_ 稳定
+# from bricks.client.server.sanic_ import app
 
 
 # 添加回调
@@ -136,6 +138,7 @@ def errback(fu, request, data):
 
 
 # 绑定api
+# 【 推荐 】1. 使用 rpc 模式，直接调用spider的核心方法，消耗种子，得到数据后返回接口
 # 转为 rpc 模型，还可以传入一些参数定制爬虫
 app.bind_addon(
     Rpc.wrap(MySpider),  # 需要绑定的爬虫, 如果要传实例化参数, 则写到wrap 里面
