@@ -7,25 +7,25 @@ import collections
 import inspect
 import json
 import threading
+import time
 from concurrent.futures import Future
 from concurrent.futures import ThreadPoolExecutor
 from typing import Union, Literal, Callable, Dict, List
 
 from loguru import logger
 
+from bricks import Response
+from bricks.core import signals
 from bricks.spider.addon import Rpc, Listener
+from bricks.spider.air import Context
 from bricks.utils import pandora
-
-
-class TooManyRequestsError(Exception):
-    ...
 
 
 class Callback:
 
     @staticmethod
     def build(fns, request=None, **kwargs):
-        def main(fu: asyncio.Future, ):
+        def main(fu: asyncio.Future):
             if not fns or fu.cancelled():
                 return
 
@@ -53,7 +53,10 @@ class Callback:
                         namespace=namespace,
                         annotations=annotations
                     )
-                    prepared.func(*prepared.args, **prepared.kwargs)
+                    try:
+                        prepared.func(*prepared.args, **prepared.kwargs)
+                    except signals.Break:
+                        return
 
         return main
 
@@ -90,10 +93,13 @@ class Callback:
                     namespace=namespace,
                     annotations=annotations
                 )
-                if inspect.iscoroutinefunction(fn):
-                    await prepared.func(*prepared.args, **prepared.kwargs)
-                else:
-                    await Gateway.awaitable_call(prepared.func, *prepared.args, **prepared.kwargs)
+                try:
+                    if inspect.iscoroutinefunction(fn):
+                        await prepared.func(*prepared.args, **prepared.kwargs)
+                    else:
+                        await Gateway.awaitable_call(prepared.func, *prepared.args, **prepared.kwargs)
+                except signals.Break:
+                    return
 
 
 class Gateway:
@@ -164,9 +170,27 @@ class Gateway:
         :return:
         """
 
+        def is_failure(context: Context):
+            return context and context.seeds.get("$futureMaxRetry", 1) >= max_retry
+
+        def choose(context: Context):
+            context.seeds.update({"$interfaceFinish": time.time()})
+            if is_failure(context):
+                context.response = Response(
+                    status_code=403,
+                    content=json.dumps({
+                        "code": 403,
+                        "msg": f"任务超过最大重试次数: {max_retry} 次",
+                        "data": {k.strip("$"): v for k, v in sorted(context.seeds.items())}
+                    }),
+                    headers={"Content-type": "application/json"}
+                )
+
+                raise signals.Break
+
         async def submit(seeds: dict, request=None, is_alive: Callable = None):
             if semaphore and semaphore.locked():
-                raise TooManyRequestsError
+                raise signals.Wait(1)
 
             semaphore and await semaphore.acquire()
 
@@ -187,27 +211,34 @@ class Gateway:
             data = {
                 **seeds,
                 "$futureType": form,
-                "$futureMaxRetry": max_retry
+                "$futureMaxRetry": max_retry,
+                "$interfaceStart": time.time()
             }
             asyncio.ensure_future(monitor())
             fu = loop.run_in_executor(pool, obj.execute, data, timeout)
-            fu.add_done_callback(Callback.build(cb1, request=request, data=data))
             try:
+                fu.add_done_callback(Callback.build(cb1, request=request, seeds=seeds))
                 ctx = await asyncio.wait_for(fu, timeout=timeout)
-                await Callback.call(cb2, fu, request=request, data=data)
+                await Callback.call(cb2, fu, request=request, seeds=seeds)
+                if is_failure(ctx):
+                    raise asyncio.exceptions.CancelledError
                 return ctx
 
-            except asyncio.exceptions.CancelledError:
-                await Callback.call(errback, fu, request=request, data=data)
-
             except Exception as e:
-                await Callback.call(errback, fu, request=request, data=data)
-                raise e
+                await Callback.call(errback, fu, request=request, seeds=seeds)
+                if isinstance(e, asyncio.exceptions.CancelledError):
+                    return
+
+                elif isinstance(e, asyncio.TimeoutError):
+                    raise asyncio.TimeoutError(f'任务超过最大超时时间 {timeout} s')
+
+                else:
+                    raise e
 
             finally:
                 semaphore and semaphore.release()
 
-        cb1 = []
+        cb1 = [choose]
         cb2 = []
         for cb in pandora.iterable(callback):
             if inspect.iscoroutinefunction(cb):
