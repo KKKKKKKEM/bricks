@@ -182,23 +182,13 @@ class Spider(Pangu):
     Context = Context
     InitContext = InitContext
 
-    def __init__(
-            self,
-            concurrency: Optional[int] = 1,
-            downloader: Optional[AbstractDownloader] = None,
-            task_queue: Optional[TaskQueue] = None,
-            queue_name: Optional[str] = "",
-            proxy: Optional[Union[dict, BaseProxy, str, List[Union[dict, BaseProxy, str]]]] = None,
-            forever: Optional[bool] = False,
-            **kwargs
-    ) -> None:
-
-        self.concurrency = concurrency
-        self.downloader = downloader or cffi.Downloader()
-        self.task_queue: Optional[TaskQueue] = LocalQueue() if not task_queue else task_queue
-        self.proxy: Optional[Union[dict, BaseProxy, str, List[Union[dict, BaseProxy, str]]]] = proxy
-        self.queue_name: Optional[str] = queue_name or f'{self.__class__.__module__}.{self.__class__.__name__}'
-        self.forever = forever
+    def __init__(self, **kwargs) -> None:
+        self.concurrency = kwargs.pop("concurrency", 1)
+        self.downloader: AbstractDownloader = kwargs.pop("downloader", cffi.Downloader())
+        self.task_queue: Optional[TaskQueue] = kwargs.pop("task_queue", LocalQueue()) or LocalQueue()
+        self.queue_name: Optional[str] = kwargs.pop("queue_name", "") or f'{self.__class__.__module__}.{self.__class__.__name__}'
+        self.proxy: Optional[Union[dict, BaseProxy, str, List[Union[dict, BaseProxy, str]]]] = kwargs.pop("proxy", None) or None
+        self.forever = kwargs.pop("forever", False) or False
         super().__init__(**kwargs)
         self.number_of_total_requests = FastWriteCounter()  # 发起请求总数量
         self.number_of_failure_requests = FastWriteCounter()  # 发起请求失败数量
