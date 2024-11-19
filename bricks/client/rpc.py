@@ -95,17 +95,17 @@ class APP:
 
                         fs and await asyncio.wait(fs, timeout=None)
 
-                        rctx = []
+                        ctx_lis = []
 
                         for f in fs:
                             try:
-                                rctx.append({
+                                ctx_lis.append({
                                     "code": 0,
                                     "message": "success",
                                     "result": f.result()
                                 })
                             except BaseException as e:
-                                rctx.append({
+                                ctx_lis.append({
                                     "code": -1,
                                     "message": e
                                 })
@@ -115,7 +115,7 @@ class APP:
                                 {
                                     "MID": mid,
                                     "CID": cid,
-                                    "CTX": rctx
+                                    "CTX": ctx_lis
                                 },
                                 default=str
                             )
