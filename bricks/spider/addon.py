@@ -2,6 +2,7 @@ import asyncio
 import collections
 import concurrent.futures
 import math
+import time
 from typing import Union, Type
 
 from loguru import logger
@@ -158,7 +159,7 @@ class Rpc:
         """
         future = concurrent.futures.Future()
         future_id = f'future-{id(future)}'
-        seeds.update({"$futureID": future_id})
+        seeds.update({"$futureID": future_id, "$spiderStart": time.time()})
         _futures[future_id] = future
         task_queue: TaskQueue = self.spider.get("spider.task_queue") or self.spider.task_queue
         queue_name: str = self.spider.get("spider.queue_name") or self.spider.queue_name
@@ -169,6 +170,8 @@ class Rpc:
         )
         context.flow({"next": self.spider.on_consume, "seeds": seeds})
         self.spider.on_consume(context=context)
+        context.seeds.update({"$spiderFinish": time.time()})
+        time.sleep(20)
         return future.result(timeout=timeout)
 
     @classmethod
