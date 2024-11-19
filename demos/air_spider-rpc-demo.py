@@ -3,7 +3,6 @@ import math
 from loguru import logger
 
 from bricks import Request, const
-from bricks.client.server import app
 from bricks.core import signals, events
 from bricks.spider import air
 from bricks.spider.addon import Rpc, Listener
@@ -100,46 +99,53 @@ class MySpider(air.Spider):
 
 # 【 推荐 】1. 使用 rpc 模式，直接调用spider的核心方法，消耗种子，得到数据后返回接口
 # 导入 api 服务类
+from bricks.client.server.starlette_ import app
 
-# 请求中间件
-# @app.on("request")
-# def hook(request: sanic.Request):
-#     # 判断客户端是否已经断开了连接
-#     print(request, request.transport.is_closing())
-#
-#     # 获取url参数
-#     print(request.args)
-#
-#     # 获取请求json body
-#     print(request.json)
-#
-#
-# # 响应中间件
-# @app.on("response")
-# def hook(response: sanic.HTTPResponse):
-#     # 修改响应头
-#     print(response.headers)
-#     response.headers["aaa"] = 1
-#
-#     # 获取请求body -》 是bytes类型
-#     print(response.body)
+
+# 添加回调
+def callback(fu, request, context, data):
+    """
+    回调测试, 参数可以随意增减
+
+    :param fu: future, 可以根据 fu.cancelled() 来判断是不是客户端提前断开了连接
+    :param request: 格式化的请求, 为 bricks.Request 类型
+    :param context: 成功的话这个就是响应结果, 需要response 就是用content.response
+    :param data: 这个是真正的请求的种子
+    :return:
+    """
+    print(f"""
+    类型: 成功回调
+    future: {fu}
+    future 被取消( 客户端断开了连接 ): {fu.cancelled()}
+    请求: {request}
+    种子: {data}
+    请求类型: {type(request)}
+    结果: {context}
+""")
+
+
+def errback(fu, request, data):
+    print(f"""
+    类型: 错误回调
+    future: {fu}
+    future 被取消( 客户端断开了连接 ): {fu.cancelled()}
+    请求: {request}
+    种子: {data}
+    请求类型: {type(request)}
+""")
 
 
 # 绑定api
-
 # 转为 rpc 模型，还可以传入一些参数定制爬虫
-# 这里可以指定一些参数，查看源码可知
-# :param concurrency: 接口并发数量，超出该数量时会返回429
-# :param form: 接口返回类型, $response-> 响应; $items -> items
-# :param max_retry: 种子最大重试次数
-# :param tags: 接口标签
-# :param obj: 需要绑定的 Rpc
-# :param path: 访问路径
-# :param method: 访问方法
-# :param adapter: 自定义视图函数
-app.bind_addon(Rpc.wrap(MySpider), path="/demo/rpc", concurrency=200)  # rpc模式，并发限制为1
+app.bind_addon(
+    Rpc.wrap(MySpider),  # 需要绑定的爬虫, 如果要传实例化参数, 则写到wrap 里面
+    path="/demo/rpc",  # 请求路径
+    concurrency=200,  # 设置接口最大并发 200
+    callback=[callback],  # 成功回调
+    errback=[errback]  # 失败回调 -> 如请求被取消
+)
 
-# 2. 是用 listener 模式
+# 2. 是用 listener 模式 [不推荐, 请使用rpc, listener作为api爬虫]
 # 转为 listener 模型，还可以传入一些参数定制爬虫
 # app.bind_addon(Listener.wrap(MySpider), path="/demo/listener")  # listener模式
 
