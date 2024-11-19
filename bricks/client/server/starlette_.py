@@ -4,10 +4,11 @@ from typing import Dict, Callable
 
 from loguru import logger
 
-from bricks.client.server import Gateway, TooManyRequestsError
+from bricks.client.server import Gateway
+from bricks.core import signals
+from bricks.lib.request import Request
 from bricks.spider.air import Context
 from bricks.utils import pandora
-from bricks.lib.request import Request
 
 pandora.require("starlette==0.41.3")
 pandora.require("uvicorn==0.32.0")
@@ -36,7 +37,7 @@ class View(HTTPEndpoint):
         except (SystemExit, KeyboardInterrupt):
             raise
 
-        except TooManyRequestsError:
+        except signals.Wait:
             return responses.JSONResponse(
                 content={
                     "code": 429,
@@ -63,7 +64,7 @@ class View(HTTPEndpoint):
         except (SystemExit, KeyboardInterrupt):
             raise
 
-        except TooManyRequestsError:
+        except signals.Wait:
             return responses.JSONResponse(
                 content={
                     "code": 429,
