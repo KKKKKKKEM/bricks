@@ -93,6 +93,7 @@ class MySpider(air.Spider):
             if context.response.get('code') != 0:
                 # 重试信号
                 raise signals.Retry
+        # raise signals.Retry
 
 
 # 写好一个爬虫快速转换为一个外部可调用的接口，可以分为两种模式
@@ -100,39 +101,50 @@ class MySpider(air.Spider):
 # 导入 api 服务类
 from bricks.client.server.starlette_ import app
 
+
 # 也可以使用 sanic 的app, 效率更高, 逼近 golang, 可是没有 starlette_ 稳定
 # from bricks.client.server.sanic_ import app
 
 
 # 添加回调
-def callback(fu, request, context, data):
+def callback(fu, request, context, seeds):
     """
-    回调测试, 参数可以随意增减
+    成功回调测试, 参数可以随意增减
 
     :param fu: future, 可以根据 fu.cancelled() 来判断是不是客户端提前断开了连接
     :param request: 格式化的请求, 为 bricks.Request 类型
     :param context: 成功的话这个就是响应结果, 需要response 就是用content.response
-    :param data: 这个是真正的请求的种子
+    :param seeds: 这个是真正的请求的种子
     :return:
     """
     print(f"""
     类型: 成功回调
     future: {fu}
-    future 被取消( 客户端断开了连接 ): {fu.cancelled()}
+    连接已断开: {fu.cancelled()}
     请求: {request}
-    种子: {data}
+    种子: {seeds}
     请求类型: {type(request)}
-    结果: {context}
+    处理后的种子: {context.seeds}
 """)
 
 
-def errback(fu, request, data):
+def errback(fu, request, seeds, context):
+    """
+    错误回调测试
+
+    :param fu: future, 可以根据 fu.cancelled() 来判断是不是客户端提前断开了连接
+    :param request: 格式化的请求, 为 bricks.Request 类型
+    :param context: 如果是被取消的, 那么context为空, 超过了最大重试次数也会走这里, 但是此时context是存在的
+    :param seeds: 这个是真正的请求的种子
+    :return:
+    """
     print(f"""
     类型: 错误回调
     future: {fu}
-    future 被取消( 客户端断开了连接 ): {fu.cancelled()}
+    连接已断开: {fu.cancelled()}
     请求: {request}
-    种子: {data}
+    种子: {seeds}
+    context: {context}
     请求类型: {type(request)}
 """)
 
@@ -145,7 +157,9 @@ app.bind_addon(
     path="/demo/rpc",  # 请求路径
     concurrency=200,  # 设置接口最大并发 200
     callback=[callback],  # 成功回调
-    errback=[errback]  # 失败回调 -> 如请求被取消
+    errback=[errback],  # 失败回调 -> 如请求被取消
+    max_retry=3,  # 接口只重试三次
+    timeout=5  # 5s还没跑完, 直接返回超时
 )
 
 # 2. 是用 listener 模式 [不推荐, 请使用rpc, listener作为api爬虫]
