@@ -1,11 +1,13 @@
-import math
+import hmac
+import json
+from hashlib import sha256
 
 from loguru import logger
 
 from bricks import Request, const
 from bricks.core import signals, events
 from bricks.spider import air
-from bricks.spider.addon import Rpc, Listener
+from bricks.spider.addon import Rpc
 from bricks.spider.air import Context
 
 
@@ -99,7 +101,7 @@ class MySpider(air.Spider):
 # 写好一个爬虫快速转换为一个外部可调用的接口，可以分为两种模式
 
 # 导入 api 服务类
-from bricks.client.server.starlette_ import app
+from bricks.client.server.sanic_ import app
 
 
 # 也可以使用 sanic 的app, 效率更高, 逼近 golang, 可是没有 starlette_ 稳定
@@ -158,13 +160,55 @@ app.bind_addon(
     concurrency=200,  # 设置接口最大并发 200
     callback=[callback],  # 成功回调
     errback=[errback],  # 失败回调 -> 如请求被取消
-    max_retry=3,  # 接口只重试三次
+    max_retry=1,  # 接口只重试三次
     timeout=5  # 5s还没跑完, 直接返回超时
 )
 
 # 2. 是用 listener 模式 [不推荐, 请使用rpc, listener作为api爬虫]
 # 转为 listener 模型，还可以传入一些参数定制爬虫
 # app.bind_addon(Listener.wrap(MySpider), path="/demo/listener")  # listener模式
+
+# 假设这是你的共享密钥
+SECRET_KEY = "your_secret_key"
+
+
+def generate_signature(data: dict) -> str:
+    """根据数据生成签名"""
+    data_str = json.dumps(data, sort_keys=True)
+    signature = hmac.new(SECRET_KEY.encode(), data_str.encode(), sha256).hexdigest()
+    return signature
+
+
+async def verify_signature(request: Request):
+    from sanic.exceptions import Forbidden
+
+    # 获取请求体
+    try:
+        request_data = request.body
+    except Exception as e:
+        raise Forbidden("Invalid request body")
+
+    print(generate_signature(request_data))
+
+    # 获取请求头中的签名
+    provided_signature = request.headers.get('X-Signature')
+    if not provided_signature:
+        raise Forbidden("Missing X-Signature header")
+
+    # 生成签名并比较
+    expected_signature = generate_signature(request_data)
+    if not hmac.compare_digest(provided_signature, expected_signature):
+        raise Forbidden("Signature verification failed")
+
+
+async def pr(request, response):
+    print(request, response)
+
+# 请求中间件
+# app.add_middleware("request", verify_signature)
+
+# 响应中间件
+# app.add_middleware("response", pr)
 
 # 启动api服务，data 就是你需要爬取的种子
 # 访问： curl --location '127.0.0.1:8888/demo/rpc' --header 'Content-Type: application/json'  --data '{"page":1}'
