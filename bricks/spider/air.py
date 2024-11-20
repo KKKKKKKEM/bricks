@@ -186,8 +186,10 @@ class Spider(Pangu):
         self.concurrency = kwargs.pop("concurrency", 1)
         self.downloader: AbstractDownloader = kwargs.pop("downloader", cffi.Downloader())
         self.task_queue: Optional[TaskQueue] = kwargs.pop("task_queue", LocalQueue()) or LocalQueue()
-        self.queue_name: Optional[str] = kwargs.pop("queue_name", "") or f'{self.__class__.__module__}.{self.__class__.__name__}'
-        self.proxy: Optional[Union[dict, BaseProxy, str, List[Union[dict, BaseProxy, str]]]] = kwargs.pop("proxy", None) or None
+        self.queue_name: Optional[str] = kwargs.pop("queue_name",
+                                                    "") or f'{self.__class__.__module__}.{self.__class__.__name__}'
+        self.proxy: Optional[Union[dict, BaseProxy, str, List[Union[dict, BaseProxy, str]]]] = kwargs.pop("proxy",
+                                                                                                          None) or None
         self.forever = kwargs.pop("forever", False) or False
         super().__init__(**kwargs)
         self.number_of_total_requests = FastWriteCounter()  # 发起请求总数量
@@ -1018,6 +1020,9 @@ class Spider(Pangu):
             future_max_retry = context.seeds.get('$futureMaxRetry')
             future_retry = context.seeds.get('$futureRetry') or 0
             request = prepared.func(*prepared.args, **prepared.kwargs)
+
+            context.seeds["$futureRetry"] = request.retry
+
             if future_max_retry:
                 request.max_retry = future_max_retry
                 request.put_options("$maxRetry", future_max_retry)

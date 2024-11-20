@@ -88,12 +88,6 @@ class Listener:
         modded = modded or {}
         ctx_modded = ctx_modded or {}
 
-        def set_max_retry(context: Context):
-            future_max_retry = context.seeds.get('$futureMaxRetry', 1)
-            context.request.max_retry = future_max_retry
-            context.request.put_options("$maxRetry", future_max_retry)
-            context.seeds["$futureRetry"] = context.request.retry
-
         def mock_success(self, shutdown=False):
             future_id = self.seeds.get('$futureID')
             task_done(future_id, self)
@@ -120,7 +114,6 @@ class Listener:
             ins.set(k, v)
         ins.disable_statistics()
 
-        ins.use(state.const.BEFORE_REQUEST, {"func": set_max_retry, "index": -math.inf})
         return cls(ins)
 
 
@@ -200,6 +193,7 @@ class Rpc:
             future_max_retry = self.seeds.get('$futureMaxRetry')
             future_retry = self.seeds.get('$futureRetry') or 0
             if future_retry >= future_max_retry:
+                self.seeds.update({"$msg": f"超出最大重试次数: {future_max_retry} 次", "$status": -1})
                 return self.success(shutdown)
             else:
                 return super(self.__class__, self).retry()
@@ -215,8 +209,12 @@ class Rpc:
                 raise signals.Success
             return super(self.__class__, self).on_request(context)
 
-        def set_max_retry(context: Context):
-            context.seeds["$futureRetry"] = context.request.retry
+        def mock_on_retry(self, context: Context):
+            try:
+                return super(self.__class__, self).on_retry(context)
+            except signals.Success:
+                context.seeds.update({"$msg": f"超出最大重试次数", "$status": -1})
+                raise
 
         def mock_on_response(self, context: Context):
             future_type = context.seeds.get('$futureType', "$response")
@@ -233,6 +231,7 @@ class Rpc:
 
         modded.setdefault("on_request", mock_on_request)
         modded.setdefault("on_response", mock_on_response)
+        modded.setdefault("on_retry", mock_on_retry)
         local = LocalQueue()
         key = f'{spider.__module__}.{spider.__name__}'
         spider = type("RPC", (spider,), modded)
@@ -259,5 +258,4 @@ class Rpc:
         for k, v in default_attrs.items():
             ins.set(k, v)
         ins.disable_statistics()
-        ins.use(state.const.BEFORE_REQUEST, {"func": set_max_retry, "index": -math.inf})
         return cls(ins)
