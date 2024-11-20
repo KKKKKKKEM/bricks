@@ -171,7 +171,7 @@ class Gateway:
         """
 
         def is_failure(context: Context):
-            return context and context.seeds.get("$futureMaxRetry", 1) >= max_retry
+            return context and context.seeds.get("$status", 0) != 0
 
         def choose(context: Context):
             context.seeds.update({"$interfaceFinish": time.time()})
@@ -180,8 +180,8 @@ class Gateway:
                     status_code=403,
                     content=json.dumps({
                         "code": 403,
-                        "msg": f"任务超过最大重试次数: {max_retry} 次",
-                        "data": {k.strip("$"): v for k, v in sorted(context.seeds.items())}
+                        "msg": context.seeds.get("$msg"),
+                        "data": {k.strip("$"): v for k, v in sorted(context.seeds.items()) if k not in ["$status", "$msg"]}
                     }),
                     headers={"Content-type": "application/json"}
                 )
@@ -200,12 +200,14 @@ class Gateway:
 
                 if not request:
                     return
-
+                raw_req = request.get_options("$request")
                 while not fu.done():
-                    alive = await is_alive(request.get_options("$request"))
+                    alive = await is_alive(raw_req)
                     if not alive:
                         logger.warning(f'{data} 被取消')
                         fu.cancel()
+                    else:
+                        await asyncio.sleep(0.01)
 
             loop = asyncio.get_event_loop()
             data = {
@@ -216,24 +218,27 @@ class Gateway:
             }
             asyncio.ensure_future(monitor())
             fu = loop.run_in_executor(pool, obj.execute, data, timeout)
+            fu.add_done_callback(Callback.build(cb1, request=request, seeds=seeds))
+            ctx = None
+
             try:
-                fu.add_done_callback(Callback.build(cb1, request=request, seeds=seeds))
                 ctx = await asyncio.wait_for(fu, timeout=timeout)
-                await Callback.call(cb2, fu, request=request, seeds=seeds)
-                if is_failure(ctx):
-                    raise asyncio.exceptions.CancelledError
+                assert not is_failure(ctx), "超出最大重试次数"
+            except AssertionError:
+                await Callback.call(errback, fu, request=request, seeds=seeds)
                 return ctx
 
-            except Exception as e:
+            except asyncio.exceptions.CancelledError:
                 await Callback.call(errback, fu, request=request, seeds=seeds)
-                if isinstance(e, asyncio.exceptions.CancelledError):
-                    return
 
-                elif isinstance(e, asyncio.TimeoutError):
+            except Exception as e:
+                if isinstance(e, asyncio.TimeoutError):
                     raise asyncio.TimeoutError(f'任务超过最大超时时间 {timeout} s')
-
                 else:
                     raise e
+            else:
+                await Callback.call(cb2, fu, request=request, seeds=seeds)
+                return ctx
 
             finally:
                 semaphore and semaphore.release()
