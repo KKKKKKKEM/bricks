@@ -171,7 +171,6 @@ class Rpc:
         context.flow({"next": self.spider.on_consume, "seeds": seeds})
         self.spider.on_consume(context=context)
         context.seeds.update({"$spiderFinish": time.time()})
-        time.sleep(20)
         return future.result(timeout=timeout)
 
     @classmethod
