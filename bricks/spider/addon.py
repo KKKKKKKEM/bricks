@@ -130,15 +130,10 @@ class Rpc:
     def stop(self):
         self.running = False
 
-    def execute(
-            self,
-            seeds: Union[dict, Item],
-            timeout: int = None
-    ) -> Context:
+    def execute(self, seeds: Union[dict, Item]) -> Context:
         """
         给 listener 一个种子, 然后获取种子的消耗结果
         种子内特殊键值对说明:
-        $futureID 当前任务 ID, 自动生成
 
         $futureType 表示需要的类型, 可以自己设置, 默认为 $response
             $request -> 表示只需要 request, 也就是消耗到了请求之前就会告知结果
@@ -147,13 +142,9 @@ class Rpc:
 
 
         :param seeds: 需要消耗的种子
-        :param timeout: 超时时间, 超时后还没有获取到结果则退出, 如果为 None 则表示必须等待一个结果才会结束
         :return:
         """
-        future = concurrent.futures.Future()
-        future_id = f'future-{id(future)}'
-        seeds.update({"$futureID": future_id, "$spiderStart": time.time()})
-        _futures[future_id] = future
+        seeds.update({"$spiderStart": time.time()})
         task_queue: TaskQueue = self.spider.get("spider.task_queue") or self.spider.task_queue
         queue_name: str = self.spider.get("spider.queue_name") or self.spider.queue_name
         context: Context = self.spider.make_context(
@@ -164,7 +155,7 @@ class Rpc:
         context.flow({"next": self.spider.on_consume, "seeds": seeds})
         self.spider.on_consume(context=context)
         context.seeds.update({"$spiderFinish": time.time()})
-        return future.result(timeout=timeout)
+        return context
 
     @classmethod
     def wrap(cls, spider: Type[Spider], attrs: dict = None, modded: dict = None, ctx_modded: dict = None):
@@ -205,11 +196,6 @@ class Rpc:
             else:
                 return super(self.__class__, self).error(shutdown)
 
-        def mock_success(self, shutdown=False):
-            future_id = self.seeds.get('$futureID')
-            task_done(future_id, self)
-            return super(self.__class__, self).success(shutdown)
-
         def mock_on_request(self, context: Context):
             future_type = context.seeds.get('$futureType', "$response")
             if future_type == '$request':
@@ -249,7 +235,6 @@ class Rpc:
             "RPCContext",
             (spider.Context,),
             {
-                "success": mock_success,
                 "failure": mock_failure,
                 "error": mock_error,
                 **ctx_modded

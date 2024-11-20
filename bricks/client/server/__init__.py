@@ -173,7 +173,7 @@ class Gateway:
         def is_failure(context: Context):
             return context and context.seeds.get("$status", 0) != 0
 
-        def choose(context: Context):
+        def fix(context: Context):
             context.seeds.update({"$interfaceFinish": time.time()})
             if is_failure(context):
                 context.response = Response(
@@ -188,6 +188,13 @@ class Gateway:
                 )
 
                 raise signals.Break
+
+            if form == '$response' and not getattr(context, "response", None):
+                context.response = Response(
+                    status_code=204,
+                    content="",
+                    headers={"Content-type": "application/json"}
+                )
 
         async def submit(seeds: dict, request=None, is_alive: Callable = None):
             if semaphore and semaphore.locked():
@@ -219,7 +226,12 @@ class Gateway:
                 "$interfaceStart": time.time()
             }
             asyncio.ensure_future(monitor())
-            fu = loop.run_in_executor(pool, obj.execute, data, timeout)
+            if "timeout" in inspect.signature(obj.execute).parameters:
+                args = [data, timeout]
+            else:
+                args = [data]
+
+            fu = loop.run_in_executor(pool, obj.execute, *args)
             fu.add_done_callback(Callback.build(cb1, request=request, seeds=seeds))
             ctx = None
 
@@ -245,7 +257,7 @@ class Gateway:
             finally:
                 semaphore and semaphore.release()
 
-        cb1 = [choose]
+        cb1 = [fix]
         cb2 = []
         for cb in pandora.iterable(callback):
             if inspect.iscoroutinefunction(cb):
@@ -330,4 +342,3 @@ class Gateway:
 
     def add_middleware(self, *args, **kwargs):
         ...
-
