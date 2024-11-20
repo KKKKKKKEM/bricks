@@ -254,7 +254,7 @@ class Pangu(Chaos):
 
                     except Exception as e:
                         EventManager.invoke(Error(context=context, error=e), errors="output")
-                        context.error(shutdown=True)
+                        context.error(e, shutdown=True)
 
     def submit(self, task: dispatch.Task, timeout=None) -> dispatch.Task:
         """

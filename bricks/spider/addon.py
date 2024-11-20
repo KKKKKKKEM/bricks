@@ -198,6 +198,13 @@ class Rpc:
             else:
                 return super(self.__class__, self).retry()
 
+        def mock_error(self, e: Exception, shutdown=True):
+            if shutdown:
+                self.seeds.update({"$msg": f"请求遇到意料之外的异常: <{e.__class__.__name__} {e}>", "$status": -1})
+                return self.success(shutdown)
+            else:
+                return super(self.__class__, self).error(shutdown)
+
         def mock_success(self, shutdown=False):
             future_id = self.seeds.get('$futureID')
             task_done(future_id, self)
@@ -244,7 +251,7 @@ class Rpc:
             {
                 "success": mock_success,
                 "failure": mock_failure,
-                "error": mock_failure,
+                "error": mock_error,
                 **ctx_modded
             }
         )

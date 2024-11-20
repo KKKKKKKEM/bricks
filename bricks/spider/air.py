@@ -138,7 +138,8 @@ class Context(Flow):
         manager.clear(self.request.proxy or self.target.proxy)
         self.request.proxies = None
 
-    error = failure
+    def error(self, e: Exception, shutdown=False):
+        return self.failure(shutdown)
 
 
 class InitContext(Flow):

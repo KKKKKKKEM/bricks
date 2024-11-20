@@ -209,7 +209,7 @@ class Flow(Context):
     def failure(self, shutdown=False):
         raise NotImplementedError
 
-    def error(self, shutdown=False):
+    def error(self, e: Exception, shutdown=False):
         raise NotImplementedError
 
     def __copy__(self):

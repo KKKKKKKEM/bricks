@@ -1,8 +1,15 @@
+from __future__ import annotations
+
 import asyncio
+import dataclasses
 import functools
-from typing import Dict, Callable
+import re
+from typing import Dict, Callable, Literal, Optional, Union, List
 
 from loguru import logger
+from regex import Regex
+from starlette.middleware import Middleware
+from starlette.responses import Response
 
 from bricks.client.server import Gateway
 from bricks.core import signals
@@ -18,6 +25,84 @@ from starlette.applications import Starlette  # noqa E402
 from starlette.endpoints import HTTPEndpoint  # noqa E402
 from starlette.routing import Route, WebSocketRoute  # noqa E402
 from starlette.websockets import WebSocketDisconnect  # noqa E402
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint, DispatchFunction  # noqa E402
+from starlette.types import ASGIApp  # noqa E402
+
+
+@dataclasses.dataclass
+class Middleware:
+    adapter: Callable
+    pattern: Optional[Regex] = None
+    args: Union[tuple, list] = ()
+    kwargs: dict = None
+
+
+class GlobalMiddleware(BaseHTTPMiddleware):
+
+    def __init__(self, app: ASGIApp, dispatch: DispatchFunction | None = None, gateway: "APP" = None) -> None:
+        super().__init__(app, dispatch)
+        self.gateway = gateway
+
+    async def dispatch(self, request: requests.Request, call_next: RequestResponseEndpoint):
+        try:
+
+            for middleware in self.gateway.middlewares["request"]:
+
+                req = View.make_req(request)
+
+                if middleware.pattern and not middleware.pattern.search(str(request.url)):
+                    continue
+
+                prepared = pandora.prepare(
+                    middleware.adapter,
+                    args=middleware.args,
+                    kwargs=middleware.kwargs,
+                    namespace={
+                        "request": req,
+                        "gateway": self.gateway,
+                    },
+                    annotations={
+                        type(req): req,
+                        type(self.gateway): self.gateway,
+                    }
+                )
+
+                await self.gateway.awaitable_call(prepared.func, *prepared.args, **prepared.kwargs)
+
+            response = await call_next(request)
+
+            for middleware in self.gateway.middlewares["response"]:
+                if middleware.pattern and not middleware.pattern.search(str(request.url)):
+                    continue
+
+                prepared = pandora.prepare(
+                    middleware.adapter,
+                    args=middleware.args,
+                    kwargs=middleware.kwargs,
+                    namespace={
+                        "request": request,
+                        "response": response,
+                        "gateway": self.gateway,
+                    },
+                    annotations={
+                        type(request): request,
+                        type(response): response,
+                        type(self.gateway): self.gateway,
+                    }
+                )
+                await self.gateway.awaitable_call(prepared.func, *prepared.args, **prepared.kwargs)
+
+            return response
+        except Exception as e:
+            return responses.JSONResponse({"status": 403, "msg": str(e)}, status_code=403)
+
+    @staticmethod
+    async def get_body(resp):
+        original_body = b''
+        async for chunk in resp.body_iterator:
+            original_body += chunk
+        original_data = original_body.decode()
+        return original_data
 
 
 class View(HTTPEndpoint):
@@ -144,6 +229,11 @@ class APP(Gateway):
                 WebSocketRoute(path="/ws/<client_id>", name='websocket', endpoint=self.websocket_endpoint)
             ]
         )
+        self.router.add_middleware(GlobalMiddleware, gateway=self)  # noqa: E501
+        self.middlewares: Dict[str, List[Middleware]] = {
+            "request": [],
+            "response": [],
+        }
 
     def create_view(self, uri: str, adapter: Callable = None, options: dict = None):
         options = options or {}
@@ -183,6 +273,28 @@ class APP(Gateway):
 
     def run(self, host: str = "0.0.0.0", port: int = 8888, **options):
         uvicorn.run(self.router, host=host, port=port, **options)
+
+    def add_middleware(self, form: Literal['request', 'response'], adapter: Callable, pattern: str = "", *args,
+                       **kwargs):
+        """
+        设置拦截器
+
+        :param adapter:
+        :param form: request - 拦截请求; response - 拦截响应
+        :param pattern: 用于限制 url 的正则表达式
+        :return:
+        """
+        if pattern:
+            re_pattern = re.compile(pattern)
+        else:
+            re_pattern = None
+
+        self.middlewares[form].append(Middleware(
+            pattern=re_pattern,
+            adapter=adapter,
+            args=args,
+            kwargs=kwargs
+        ))
 
 
 app = APP()

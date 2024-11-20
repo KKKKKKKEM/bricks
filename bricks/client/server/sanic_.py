@@ -1,6 +1,8 @@
 import asyncio
+import functools
+import re
 import uuid
-from typing import Dict, Callable
+from typing import Dict, Callable, Literal
 
 from loguru import logger
 
@@ -116,7 +118,7 @@ class View(HTTPMethodView):
         return Request(
             url=request.url,
             method=request.method,
-            body=request.body,
+            body=request.body.decode("utf-8"),
             headers=request.headers,
             cookies=request.cookies,
             options={"$request": request}
@@ -176,6 +178,42 @@ class APP(Gateway):
         options.setdefault("single_process", True)
         options.setdefault("access_log", False)
         self.router.run(host=host, port=port, **options)
+
+    def add_middleware(self, form: Literal['request', 'response'], adapter: Callable, pattern: str = "", *args,
+                       **kwargs):
+
+        def wrapper(func):
+
+            async def inner(request, *a, **kw):
+                if re_pattern and not re_pattern.search(request.url):
+                    return
+
+                req = await View.make_req(request)
+                prepared = pandora.prepare(
+                    func,
+                    args=[*args, *a],
+                    kwargs={**kwargs, **kw},
+                    namespace={
+                        "request": req,
+                        "gateway": app,
+                    },
+                    annotations={
+                        type(req): req,
+                        type(app): app,
+                    }
+                )
+
+                await app.awaitable_call(prepared.func, *prepared.args, **prepared.kwargs)
+
+            return inner
+
+        if pattern:
+            re_pattern = re.compile(pattern)
+        else:
+            re_pattern = None
+
+        # self.router.on_request()
+        self.router.middleware(wrapper(adapter), form)
 
 
 app = APP()

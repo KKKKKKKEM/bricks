@@ -181,7 +181,8 @@ class Gateway:
                     content=json.dumps({
                         "code": 403,
                         "msg": context.seeds.get("$msg"),
-                        "data": {k.strip("$"): v for k, v in sorted(context.seeds.items()) if k not in ["$status", "$msg"]}
+                        "data": {k.strip("$"): v for k, v in sorted(context.seeds.items()) if
+                                 k not in ["$status", "$msg"]}
                     }),
                     headers={"Content-type": "application/json"}
                 )
@@ -210,6 +211,7 @@ class Gateway:
                         await asyncio.sleep(0.01)
 
             loop = asyncio.get_event_loop()
+            seeds = seeds or {}
             data = {
                 **seeds,
                 "$futureType": form,
@@ -325,3 +327,7 @@ class Gateway:
 
     def add_websocket_route(self, *args, **kwargs):
         return self.router.add_websocket_route(*args, **kwargs)
+
+    def add_middleware(self, *args, **kwargs):
+        ...
+
