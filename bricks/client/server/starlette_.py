@@ -4,12 +4,10 @@ import asyncio
 import dataclasses
 import functools
 import re
+from re import Pattern
 from typing import Dict, Callable, Literal, Optional, Union, List
 
 from loguru import logger
-from regex import Regex
-from starlette.middleware import Middleware
-from starlette.responses import Response
 
 from bricks.client.server import Gateway
 from bricks.core import signals
@@ -32,7 +30,7 @@ from starlette.types import ASGIApp  # noqa E402
 @dataclasses.dataclass
 class Middleware:
     adapter: Callable
-    pattern: Optional[Regex] = None
+    pattern: Optional[Pattern] = None
     args: Union[tuple, list] = ()
     kwargs: dict = None
 
@@ -229,7 +227,7 @@ class APP(Gateway):
                 WebSocketRoute(path="/ws/<client_id>", name='websocket', endpoint=self.websocket_endpoint)
             ]
         )
-        self.router.add_middleware(GlobalMiddleware, gateway=self)  # noqa: E501
+        self.router.add_middleware(GlobalMiddleware, gateway=self)  # noqa
         self.middlewares: Dict[str, List[Middleware]] = {
             "request": [],
             "response": [],
@@ -274,7 +272,7 @@ class APP(Gateway):
     def run(self, host: str = "0.0.0.0", port: int = 8888, **options):
         uvicorn.run(self.router, host=host, port=port, **options)
 
-    def add_middleware(self, form: Literal['request', 'response'], adapter: Callable, pattern: str = "", *args,
+    def add_middleware(self, form: Literal['request', 'response'], adapter: Callable, *args, pattern: str = "",
                        **kwargs):
         """
         设置拦截器
