@@ -226,13 +226,16 @@ class Spider(Pangu):
         task_queue: TaskQueue = self.get("init.task_queue", self.task_queue)
         queue_name: str = self.get("init.queue_name", self.queue_name)
         # 判断是否有初始化权限
-        permission_info: dict = task_queue.command(queue_name, {"action": task_queue.COMMANDS.GET_PERMISSION})
+        permission_info: dict = task_queue.command(
+            queue_name,
+            {"action": task_queue.COMMANDS.GET_PERMISSION, "interval": 10}
+        )
         if not permission_info['state']:
             logger.debug(f"[停止投放] 当前机器 ID: {state.MACHINE_ID}, 原因: {permission_info['msg']}")
             return
 
         self.is_master = True
-        task_queue.command(queue_name, {"action": task_queue.COMMANDS.SET_INIT})
+        task_queue.command(queue_name, {"action": task_queue.COMMANDS.SET_INIT, "interval": 5})
 
         logger.debug(f"[开始投放] 获取初始化权限成功, MACHINE_ID: {state.MACHINE_ID}")
         # 本地的初始化记录 -> 启动传入的
