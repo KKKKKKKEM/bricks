@@ -157,18 +157,7 @@ class RedisQueue(TaskQueue):
     local default_type = KEYS[9]
 
     changeDataBase(db_num)
-    
-    -- 先拿锁, 拿不到了就返回没有权限
-    local ok = redis.call("SETNX", heartbeat_key, date_str)
-    if(ok != 1)
-    then
-       return "获取心跳锁失败"
-    end
-    -- 设置过期时间
-    redis.call("EXPIRE", heartbeat_key, interval)
-    
-    
-    -- 拿到了锁
+        
     -- 获取队列种子数量
     local queue_size = getKeySize(current_key, default_type) + getKeySize(failure_key, default_type) + getKeySize(temp_key, default_type)
     local is_record_key_exists = redis.call("EXISTS", record_key)
@@ -182,6 +171,15 @@ class RedisQueue(TaskQueue):
         return "已投完且存在种子没有消费完毕"
         
     else
+        -- 先拿锁, 拿不到了就返回没有权限
+        local ok = redis.call("SETNX", heartbeat_key, date_str)
+        if(ok != 1)
+        then
+           return "获取心跳锁失败"
+        end
+        -- 拿到了锁
+        -- 设置过期时间
+        redis.call("EXPIRE", heartbeat_key, interval)
         return "成功获取权限"
     end
                     """)
