@@ -424,12 +424,13 @@ class RedisQueue(TaskQueue):
             """
             判断是否有初始化权限
             判断依据:
-            1. 存在种子
-                1.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 -> true
-                1.2 不存在 record -> false
-            2. 不存在种子
-                2.1 存在 record + record 内的 machine_id 与当前机器的 machine_id 相同 -> true
-                2.2 不存在 record -> true
+                1. 已投完且存在种子没有消费完毕 -> false
+                2. 成功获取权限 -> true
+                3. 获取心跳锁失败
+                    3.1 检测心跳锁的内容
+                        3.1.1 在变化 -> false
+                        3.1.2 变为空了/ 没有变化, 重新所有流程
+
 
             :return:
             :rtype:
@@ -437,8 +438,15 @@ class RedisQueue(TaskQueue):
 
             def heartbeat():
                 while True:
-                    self.redis_db.setex(heartbeat_key, interval, str(datetime.datetime.now()))
-                    time.sleep(interval - 1)
+                    try:
+                        self.redis_db.setex(heartbeat_key, interval, str(datetime.datetime.now()))
+                        time.sleep(interval - 1)
+                    except (KeyboardInterrupt, SystemExit):
+                        raise
+
+                    except Exception as e:
+                        logger.error(f"[get_permission] {e}")
+                        time.sleep(1)
 
             db_num = order.get('db_num', self.database)
             genre = order.get('genre', self.genre)
@@ -476,7 +484,7 @@ class RedisQueue(TaskQueue):
                     last = ""
                     while time.time() - start_time < interval * 3:  # 判断 interval*3 秒
                         heartbeat_value = self.redis_db.get(heartbeat_key)
-                        # 锁小时了, break 掉, 重新获取锁
+                        # 锁变为空了, 重新开始所有流程
                         if heartbeat_value == "":
                             break
 
@@ -489,6 +497,8 @@ class RedisQueue(TaskQueue):
 
                         last = heartbeat_value
                         time.sleep(1)
+
+                    # 锁没动过, 也重新开始所有流程
 
         def set_record():
             self.redis_db.hset(
