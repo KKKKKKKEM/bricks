@@ -184,7 +184,7 @@ class ApiProxy(BaseProxy):
         :param recover: 处理响应的回调, 默认使用匹配
         """
         self.key = key
-        self.options = options
+        self.options = options or {}
         self.handle_response = handle_response or (lambda res: IP_EXTRACT_RULE.findall(res.text))
         self.container = queue.Queue()
         self.lock = threading.Lock()
