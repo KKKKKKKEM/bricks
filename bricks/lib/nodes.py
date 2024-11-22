@@ -19,26 +19,32 @@ class UnRendered:
         self.value = value
 
 
+_adapters: dict = {
+    "int": int,
+    "str": str,
+    "float": float,
+    "list": pandora.json_or_eval,
+    "dict": pandora.json_or_eval,
+    "json": lambda value: json.dumps(pandora.json_or_eval(value), ensure_ascii=False)
+
+}
+
+
 @dataclasses.dataclass
 class RenderNode:
     # 字段缺失时的处理手段
     miss: Literal["fix", "raise", "ignore"] = "fix"
 
     # 不需要渲染的字段
-    unrendered: Union[List[str], Tuple[str]] = dataclasses.field(default_factory=lambda: [])
+    un_rendered: Union[List[str], Tuple[str]] = dataclasses.field(default_factory=lambda: [])
 
     # 适配器, 可以改造渲染语法
-    adapters: dict = dataclasses.field(default_factory=lambda: {
-        "int": int,
-        "str": str,
-        "float": float,
-        "list": pandora.json_or_eval,
-        "dict": pandora.json_or_eval,
-        "json": lambda value: json.dumps(pandora.json_or_eval(value), ensure_ascii=False)
+    adapters: dict = dataclasses.field(default_factory=lambda: {})
 
-    })
+    def format(self, value, base: dict, ident: str = ""):
+        if ident in self.un_rendered:
+            return value
 
-    def format(self, value, base: dict):
         if isinstance(value, str):
             while True:
                 try:
@@ -80,10 +86,12 @@ class RenderNode:
                         base.setdefault(e.args[0], "")
 
         elif isinstance(value, (list, tuple, set)):
-            return type(value)(self.format(item, base) for item in value)
+            return type(value)(
+                self.format(item, base, ident=".".join([ident, str(idx)]).strip(".")) for idx, item in enumerate(value)
+            )
 
         elif isinstance(value, dict):
-            return {k: self.format(v, base) for k, v in value.items()}
+            return {k: self.format(v, base, ident=".".join([ident, str(k)]).strip(".")) for k, v in value.items()}
 
         elif isinstance(value, UnRendered):
             return value.value
@@ -93,15 +101,15 @@ class RenderNode:
 
         return value
 
-    def render(self, base: (dict, Mapping, UserDict) = None):
+    def render(self, data: (dict, Mapping, UserDict) = None):
         # 创建一个新的实例，避免修改原始实例
-        base = base or {}
+        data = data or {}
         node = copy.deepcopy(self)
         for field in dataclasses.fields(node):
-            if field.name in [*["adapters", "miss", "unrendered"], *node.unrendered]:
+            if field.name in [*["adapters", "miss", "un_rendered"], *node.un_rendered]:
                 continue
             value = getattr(node, field.name)
-            new_value = node.format(value, base)
+            new_value = node.format(value, data, ident=field.name)
             setattr(node, field.name, new_value)
         return node
 
@@ -109,8 +117,9 @@ class RenderNode:
         self.adapters[form] = action
 
     def run_adapter(self, value, form: Any, base: dict = None):
-        if form in self.adapters:
-            adapter = self.adapters[form]
+        adapters = {**_adapters, **self.adapters}
+        if form in adapters:
+            adapter = adapters[form]
             try:
                 assert callable(adapter), f"Invalid adapter action: {adapter}"
                 return pandora.invoke(adapter, args=[value], namespace=base)

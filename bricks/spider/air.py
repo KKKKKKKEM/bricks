@@ -104,10 +104,10 @@ class Context(Flow):
     def submit(self, *obj: Union[Item, dict], call_later=False, attrs: dict = None) -> List["Context"]:
         """
         专门为新请求分支封装的方法, 会自动将请求放入队列
-        传入的对象可以是新的种子 / 新的 request
+        传入的对象是新的种子
 
-        :param attrs:
-        :param obj:
+        :param attrs: 属性
+        :param obj: 需要提交的对象，必须是一个种子
         :param call_later: 是否延迟调用, 如果延迟调用, 就是将种子放到当前队列, 等待其他机器获取消费, 否则
         :return:
         """

@@ -406,3 +406,4 @@ class Spider(air.Spider):
 
         for form, events in (self.config.events or {}).items():
             self.use(form, *events)
+
