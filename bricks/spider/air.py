@@ -695,8 +695,9 @@ class Spider(Pangu):
     def _when_on_retry(self, raw_method):  # noqa
         @functools.wraps(raw_method)
         def wrapper(context: Context, *args, **kwargs):
-            context.form = state.const.BEFORE_RETRY
             self.number_of_failure_requests.increment()
+            context.form = state.const.BEFORE_RETRY
+            events.EventManager.invoke(context)
             prepared = pandora.prepare(
                 func=raw_method,
                 args=args,
