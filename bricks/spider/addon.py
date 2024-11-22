@@ -215,7 +215,7 @@ class Rpc:
             if future_type == '$response':
                 raise signals.Success
 
-            items: Items = super(self.__class__, self).mock_on_response(context)
+            items: Items = super(self.__class__, self).on_response(context)
 
             if future_type == '$items':
                 raise signals.Success
