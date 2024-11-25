@@ -210,6 +210,12 @@ async def pr(request, response):
 # 响应中间件
 # app.add_middleware("response", pr)
 
+# 注册一个自定义视图可以使用这种方法，有点类似 bind_addon，但是部分参数不支持
+# @app.route("/my_view", methods=["GET"], callback=[callback])
+# async def my_view(request):
+#     print(request)
+#     return {"code": 0, "msg": "success"}
+
 # 启动api服务，data 就是你需要爬取的种子
 # 访问： curl --location '127.0.0.1:8888/demo/rpc' --header 'Content-Type: application/json'  --data '{"page":1}'
 # 访问： curl --location '127.0.0.1:8888/demo/listener' --header 'Content-Type: application/json'  --data '{"page":1}'

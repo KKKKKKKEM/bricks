@@ -40,10 +40,11 @@ class Callback:
             }
             raw_req = request.get_options("$request")
 
-            ctx = fu.result()
+            retval = fu.result()
 
-            namespace.update({"context": ctx})
-            annotations.update({type(raw_req): raw_req, type(ctx): ctx})
+            namespace.update({"context": retval})
+            namespace.update({"retval": retval})
+            annotations.update({type(raw_req): raw_req, type(retval): retval})
 
             for fn in pandora.iterable(fns):
                 if callable(fn) and not inspect.iscoroutinefunction(fn):
@@ -133,9 +134,9 @@ class Gateway:
             fu = sync2future()
             return await asyncio.wrap_future(fu)
 
-    def create_view(self, uri: str, adapter: Callable, options: dict = None):
+    def create_addon(self, uri: str, adapter: Callable, **options):
         """
-        创建绑定一个视图
+        创建绑定一个 addon 视图
 
         :param uri: 路径
         :param adapter: 主函数
@@ -143,6 +144,113 @@ class Gateway:
         :return:
         """
         ...
+
+    def route(
+        self,
+        uri: str,
+        timeout: int = None,
+        concurrency: int = None,
+        callback: List[Callable] = None,
+        errback: List[Callable] = None,
+        methods: List[str] = ["GET"],
+        **options
+    ):
+        """
+        绑定一个路由
+        :param uri: 路径
+        :param timeout: 超时时间
+        :param concurrency: 并发数
+        :param callback: 成功回调
+        :param errback: 失败回调
+        :param methods: 请求方法
+        :param options: 其他选项
+        :return:
+
+        """
+
+        def inner(func):
+            return self.bind_view(path=uri, handler=func, timeout=timeout, concurrency=concurrency, callback=callback, errback=errback, methods=methods, **options)
+
+        return inner
+
+    def bind_view(
+        self,
+        path: str,
+        handler: Callable,
+        timeout: int = None,
+        concurrency: int = None,
+        callback: List[Callable] = None,
+        errback: List[Callable] = None,
+        **options
+    ) -> Callable:
+        """
+        绑定一个路由
+        """
+        async def normal_view(request=None, is_alive: Callable = None):
+            if semaphore and semaphore.locked():
+                raise signals.Wait(1)
+
+            semaphore and await semaphore.acquire()
+
+            async def monitor():
+                if not is_alive:
+                    return
+
+                if not request:
+                    return
+                raw_req = request.get_options("$request")
+                while not fu.done():
+                    alive = await is_alive(raw_req)
+                    if not alive:
+                        logger.warning(f'{data} 被取消')
+                        fu.cancel()
+                    else:
+                        await asyncio.sleep(0.01)
+
+            asyncio.ensure_future(coro_or_future=monitor())
+            prepared = pandora.prepare(
+                handler,
+                kwargs=options,
+                namespace={"request": request},
+                annotations={type(request): request}
+            )
+            fu = asyncio.ensure_future(self.awaitable_call(
+                prepared.func, *prepared.args, **prepared.kwargs))
+            fu.add_done_callback(Callback.build(
+                cb1, request=request))
+
+            try:
+                ctx = await asyncio.wait_for(fu, timeout=timeout)
+
+            except asyncio.exceptions.CancelledError:
+                await Callback.call(errback, fu, request=request)
+
+            except Exception as e:
+                if isinstance(e, asyncio.TimeoutError):
+                    raise asyncio.TimeoutError(f'任务超过最大超时时间 {timeout} s')
+                else:
+                    raise e
+            else:
+                await Callback.call(cb2, fu, request=request)
+                return ctx
+
+            finally:
+                semaphore and semaphore.release()
+
+        cb1 = []
+        cb2 = []
+        for cb in pandora.iterable(callback):
+            if inspect.iscoroutinefunction(cb):
+                cb2.append(cb)
+            else:
+                cb1.append(cb)
+
+        if concurrency and concurrency > 0:
+            semaphore = asyncio.Semaphore(concurrency)
+        else:
+            semaphore = None
+
+        self.create_view(uri=path, adapter=normal_view, **options)
 
     def bind_addon(
             self,
@@ -232,7 +340,8 @@ class Gateway:
                 args = [data]
 
             fu = loop.run_in_executor(pool, obj.execute, *args)
-            fu.add_done_callback(Callback.build(cb1, request=request, seeds=seeds))
+            fu.add_done_callback(Callback.build(
+                cb1, request=request, seeds=seeds))
             ctx = None
 
             try:
@@ -273,7 +382,7 @@ class Gateway:
             semaphore = None
 
         not obj.running and obj.run()
-        self.create_view(uri=path, adapter=submit, options=options)
+        self.create_addon(uri=path, adapter=submit, **options)
 
     async def _invoke(self, orders: Dict[str, List[dict]], timeout: int = None):
         futures = []

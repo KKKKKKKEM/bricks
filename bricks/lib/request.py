@@ -47,10 +47,12 @@ class Request:
             allow_redirects: bool = True,
             proxies: Optional[str] = None,
             proxy: Optional[Union[dict, str, List[Union[dict, str]]]] = None,
-            ok: Optional[Union[str, Dict[str, Union[type(signals.Signal), Callable]]]] = ...,
+            ok: Optional[Union[str, Dict[str,
+                                         Union[type(signals.Signal), Callable]]]] = ...,
             retry: int = 1,
             max_retry: [int, float] = 5,
             use_session: bool = False,
+            **opts
     ) -> None:
         """
 
@@ -90,6 +92,9 @@ class Request:
         self.retry = retry
         self.max_retry = max_retry
 
+        for k, v in opts.items():
+            self.options[k] = v
+
     headers: Header = property(
         fget=lambda self: self._headers,
         fset=lambda self, v: setattr(self, "_headers", Header(v)),
@@ -108,7 +113,8 @@ class Request:
         original_params.update(self.params or {})
 
         # 重新构建查询字符串
-        query_string = urllib.parse.urlencode(original_params).replace('+', '%20')
+        query_string = urllib.parse.urlencode(
+            original_params).replace('+', '%20')
 
         # 构建新的URL
         new_url = urllib.parse.urlunparse((
@@ -123,28 +129,32 @@ class Request:
         return new_url
 
     @property
-    def curl(self):
+    def curl(self) -> str:
         # 开始构建curl命令
         parts = ["curl", f"-X {self.method.upper()}"]
 
         # 添加请求头
 
         if self.cookies:
-            cookie_str = "; ".join([f'{k}={v}' for k, v in self.cookies.items()])
+            cookie_str = "; ".join(
+                [f'{k}={v}' for k, v in self.cookies.items()])
         else:
             cookie_str = ""
 
         content_type = None
         if self.headers:
             for header, value in self.headers.items():
+                value = str(value)
                 if header.lower() == 'cookie':
-                    cookie_str = "; ".join(list(filter(None, [value, cookie_str])))
+                    cookie_str = "; ".join(
+                        list(filter(None, [value, cookie_str])))
                 else:
                     if header.lower() == 'content-type':
                         content_type = value.lower()
                     parts.append(f"-H {shlex.quote(f'{header}: {value}')}")
 
-        cookie_str and parts.append(f"-H {shlex.quote(f'Cookie: {cookie_str}')}")
+        cookie_str and parts.append(
+            f"-H {shlex.quote(f'Cookie: {cookie_str}')}")
 
         # 添加请求体
         if self.body:
@@ -189,7 +199,8 @@ class Request:
         _parser.add_argument('-b', '--data-binary', '--data-raw', default=None)
         _parser.add_argument('-X', default='')
         _parser.add_argument('-H', '--header', action='append', default=[])
-        _parser.add_argument('-du', '--data-urlencode', action='append', default=[], type=lambda x: x.split("="))
+        _parser.add_argument('-du', '--data-urlencode',
+                             action='append', default=[], type=lambda x: x.split("="))
         _parser.add_argument('--compressed', action='store_true')
         _parser.add_argument('--location', action='store_true')
         _parser.add_argument('-k', '--insecure', action='store_true')
@@ -210,14 +221,16 @@ class Request:
         else:
             post_data = parsed_args.data or parsed_args.data_binary
 
-        method = parsed_args.request.lower() if parsed_args.request else 'post' if post_data else "get"
+        method = parsed_args.request.lower(
+        ) if parsed_args.request else 'post' if post_data else "get"
 
         if parsed_args.X:
             method = parsed_args.X.lower()
 
         cookie_dict = OrderedDict()
         if parsed_args.cookie:
-            cookie = SimpleCookie(bytes(parsed_args.cookie, "ascii").decode("unicode-escape"))
+            cookie = SimpleCookie(
+                bytes(parsed_args.cookie, "ascii").decode("unicode-escape"))
             for key in cookie:
                 cookie_dict[key] = cookie[key].value
 
@@ -226,12 +239,15 @@ class Request:
         for curl_header in parsed_args.header:
             if curl_header.startswith(':'):
                 occurrence = [m.start() for m in re.finditer(':', curl_header)]
-                header_key, header_value = curl_header[:occurrence[1]], curl_header[occurrence[1] + 1:]
+                header_key, header_value = curl_header[:occurrence[1]
+                                                       ], curl_header[occurrence[1] + 1:]
             else:
-                header_key, header_value = curl_header.split(":", 1) if ':' in curl_header else (curl_header, "")
+                header_key, header_value = curl_header.split(
+                    ":", 1) if ':' in curl_header else (curl_header, "")
 
             if header_key.lower().strip("$") == 'cookie':
-                cookie = SimpleCookie(bytes(header_value, "ascii").decode("unicode-escape"))
+                cookie = SimpleCookie(
+                    bytes(header_value, "ascii").decode("unicode-escape"))
                 for key in cookie:
                     cookie_dict[key] = cookie[key].value
             else:

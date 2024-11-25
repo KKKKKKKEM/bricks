@@ -46,7 +46,7 @@ class GlobalMiddleware(BaseHTTPMiddleware):
 
             for middleware in self.gateway.middlewares["request"]:
 
-                req = View.make_req(request)
+                req = AddonView.make_req(request)
 
                 if middleware.pattern and not middleware.pattern.search(str(request.url)):
                     continue
@@ -103,7 +103,20 @@ class GlobalMiddleware(BaseHTTPMiddleware):
         return original_data
 
 
-class View(HTTPEndpoint):
+async def make_req(request: requests.Request):
+    body = await request.body()
+
+    return Request(
+        url=str(request.url),
+        method=request.method,
+        body=body.decode(),
+        headers=dict(request.headers),
+        cookies=request.cookies,
+        options={"$request": request}
+    )
+
+
+class AddonView(HTTPEndpoint):
 
     def __init__(self, *args, main: Callable = None, future_type: str = "$response", **kwargs):
         super().__init__(*args, **kwargs)
@@ -180,7 +193,8 @@ class View(HTTPEndpoint):
             if context.response.status_code != -1:
                 return responses.Response(
                     context.response.text,
-                    media_type=context.response.headers.get("Content-Type", "text/plain"),
+                    media_type=context.response.headers.get(
+                        "Content-Type", "text/plain"),
                     status_code=context.response.status_code
                 )
             else:
@@ -199,19 +213,6 @@ class View(HTTPEndpoint):
                 return responses.Response()
 
     @staticmethod
-    async def make_req(request: requests.Request):
-        body = await request.body()
-
-        return Request(
-            url=str(request.url),
-            method=request.method,
-            body=body.decode(),
-            headers=dict(request.headers),
-            cookies=request.cookies,
-            options={"$request": request}
-        )
-
-    @staticmethod
     async def is_alive(request: requests.Request):
         close = await request.is_disconnected()
         return not close
@@ -223,8 +224,10 @@ class APP(Gateway):
         self.connections: Dict[websockets.WebSocket, str] = {}
         self.router = Starlette(
             routes=[
-                Route(path="/invoke", methods=["POST"], name='发布指令/调用', endpoint=self.invoke),
-                WebSocketRoute(path="/ws/<client_id>", name='websocket', endpoint=self.websocket_endpoint)
+                Route(path="/invoke", methods=["POST"],
+                      name='发布指令/调用', endpoint=self.invoke),
+                WebSocketRoute(path="/ws/<client_id>",
+                               name='websocket', endpoint=self.websocket_endpoint)
             ]
         )
         self.router.add_middleware(GlobalMiddleware, gateway=self)  # noqa
@@ -233,14 +236,66 @@ class APP(Gateway):
             "response": [],
         }
 
-    def create_view(self, uri: str, adapter: Callable = None, options: dict = None):
-        options = options or {}
+    def create_addon(self, uri: str, adapter: Callable = None, **options):
         options.setdefault("methods", ["GET", "POST"])
         self.router.add_route(
-            route=functools.partial(View, main=adapter),
+            route=functools.partial(AddonView, main=adapter),
             path=uri,
             **options
         )
+
+    def create_view(self, uri: str, adapter: Callable = None, **options):
+
+        async def handler(request: requests.Request):
+            try:
+                req = await make_req(request)
+                prepared = pandora.prepare(
+                    func=adapter,
+                    namespace={
+                        "request": req,
+                    },
+                )
+                ret = await Gateway.awaitable_call(prepared.func, *prepared.args, **prepared.kwargs)
+
+                if not ret:
+                    return responses.Response()
+
+                elif isinstance(ret, responses.Response):
+                    return ret
+
+                elif isinstance(ret, dict):
+                    return responses.JSONResponse(ret)
+
+                else:
+                    return responses.PlainTextResponse(str(ret))
+
+            except (SystemExit, KeyboardInterrupt):
+                raise
+
+            except signals.Wait:
+                return responses.JSONResponse(
+                    content={
+                        "code": 429,
+                        "msg": "Too Many Requests"
+                    },
+                    status_code=429
+                )
+
+            except Exception as e:
+                return responses.JSONResponse(
+                    content={
+                        "code": 500,
+                        "msg": str(e)
+                    },
+                    status_code=500
+                )
+
+        self.router.add_route(
+            route=handler,
+            path=uri,
+            **options
+        )
+
 
     async def websocket_endpoint(self, ws: websockets.WebSocket, client_id: str):
         """

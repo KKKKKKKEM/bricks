@@ -1,5 +1,5 @@
 import asyncio
-import functools
+import json
 import re
 import uuid
 from typing import Dict, Callable, Literal
@@ -12,12 +12,29 @@ from bricks.lib.request import Request
 from bricks.spider.air import Context
 from bricks.utils import pandora
 
-pandora.require("sanic==24.6.0")
+pandora.require(package_spec="sanic==24.6.0")
 import sanic  # noqa E402
 from sanic.views import HTTPMethodView  # noqa E402
+from sanic.response import BaseHTTPResponse  # noqa E402
 
 
-class View(HTTPMethodView):
+async def make_req(request: sanic.Request):
+    await request.receive_body()
+    return Request(
+        url=request.url,
+        method=request.method,
+        body=request.body.decode("utf-8"),
+        headers=request.headers,
+        cookies=request.cookies,
+        options={"$request": request}
+    )
+
+
+async def is_alive(request: sanic.Request):
+    return not request.transport.is_closing()
+
+
+class AddonView(HTTPMethodView):
 
     def __init__(self, main: Callable, future_type: str = "$response"):
         super().__init__()
@@ -26,10 +43,15 @@ class View(HTTPMethodView):
 
     async def get(self, request: sanic.Request):
         try:
-            seeds = request.get_args()
+            body = request.args.get("body", "")
+            if body:
+                body = json.loads(body)
+            else:
+                body = {}
+
             await request.receive_body()
-            req = await self.make_req(request)
-            ctx = await self.main(seeds, req, is_alive=self.is_alive)
+            req = await make_req(request)
+            ctx = await self.main(body, req, is_alive=is_alive)
             return self.fmt(ctx)
         except (SystemExit, KeyboardInterrupt):
             raise
@@ -54,9 +76,9 @@ class View(HTTPMethodView):
 
     async def post(self, request: sanic.Request):
         try:
-            req = await self.make_req(request)
+            req = await make_req(request)
             seeds = request.json
-            ctx = await self.main(seeds, req, is_alive=self.is_alive)
+            ctx = await self.main(seeds, req, is_alive=is_alive)
             return self.fmt(ctx)
         except (SystemExit, KeyboardInterrupt):
             raise
@@ -94,7 +116,8 @@ class View(HTTPMethodView):
             if context.response.status_code != -1:
                 return sanic.response.text(
                     context.response.text,
-                    content_type=context.response.headers.get("Content-Type", "text/plain"),
+                    content_type=context.response.headers.get(
+                        "Content-Type", "text/plain"),
                     status=context.response.status_code
                 )
             else:
@@ -112,36 +135,74 @@ class View(HTTPMethodView):
             else:
                 return sanic.response.empty()
 
-    @staticmethod
-    async def make_req(request: sanic.Request):
-        await request.receive_body()
-        return Request(
-            url=request.url,
-            method=request.method,
-            body=request.body.decode("utf-8"),
-            headers=request.headers,
-            cookies=request.cookies,
-            options={"$request": request}
-        )
-
-    @staticmethod
-    async def is_alive(request: sanic.Request):
-        return not request.transport.is_closing()
-
 
 class APP(Gateway):
     def __init__(self):
         super().__init__()
         self.connections: Dict[sanic.Websocket, str] = {}
         self.router = sanic.Sanic(name="bricks-api")
-        self.router.add_route(self.invoke, uri="/invoke", methods=["POST"], name='发布指令/调用')
-        self.router.add_websocket_route(self.websocket_endpoint, uri="/ws/<client_id>")
+        self.router.add_route(self.invoke, uri="/invoke",
+                              methods=["POST"], name='发布指令/调用')
+        self.router.add_websocket_route(
+            self.websocket_endpoint, uri="/ws/<client_id>")
 
-    def create_view(self, uri: str, adapter: Callable = None, options: dict = None):
-        options = options or {}
+    def create_addon(self, uri: str, adapter: Callable = None, **options):
         options.setdefault("name", str(uuid.uuid4()))
         self.router.add_route(
-            View.as_view(main=adapter),
+            AddonView.as_view(main=adapter),
+            uri=uri,
+            **options
+        )
+
+    def create_view(self, uri: str, adapter: Callable = None, **options):
+
+        async def handler(request: sanic.Request):
+            try:
+                req = await make_req(request)
+                prepared = pandora.prepare(
+                    func=adapter,
+                    namespace={
+                        "request": req,
+                    },
+                )
+                ret = await Gateway.awaitable_call(prepared.func, *prepared.args, **prepared.kwargs)
+                
+                if not ret:
+                    return sanic.response.empty()
+                
+                elif isinstance(ret, BaseHTTPResponse):
+                    return ret
+                
+                elif isinstance(ret, dict):
+                    return sanic.response.json(ret)
+                
+                else:
+                    return sanic.response.text(str(ret))
+            
+            except (SystemExit, KeyboardInterrupt):
+                raise
+
+            except signals.Wait:
+                return sanic.response.json(
+                    body={
+                        "code": 429,
+                        "msg": "Too Many Requests"
+                    },
+                    status=429
+                )
+
+            except Exception as e:
+                return sanic.response.json(
+                    body={
+                        "code": 500,
+                        "msg": str(e)
+                    },
+                    status=500
+                )
+
+        options.setdefault("name", str(uuid.uuid4()))
+        self.router.add_route(
+            handler,
             uri=uri,
             **options
         )
@@ -188,7 +249,7 @@ class APP(Gateway):
                 if re_pattern and not re_pattern.search(request.url):
                     return
 
-                req = await View.make_req(request)
+                req = await make_req(request)
                 prepared = pandora.prepare(
                     func,
                     args=[*args, *a],

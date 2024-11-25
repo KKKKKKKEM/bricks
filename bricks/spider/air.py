@@ -725,16 +725,21 @@ class Spider(Pangu):
         :param context:
         :return:
         """
-        if inspect.iscoroutinefunction(self.downloader.fetch):
+        downloader = context.request.get_options("$downloader") or self.downloader
+        if inspect.isclass(downloader):
+            downloader = downloader()
+        
+        
+        if inspect.iscoroutinefunction(downloader.fetch):
             future = self.active(
                 dispatch.Task(
-                    func=self.downloader.fetch,
+                    func=downloader.fetch,
                     args=[context.request]
                 )
             )
             response: Response = future.result()
         else:
-            response: Response = self.downloader.fetch(context.request)
+            response: Response = downloader.fetch(context.request)
 
         return response
 

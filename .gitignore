@@ -7,3 +7,5 @@ __pycache__
 /test
 /venv
 /no_views
+.vscode/launch.json
+.gitignore
