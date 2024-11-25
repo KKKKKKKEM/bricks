@@ -57,6 +57,7 @@ class Downloader(AbstractDownloader):
             'allow_redirects': False,
             'proxies': request.proxies and {"http": request.proxies, "https": request.proxies},  # noqa
             'verify': request.options.get("verify", False),
+             **request.options.get("$options", {}),
         }
 
         tls_config = request.options.get("tls_config")
@@ -75,7 +76,8 @@ class Downloader(AbstractDownloader):
         while True:
             assert _redirect_count < 999, "已经超过最大重定向次数: 999"
             response = session.request(**{**options, "url": next_url})
-            last_url, next_url = next_url, response.headers.get('location') or response.headers.get('Location')
+            last_url, next_url = next_url, response.headers.get(
+                'location') or response.headers.get('Location')
             if request.allow_redirects and next_url:
                 next_url = urllib.parse.urljoin(response.url, next_url)
                 _redirect_count += 1
@@ -93,7 +95,8 @@ class Downloader(AbstractDownloader):
                         )
                     )
                 )
-                request.options.get('$referer', False) and options['headers'].update(Referer=response.url)
+                request.options.get('$referer', False) and options['headers'].update(
+                    Referer=response.url)
 
             else:
                 res.content = response.content
@@ -120,7 +123,8 @@ class Downloader(AbstractDownloader):
 
         if isinstance(tls_config, dict):
             tls_config = to_tls_config(tls_config)
-        assert isinstance(tls_config, TLSConfig), f'tls_config 需要为 dict 或者 TLSConfig'
+        assert isinstance(
+            tls_config, TLSConfig), f'tls_config 需要为 dict 或者 TLSConfig'
         return tls_config
 
 

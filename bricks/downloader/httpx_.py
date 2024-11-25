@@ -33,10 +33,9 @@ class Downloader(AbstractDownloader):
 
 
     """
-    
-    def __init__(self, options:dict=None):
+
+    def __init__(self, options: dict = None):
         self.options = options or {}
-    
 
     def fetch(self, request: Union[Request, dict]) -> Response:
         """
@@ -60,6 +59,7 @@ class Downloader(AbstractDownloader):
             'follow_redirects': False,
             'proxy': request.proxies,  # noqa
             'verify': request.options.get("verify", False),
+            **request.options.get("$options", {}),
         }
 
         next_url = request.real_url
@@ -92,9 +92,11 @@ class Downloader(AbstractDownloader):
             while True:
                 assert _redirect_count < 999, "已经超过最大重定向次数: 999"
                 response = session.request(**{**options, "url": next_url})
-                last_url, next_url = next_url, response.headers.get('location') or response.headers.get('Location')
+                last_url, next_url = next_url, response.headers.get(
+                    'location') or response.headers.get('Location')
                 if request.allow_redirects and next_url:
-                    next_url = urllib.parse.urljoin(str(response.url), next_url)
+                    next_url = urllib.parse.urljoin(
+                        str(response.url), next_url)
                     _redirect_count += 1
                     res.history.append(
                         Response(
@@ -110,7 +112,8 @@ class Downloader(AbstractDownloader):
                             )
                         )
                     )
-                    request.options.get('$referer', False) and options['headers'].update(Referer=str(response.url))
+                    request.options.get('$referer', False) and options['headers'].update(
+                        Referer=str(response.url))
 
                 else:
                     res.content = response.content
@@ -130,7 +133,9 @@ class Downloader(AbstractDownloader):
 
 if __name__ == '__main__':
     downloader = Downloader()
-    rsp = downloader.fetch(Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True))
+    rsp = downloader.fetch(
+        Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True))
     print(rsp.cookies)
-    rsp = downloader.fetch(Request(url="https://httpbin.org/cookies", use_session=True))
+    rsp = downloader.fetch(
+        Request(url="https://httpbin.org/cookies", use_session=True))
     print(rsp.text)

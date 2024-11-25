@@ -49,6 +49,7 @@ class Downloader(AbstractDownloader):
         session_or_options = request.get_options("session_or_options") or {}
         options = {
             **self.options,
+            **request.options.get("$options", {}),
             'headers': dict(request.headers),
             'cookies': request.cookies,
             "data": self.parse_data(request)['data'],

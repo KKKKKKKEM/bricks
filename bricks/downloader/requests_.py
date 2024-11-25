@@ -48,6 +48,7 @@ class Downloader(AbstractDownloader):
         res = Response.make_response(request=request)
         options = {
             **self.options,
+            **request.options.get("$options", {}),
             'method': request.method.upper(),
             'headers': request.headers,
             'cookies': request.cookies,

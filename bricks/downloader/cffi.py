@@ -53,10 +53,7 @@ class Downloader(AbstractDownloader):
             'proxies': request.proxies and {"http": request.proxies, "https": request.proxies},  # noqa
             'verify': request.options.get("verify", False),
             'impersonate': request.options.get("impersonate") or self.impersonate,
-            'http_version': request.options.get("http_version"),
-            'ja3': request.options.get("ja3"),
-            'akamai': request.options.get("akamai"),
-            'extra_fp': request.options.get("extra_fp"),
+            **request.options.get("$options", {}),
         }
 
         next_url = request.real_url

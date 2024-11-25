@@ -49,6 +49,7 @@ class Downloader(AbstractDownloader):
             'allow_redirects': False,
             'proxy': request.proxies,  # noqa
             'insecure_skip_verify': request.options.get("verify", False),
+            **request.options.get("$options", {}),
         }
 
         next_url = request.real_url

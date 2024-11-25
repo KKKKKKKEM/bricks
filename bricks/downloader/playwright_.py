@@ -125,6 +125,7 @@ class Downloader(AbstractDownloader):
             timeout = 60 * 1000 if request.timeout is ... else request.timeout * 1000
             options = {
                 **self.options,
+                **request.options.get("$options", {}),
                 "timeout": timeout,
                 "url": request.real_url,
                 "wait_until": request.get_options("wait_until") or "networkidle",
@@ -136,6 +137,7 @@ class Downloader(AbstractDownloader):
             timeout = 30 * 1000 if request.timeout is ... else request.timeout * 1000
             options = {
                 **self.options,
+                **request.options.get("$options", {}),
                 "url_or_request": request.url,
                 "params": request.params,
                 "timeout": timeout,

@@ -88,6 +88,7 @@ class Downloader(AbstractDownloader):
 
         options = {
             **self.options,
+            **request.options.get("$options", {}),
             pycurl.SSL_CIPHER_LIST: self.set_cipher,
             pycurl.AUTOREFERER: 1,
             pycurl.VERBOSE: 0,
