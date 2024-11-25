@@ -41,13 +41,13 @@ def req2resp(request: Request, options: dict = None) -> Response:
 
 
 def resp2items(
-        response: Response,
-        engine: Union[str, Callable],
-        rules: dict,
-        rename: dict = None,
-        default: dict = None,
-        factory: dict = None,
-        show: dict = None,
+    response: Response,
+    engine: Union[str, Callable],
+    rules: dict,
+    rename: dict = None,
+    default: dict = None,
+    factory: dict = None,
+    show: dict = None,
 ) -> Items:
     """
     响应转换为 items
@@ -62,18 +62,20 @@ def resp2items(
     :return:
     """
     items = response.extract(engine=engine, rules=rules)
-    pandora.clean_rows(*items, rename=rename, default=default, factory=factory, show=show)
+    pandora.clean_rows(
+        *items, rename=rename, default=default, factory=factory, show=show
+    )
     return Items(items)
 
 
 def source2items(
-        obj: Union[str, bytes, dict, list],
-        engine: Union[str, Callable],
-        rules: dict,
-        rename: dict = None,
-        default: dict = None,
-        factory: dict = None,
-        show: dict = None,
+    obj: Union[str, bytes, dict, list],
+    engine: Union[str, Callable],
+    rules: dict,
+    rename: dict = None,
+    default: dict = None,
+    factory: dict = None,
+    show: dict = None,
 ):
     def ensure_bytes(_obj):
         if isinstance(_obj, str):
@@ -94,11 +96,16 @@ def source2items(
         rename=rename,
         default=default,
         factory=factory,
-        show=show
+        show=show,
     )
 
 
-def curl2spider(curl: str, path: str, name: str = "MySpider", form: Literal['form', 'template'] = "form"):
+def curl2spider(
+    curl: str,
+    path: str,
+    name: str = "MySpider",
+    form: Literal["form", "template"] = "form",
+):
     """
     通过 curl 生成爬虫模板文件
 
@@ -109,29 +116,34 @@ def curl2spider(curl: str, path: str, name: str = "MySpider", form: Literal['for
     :return:
     """
     request = Request.from_curl(curl)
-    tpath = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tpls", "spider", form + ".tpl")
+    tpath = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "tpls", "spider", form + ".tpl"
+    )
     with open(tpath) as f:
         tpl = f.read()
 
-    tpl = tpl.format(**{
-        "SPIDER": name,
-        "URL": request.url,
-        "METHOD": request.method,
-        "PARAMS": request.params,
-        "BODY": request.body,
-        "HEADERS": request.headers,
-        "COOKIES": dict(request.cookies) if request.cookies else None,
-        "OPTIONS": request.options,
-        "ALLOW_REDIRECTS": request.allow_redirects,
-        "PROXIES": request.proxies,
-        "PROXY": request.proxy,
-        "MAX_RETRY": request.max_retry,
-        "USE_SESSION": request.use_session,
-
-    })
+    tpl = tpl.format(
+        **{
+            "SPIDER": name,
+            "URL": request.url,
+            "METHOD": request.method,
+            "PARAMS": request.params,
+            "BODY": request.body,
+            "HEADERS": request.headers,
+            "COOKIES": dict(request.cookies) if request.cookies else None,
+            "OPTIONS": request.options,
+            "ALLOW_REDIRECTS": request.allow_redirects,
+            "PROXIES": request.proxies,
+            "PROXY": request.proxy,
+            "MAX_RETRY": request.max_retry,
+            "USE_SESSION": request.use_session,
+        }
+    )
     target_dir = os.path.dirname(path)
-    target_dir and not os.path.exists(target_dir) and os.makedirs(target_dir, exist_ok=True)
+    target_dir and not os.path.exists(target_dir) and os.makedirs(
+        target_dir, exist_ok=True
+    )
     with open(path, "w") as f:
         f.write(tpl)
 
-    logger.debug(f'生成成功, 路径为: {path}')
+    logger.debug(f"生成成功, 路径为: {path}")

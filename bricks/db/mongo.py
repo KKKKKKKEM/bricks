@@ -9,8 +9,8 @@ from bricks.utils import pandora
 
 pandora.require("pymongo==4.6.0")
 
-import pymongo
-from pymongo import UpdateOne, InsertOne
+import pymongo  # noqa: E402
+from pymongo import UpdateOne, InsertOne  # noqa: E402
 
 
 class Mongo(pymongo.MongoClient):
@@ -20,13 +20,13 @@ class Mongo(pymongo.MongoClient):
     """
 
     def __init__(
-            self,
-            host='127.0.0.1',
-            username=None,
-            password=None,
-            port=27017,
-            database='admin',
-            auth_database=None
+        self,
+        host="127.0.0.1",
+        username=None,
+        password=None,
+        port=27017,
+        database="admin",
+        auth_database=None,
     ):
         """
         实例化 Mongo 工具类
@@ -39,12 +39,23 @@ class Mongo(pymongo.MongoClient):
         :param auth_database: 认证数据库
         """
 
-        auth_database = auth_database or 'admin'
+        auth_database = auth_database or "admin"
 
         if username is None:
             uri = "mongodb://" + host + ":" + str(port) + "/"
         else:
-            uri = "mongodb://" + username + ":" + password + "@" + host + ":" + str(port) + "/" + str(auth_database)
+            uri = (
+                "mongodb://"
+                + username
+                + ":"
+                + password
+                + "@"
+                + host
+                + ":"
+                + str(port)
+                + "/"
+                + str(auth_database)
+            )
 
         self.database = database
         self._db = None
@@ -86,17 +97,17 @@ class Mongo(pymongo.MongoClient):
             map="function() {for (var key in this) { emit(key, null); }}",
             reduce="function(key, stuff) { return null; }",
         )
-        return {i["_id"] for i in r if i['_id'] not in exclude}
+        return {i["_id"] for i in r if i["_id"] not in exclude}
 
     def batch_data(
-            self,
-            collection: str,
-            query: Optional[dict] = None,
-            database: str = None,
-            sort: Optional[List[tuple]] = None,
-            projection: Optional[dict] = None,
-            skip: int = 0,
-            count: int = 1000,
+        self,
+        collection: str,
+        query: Optional[dict] = None,
+        database: str = None,
+        sort: Optional[List[tuple]] = None,
+        projection: Optional[dict] = None,
+        skip: int = 0,
+        count: int = 1000,
     ) -> Iterable[List[dict]]:
         """
         从 collection_name 获取迭代数据
@@ -116,7 +127,7 @@ class Mongo(pymongo.MongoClient):
             if not r:
                 return
 
-            last_value = r['_id']
+            last_value = r["_id"]
         else:
             last_value = None
 
@@ -128,27 +139,29 @@ class Mongo(pymongo.MongoClient):
             pipline = []
             projection and pipline.append({"$project": projection})
             sort_condition and pipline.append({"$sort": sort_condition})
-            query and pipline.append({'$match': query})
+            query and pipline.append({"$match": query})
             last_value and pipline.append({"$match": {"_id": {"$gt": last_value}}})
-            pipline.append({'$limit': count})
-            data: List[dict] = list(self[database][collection].aggregate(pipline, allowDiskUse=True))
+            pipline.append({"$limit": count})
+            data: List[dict] = list(
+                self[database][collection].aggregate(pipline, allowDiskUse=True)
+            )
 
             if not data:
                 return
 
             else:
-                last_value = data[-1]['_id']
+                last_value = data[-1]["_id"]
                 yield data
 
     def iter_data(
-            self,
-            collection: str,
-            query: Optional[dict] = None,
-            projection: Optional[dict] = None,
-            database: str = None,
-            sort: Optional[List[tuple]] = None,
-            skip: int = 0,
-            count: int = 1000,
+        self,
+        collection: str,
+        query: Optional[dict] = None,
+        projection: Optional[dict] = None,
+        database: str = None,
+        sort: Optional[List[tuple]] = None,
+        skip: int = 0,
+        count: int = 1000,
     ) -> Iterable[List[dict]]:
         """
         从 collection_name 获取迭代数据
@@ -168,14 +181,16 @@ class Mongo(pymongo.MongoClient):
         query = query or {}
 
         while True:
-            data = list(self[database][collection].find(
-                filter=query,
-                projection=projection,
-                skip=skip,
-                sort=sort,
-                limit=count,
-                allow_disk_use=True
-            ))
+            data = list(
+                self[database][collection].find(
+                    filter=query,
+                    projection=projection,
+                    skip=skip,
+                    sort=sort,
+                    limit=count,
+                    allow_disk_use=True,
+                )
+            )
             if not data:
                 return
 
@@ -184,12 +199,12 @@ class Mongo(pymongo.MongoClient):
                 skip += len(data)
 
     def write(
-            self,
-            collection,
-            *items: dict,
-            query: Optional[List[str]] = None,
-            database: Optional[str] = None,
-            **kwargs
+        self,
+        collection,
+        *items: dict,
+        query: Optional[List[str]] = None,
+        database: Optional[str] = None,
+        **kwargs,
     ):
         """
         批量更新或者插入
@@ -222,10 +237,10 @@ class Mongo(pymongo.MongoClient):
         """
 
         query = query or []
-        action = kwargs.pop('action', '$set')  # default update operator
-        upsert = kwargs.pop('upsert', True)  # default upsert mode
-        update_op = kwargs.pop('update_op', None) or UpdateOne
-        insert_op = kwargs.pop('insert_op', None) or InsertOne
+        action = kwargs.pop("action", "$set")  # default update operator
+        upsert = kwargs.pop("upsert", True)  # default upsert mode
+        update_op = kwargs.pop("update_op", None) or UpdateOne
+        insert_op = kwargs.pop("insert_op", None) or InsertOne
         database = database or self.database
         requests = []
 
@@ -234,26 +249,21 @@ class Mongo(pymongo.MongoClient):
             if query:
                 _query = {i: item.get(i) for i in query}
                 requests.append(
-                    update_op(
-                        filter=_query,
-                        update={action: item},
-                        upsert=upsert
-                    )
+                    update_op(filter=_query, update={action: item}, upsert=upsert)
                 )
             else:
                 requests.append(insert_op(dict(item)))
 
-        return requests and self[database][collection].bulk_write(requests, ordered=False)
+        return requests and self[database][collection].bulk_write(
+            requests, ordered=False
+        )
 
     def create_index(self, collection, *fields, database=None, **kwargs):
-        if f'{collection}{fields}{database}{kwargs}' in self._caches:
+        if f"{collection}{fields}{database}{kwargs}" in self._caches:
             return
         else:
-            self._caches.add(f'{collection}{fields}{database}{kwargs}')
+            self._caches.add(f"{collection}{fields}{database}{kwargs}")
 
-        kwargs.setdefault('background', True)
+        kwargs.setdefault("background", True)
         database = database or self.database
-        self[database][collection].create_index(
-            [(_, 1) for _ in fields],
-            **kwargs
-        )
+        self[database][collection].create_index([(_, 1) for _ in fields], **kwargs)

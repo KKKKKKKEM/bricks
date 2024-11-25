@@ -19,7 +19,6 @@ from bricks.utils import pandora
 
 
 class Item(UserDict):
-
     def __init__(self, data=None, **kwargs) -> None:
         if data is None:
             data = {}
@@ -47,7 +46,6 @@ class Item(UserDict):
 
     @fingerprint.setter
     def fingerprint(self, value):
-
         if isinstance(value, Item):
             value = value.fingerprint
 
@@ -89,13 +87,17 @@ class TaskQueue(metaclass=genesis.MetaClass):
     def py2str(*args):
         return [
             json.dumps(value, default=str, sort_keys=True, ensure_ascii=False)
-            if not isinstance(value, (bytes, str, int, float)) else value
+            if not isinstance(value, (bytes, str, int, float))
+            else value
             for value in args
         ]
 
     @staticmethod
     def str2py(*args: str):
-        return [pandora.json_or_eval(value) if isinstance(value, str) else value for value in args]
+        return [
+            pandora.json_or_eval(value) if isinstance(value, str) else value
+            for value in args
+        ]
 
     def continue_(self, name: str, maxsize=None, interval=1, **kwargs):
         """
@@ -110,7 +112,7 @@ class TaskQueue(metaclass=genesis.MetaClass):
             return
         else:
             while self.size(name, **kwargs) >= maxsize:
-                logger.debug(f'队列内种子数量已经超过 {maxsize}, 暂停投放')
+                logger.debug(f"队列内种子数量已经超过 {maxsize}, 暂停投放")
                 time.sleep(interval)
 
     @staticmethod
@@ -128,7 +130,7 @@ class TaskQueue(metaclass=genesis.MetaClass):
         if name.endswith(f":{_type}"):
             return name
         else:
-            return f'{name}:{_type}'
+            return f"{name}:{_type}"
 
     def is_empty(self, name: str, **kwargs) -> bool:
         """
@@ -138,10 +140,12 @@ class TaskQueue(metaclass=genesis.MetaClass):
         :param kwargs: 传入 size 的其他参数
         :return:
         """
-        threshold = kwargs.get('threshold', 0)
+        threshold = kwargs.get("threshold", 0)
         return self.size(name, **kwargs) <= threshold
 
-    def size(self, *names: str, qtypes: tuple = ('current', 'temp', 'failure'), **kwargs) -> int:
+    def size(
+        self, *names: str, qtypes: tuple = ("current", "temp", "failure"), **kwargs
+    ) -> int:
         """
         获取队列大小
 
@@ -198,14 +202,19 @@ class TaskQueue(metaclass=genesis.MetaClass):
     def _when_replace(self, func):  # noqa
         def inner(name, *values, **kwargs):
             values = [
-                [(self.py2str(i.fingerprint)[0] if isinstance(i, Item) else i) for i in value]
+                [
+                    (self.py2str(i.fingerprint)[0] if isinstance(i, Item) else i)
+                    for i in value
+                ]
                 for value in values
             ]
             return func(name, *values, **kwargs)
 
         return inner
 
-    def clear(self, *names, qtypes=('current', 'temp', "failure", "lock", "record"), **kwargs):
+    def clear(
+        self, *names, qtypes=("current", "temp", "failure", "lock", "record"), **kwargs
+    ):
         """
         清空任务队列
 
@@ -249,7 +258,13 @@ class TaskQueue(metaclass=genesis.MetaClass):
 
     def _when_put(self, func):  # noqa
         def inner(name, *values, **kwargs):
-            return func(name, *self.py2str(*[i.fingerprint if isinstance(i, Item) else i for i in values]), **kwargs)
+            return func(
+                name,
+                *self.py2str(
+                    *[i.fingerprint if isinstance(i, Item) else i for i in values]
+                ),
+                **kwargs,
+            )
 
         return inner
 
@@ -266,7 +281,13 @@ class TaskQueue(metaclass=genesis.MetaClass):
 
     def _when_remove(self, func):  # noqa
         def inner(name, *values, **kwargs):
-            return func(name, *self.py2str(*[i.fingerprint if isinstance(i, Item) else i for i in values]), **kwargs)
+            return func(
+                name,
+                *self.py2str(
+                    *[i.fingerprint if isinstance(i, Item) else i for i in values]
+                ),
+                **kwargs,
+            )
 
         return inner
 
@@ -275,6 +296,6 @@ class TaskQueue(metaclass=genesis.MetaClass):
 
 
 # 必须在最后导入, 不然会出现循环导入
-from bricks.lib.queues.smart import SmartQueue  # noqa: E402
-from bricks.lib.queues.redis_ import RedisQueue  # noqa: E402
-from bricks.lib.queues.local import LocalQueue  # noqa: E402
+from bricks.lib.queues.local import LocalQueue  # noqa: F401 E402
+from bricks.lib.queues.redis_ import RedisQueue  # noqa: F401 E402
+from bricks.lib.queues.smart import SmartQueue  # noqa: F401 E402

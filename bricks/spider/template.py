@@ -46,8 +46,7 @@ class Context(air.Context):
         return self.seeds.setdefault("$config", 0)
 
 
-class Task(_events.Task, RenderNode):
-    ...
+class Task(_events.Task, RenderNode): ...
 
 
 @dataclass
@@ -57,7 +56,7 @@ class Download(RenderNode):
     # 请求 URL 参数
     params: Optional[dict] = None
     # 请求方法, 默认 GET
-    method: str = 'GET'
+    method: str = "GET"
     # body: 请求 Body, 支持字典 / 字符串, 传入为字典的时候, 具体编码方式看 headers 里面的 Content - type
     # 请求的 body, 全部设置为字典时需要和 headers 配合, 规则如下
     # 如果是 json 格式, headers 里面设置 Content-Type 为 application/json
@@ -107,7 +106,7 @@ class Download(RenderNode):
             ok=self.ok,
             retry=self.retry,
             max_retry=self.max_retry,
-            use_session=self.use_session
+            use_session=self.use_session,
         )
 
 
@@ -164,7 +163,7 @@ class Spider(air.Spider):
                 args=node_args,
                 kwargs={**kwargs, **node_kwargs},
                 annotations={Context: context},
-                namespace={"context": context}
+                namespace={"context": context},
             )
             layout = layout.render(seeds)
 
@@ -215,14 +214,14 @@ class Spider(air.Spider):
                     Context: context,
                     Response: context.response,
                     Request: context.request,
-                    Item: context.seeds
+                    Item: context.seeds,
                 },
                 namespace={
                     "context": context,
                     "response": context.response,
                     "request": context.request,
-                    "seeds": context.seeds
-                }
+                    "seeds": context.seeds,
+                },
             )
         else:
             if not callable(engine):
@@ -236,14 +235,14 @@ class Spider(air.Spider):
                     Context: context,
                     Response: context.response,
                     Request: context.request,
-                    Item: context.seeds
+                    Item: context.seeds,
                 },
                 namespace={
                     "context": context,
                     "response": context.response,
                     "request": context.request,
-                    "seeds": context.seeds
-                }
+                    "seeds": context.seeds,
+                },
             )
 
         pandora.clean_rows(
@@ -272,25 +271,28 @@ class Spider(air.Spider):
                         Response: context.response,
                         Request: context.request,
                         Item: context.seeds,
-                        Items: context.items
+                        Items: context.items,
                     },
                     namespace={
                         "context": context,
                         "response": context.response,
                         "request": context.request,
                         "seeds": context.seeds,
-                        "items": context.items
-                    }
+                        "items": context.items,
+                    },
                 )
 
             elif isinstance(node.match, str):
-                ok = eval(node.match, {
-                    "context": context,
-                    "response": context.response,
-                    "request": context.request,
-                    "seeds": context.seeds,
-                    "items": context.items
-                })
+                ok = eval(
+                    node.match,
+                    {
+                        "context": context,
+                        "response": context.response,
+                        "request": context.request,
+                        "seeds": context.seeds,
+                        "items": context.items,
+                    },
+                )
 
             else:
                 ok = True
@@ -319,15 +321,15 @@ class Spider(air.Spider):
                         Response: context.response,
                         Request: context.request,
                         Item: context.seeds,
-                        Items: context.items
+                        Items: context.items,
                     },
                     namespace={
                         "context": context,
                         "response": context.response,
                         "request": context.request,
                         "seeds": context.seeds,
-                        "items": context.items
-                    }
+                        "items": context.items,
+                    },
                 )
             finally:
                 context.items = backup

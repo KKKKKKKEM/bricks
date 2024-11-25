@@ -53,18 +53,17 @@ class TSTATE(enum.Enum):
 
 
 class BaseTrigger:
-
     def __init__(
-            self,
-            exprs: str,
-            ref: Union[str, Callable] = None,
-            args: Optional[list] = None,
-            kwargs: Optional[dict] = None,
-            begin: Optional[Union[str, int, arrow.Arrow]] = None,
-            until: Optional[Union[str, int, arrow.Arrow]] = None,
-            raise_on_error: bool = False,
-            name: Optional[str] = None,
-            mode: int = 0,
+        self,
+        exprs: str,
+        ref: Union[str, Callable] = None,
+        args: Optional[list] = None,
+        kwargs: Optional[dict] = None,
+        begin: Optional[Union[str, int, arrow.Arrow]] = None,
+        until: Optional[Union[str, int, arrow.Arrow]] = None,
+        raise_on_error: bool = False,
+        name: Optional[str] = None,
+        mode: int = 0,
     ):
         self.exprs = exprs.strip()
         self.ref = pandora.load_objects(ref)
@@ -99,13 +98,14 @@ class BaseTrigger:
             return
 
         def main():
-
             try:
-                if isinstance(self.ref, str): self.ref = pandora.load_objects(self.ref)
+                if isinstance(self.ref, str):
+                    self.ref = pandora.load_objects(self.ref)
                 self._result = self.ref(*self.args, **self.kwargs)
             except Exception as e:
                 logger.exception(e)
-                if self.raise_on_error: raise e
+                if self.raise_on_error:
+                    raise e
                 self._result = e
 
         if self.mode == 3:
@@ -131,12 +131,7 @@ class BaseTrigger:
         else:
             return self._result
 
-    def do(
-            self,
-            ref: Union[str, Callable],
-            *args,
-            **kwargs
-    ):
+    def do(self, ref: Union[str, Callable], *args, **kwargs):
         self.next_fire_time  # noqa
         self.ref = pandora.load_objects(ref)
         self.args = args or []
@@ -150,13 +145,19 @@ class BaseTrigger:
 
         :return:
         """
-        return max([arrow.Arrow.now(), self.begin]) if self.begin else arrow.Arrow.now() >= self.next_fire_time
+        return (
+            max([arrow.Arrow.now(), self.begin])
+            if self.begin
+            else arrow.Arrow.now() >= self.next_fire_time
+        )
 
     @property
     def next_fire_time(self):
         if not self._next_fire_time:
             self._next_fire_time = self.get_next_fire_time(
-                max([arrow.Arrow.now(), self.begin]) if self.begin else arrow.Arrow.now()
+                max([arrow.Arrow.now(), self.begin])
+                if self.begin
+                else arrow.Arrow.now()
             )
 
         return self._next_fire_time
@@ -168,7 +169,6 @@ class BaseTrigger:
         return self.next_fire_time > other.next_fire_time
 
     def __str__(self):
-
         name = self.name or self.ref.__doc__ or self.ref.__name__
         next_fire_time = self.next_fire_time
         last_fire_time = self._last_fire_time
@@ -211,45 +211,59 @@ class CronTrigger(BaseTrigger):
         def _r2range(x: str, _range):
             ret = []
             for rule in re.findall(
-                    "[*]/\d+|"  # */N
-                    "\d+#\d+|"  # N#A
-
-                    "L[+-]\d+-L[+-]\d+/\d+|"  # L-N - L-N / N
-                    "L[+-]\d+-L[+-]\d+|"  # L-N - L-N
-
-                    "L[+-]\d+-L/\d+|"  # L-N - L / N
-                    "L[+-]\d+-L|"  # L-N - L
-
-                    "\d+-L[+-]\d+/\d+|"  # N - L-N / N
-                    "\d+-L[+-]\d+|"  # N - L-N
-
-                    "L[+-]\d+/\d+|"  # L-N / N
-                    "L[+-]\d+|"  # L-N
-
-                    "L|"  # L
-
-                    "\d+-\d+/\d+|"  # N-N/N
-                    "\d+/\d+|"  # N/N
-                    "\d+-\d+|"  # N-N
-                    "\d+",  # N
-                    x
+                "[*]/\d+|"  # */N
+                "\d+#\d+|"  # N#A
+                "L[+-]\d+-L[+-]\d+/\d+|"  # L-N - L-N / N
+                "L[+-]\d+-L[+-]\d+|"  # L-N - L-N
+                "L[+-]\d+-L/\d+|"  # L-N - L / N
+                "L[+-]\d+-L|"  # L-N - L
+                "\d+-L[+-]\d+/\d+|"  # N - L-N / N
+                "\d+-L[+-]\d+|"  # N - L-N
+                "L[+-]\d+/\d+|"  # L-N / N
+                "L[+-]\d+|"  # L-N
+                "L|"  # L
+                "\d+-\d+/\d+|"  # N-N/N
+                "\d+/\d+|"  # N/N
+                "\d+-\d+|"  # N-N
+                "\d+",  # N
+                x,
             ):
                 if "L" in rule or "#" in rule:
                     ret.append(rule)
 
                 # */N
-                elif re.match('[*]/\d+', rule):
-                    ret.extend(eval(re.sub('[*]/(\d+)', f'range({_range[0]}, {_range[-1] + 1}, \\1)', rule)))
+                elif re.match("[*]/\d+", rule):
+                    ret.extend(
+                        eval(
+                            re.sub(
+                                "[*]/(\d+)",
+                                f"range({_range[0]}, {_range[-1] + 1}, \\1)",
+                                rule,
+                            )
+                        )
+                    )
                 # N-N/N
-                elif re.match('\d+-\d+/\d+', rule):
-                    ret.extend(eval(re.sub('(\d+)-(\d+)/(\d+)', f'range(\\1, \\2+1, \\3)', rule)))
+                elif re.match("\d+-\d+/\d+", rule):
+                    ret.extend(
+                        eval(
+                            re.sub("(\d+)-(\d+)/(\d+)", "range(\\1, \\2+1, \\3)", rule)
+                        )
+                    )
                 # N/N
-                elif re.match('\d+/\d+', rule):
-                    ret.extend(eval(re.sub('(\d+)/(\d+)', f'range(\\1, {_range[-1] + 1}, \\2)', rule)))
+                elif re.match("\d+/\d+", rule):
+                    ret.extend(
+                        eval(
+                            re.sub(
+                                "(\d+)/(\d+)",
+                                f"range(\\1, {_range[-1] + 1}, \\2)",
+                                rule,
+                            )
+                        )
+                    )
 
                 # N-N
-                elif re.match('\d+-\d+', rule):
-                    ret.extend(eval(re.sub('(\d+)-(\d+)', f'range(\\1, \\2+1)', rule)))
+                elif re.match("\d+-\d+", rule):
+                    ret.extend(eval(re.sub("(\d+)-(\d+)", "range(\\1, \\2+1)", rule)))
 
                 # N
                 else:
@@ -279,38 +293,61 @@ class CronTrigger(BaseTrigger):
             x = str(x)
             # L-N - L-N / N
             if re.match("L[+-]\d+-L[+-]\d+/\d+", x):
-                return eval(re.sub('L([+-]\d+)-L([+-]\d+)/(\d+)', f"range({length}\\1, {length}\\2+1, \\3)", x))
+                return eval(
+                    re.sub(
+                        "L([+-]\d+)-L([+-]\d+)/(\d+)",
+                        f"range({length}\\1, {length}\\2+1, \\3)",
+                        x,
+                    )
+                )
 
             # L-N - L-N
             elif re.match("L[+-]\d+-L[+-]\d+", x):
-                return eval(re.sub('L([+-]\d+)-L([+-]\d+)', f"range({length}\\1, {length}\\2+1)", x))
+                return eval(
+                    re.sub(
+                        "L([+-]\d+)-L([+-]\d+)", f"range({length}\\1, {length}\\2+1)", x
+                    )
+                )
 
             # L-N - L / N
             elif re.match("L[+-]\d+-L/\d+", x):
-                return eval(re.sub('L([+-]\d+)-L/(\d+)', f"range({length}\\1, {length}+1, \\2)", x))
+                return eval(
+                    re.sub(
+                        "L([+-]\d+)-L/(\d+)", f"range({length}\\1, {length}+1, \\2)", x
+                    )
+                )
             # L-N - L
             elif re.match("L[+-]\d+-L", x):
-                return eval(re.sub('L([+-]\d+)-L', f"range({length}\\1, {length}+1)", x))
+                return eval(
+                    re.sub("L([+-]\d+)-L", f"range({length}\\1, {length}+1)", x)
+                )
 
             # N - L-N / N
             elif re.match("\d+-L[+-]\d+/\d+", x):
-                return eval(re.sub('(\d+)-L([+-]\d+)/(\d+)', f"range(\\1, {length}\\2+1, \\3)", x))
+                return eval(
+                    re.sub(
+                        "(\d+)-L([+-]\d+)/(\d+)", f"range(\\1, {length}\\2+1, \\3)", x
+                    )
+                )
 
             # N - L-N
             elif re.match("\d+-L[+-]\d+", x):
-                return eval(re.sub('(\d+)-L([+-]\d+)', f"range(\\1, {length}\\2+1)", x))
+                return eval(re.sub("(\d+)-L([+-]\d+)", f"range(\\1, {length}\\2+1)", x))
 
             # L-N / N
             elif re.match("L[+-]\d+/\d+", x):
-                return eval(re.sub('L([+-]\d+)/(\d+)', f"range({length}\\1, {length}+1, \\2)", x))
+                return eval(
+                    re.sub(
+                        "L([+-]\d+)/(\d+)", f"range({length}\\1, {length}+1, \\2)", x
+                    )
+                )
 
             # L-N
             elif re.match("L[+-]\d+", x):
-                return [eval(re.sub('L([+-]\d+)', f"{length}\\1", x))]
+                return [eval(re.sub("L([+-]\d+)", f"{length}\\1", x))]
 
             # L
             elif x == "L":
-
                 return [length]
 
             else:
@@ -320,37 +357,33 @@ class CronTrigger(BaseTrigger):
             target = now
 
             while True:
-
                 _real = {}
 
                 days = target.statistics.number_of_days_for_this_month
                 for k, v in rules.items():
-                    if k == 'days':
-                        v = [
-                            d
-                            for day in v for d in _fmt_days(day, days)
-                        ]
+                    if k == "days":
+                        v = [d for day in v for d in _fmt_days(day, days)]
 
                     _real[k] = list(sorted(v))
 
                 for _product in itertools.product(*reversed(_real.values())):
-                    target = target.replace(**dict(zip([name[:-1] for name in _real.keys()][::-1], _product)))
-                    if (
-                            target > now and
-                            (
-                                    target.isoweekday() in weekdays
-                                    or f'{target.isoweekday()}#{target.day // 7 + 1}' in weekdays
-                            )
+                    target = target.replace(
+                        **dict(
+                            zip([name[:-1] for name in _real.keys()][::-1], _product)
+                        )
+                    )
+                    if target > now and (
+                        target.isoweekday() in weekdays
+                        or f"{target.isoweekday()}#{target.day // 7 + 1}" in weekdays
                     ):
                         return target
                 else:
-
                     for index, k in enumerate(_units):
                         if k in _real:
                             next_unit = _units[index - 1]
                             break
                     else:
-                        next_unit = ''
+                        next_unit = ""
 
                     target = target.shift(**{next_unit: 1})
 
@@ -359,7 +392,6 @@ class CronTrigger(BaseTrigger):
 
 
 class IntervalTrigger(BaseTrigger):
-
     def get_next_fire_time(self, now: arrow.Arrow):
         rules = {k: float(v) for k, v in urllib.parse.parse_qsl(self.exprs)}
         return now.shift(**rules)
@@ -370,7 +402,8 @@ class DateTrigger(BaseTrigger):
         return arrow.Arrow.get(self.exprs)
 
     def run(self):
-        if arrow.Arrow.now() > self.next_fire_time: return TSTATE.CANCEL
+        if arrow.Arrow.now() > self.next_fire_time:
+            return TSTATE.CANCEL
         super().run()
         return TSTATE.CANCEL
 
@@ -396,10 +429,10 @@ class Scheduler:
         return trigger
 
     def add(
-            self,
-            form: Union[Literal['cron', 'date', 'interval'], BaseTrigger],
-            exprs: str,
-            **options
+        self,
+        form: Union[Literal["cron", "date", "interval"], BaseTrigger],
+        exprs: str,
+        **options,
     ) -> BaseTrigger:
         if isinstance(form, str):
             f = getattr(self, form)
@@ -408,7 +441,6 @@ class Scheduler:
             return self.bind_trigger(form, exprs, **options)
 
     def run(self, debug=True, callback: Optional[Callable] = None):
-
         if not self._is_running.is_set():
             self._is_running.set()
 
@@ -421,12 +453,11 @@ class Scheduler:
                 try:
                     runnable_jobs = (job for job in self.jobs if job.should_run)
                     for job in sorted(runnable_jobs):
-
                         self.run_job(job)
                         run_callback = True
 
                     else:
-                        debug and self.jobs and logger.debug(f'-> {min(self.jobs)}')
+                        debug and self.jobs and logger.debug(f"-> {min(self.jobs)}")
                         run_callback and self.jobs and callback and callback()
 
                     self.wait()
@@ -441,7 +472,9 @@ class Scheduler:
             self._is_running.clear()
 
     def start(self, debug=True, callback: Optional[Callable] = None):
-        threading.Thread(target=self.run, kwargs={"debug": debug, "callback": callback}, daemon=True).start()
+        threading.Thread(
+            target=self.run, kwargs={"debug": debug, "callback": callback}, daemon=True
+        ).start()
         threading.Thread(target=self._shutdown.wait).start()
         return self
 
@@ -492,15 +525,16 @@ class Scheduler:
 
     def run_job(self, job: BaseTrigger):
         res = job.run()
-        if res == TSTATE.CANCEL: self.jobs.remove(job)
+        if res == TSTATE.CANCEL:
+            self.jobs.remove(job)
 
     def submit(
-            self,
-            func: Union[str, Callable],
-            args: list = None,
-            kwargs: dict = None,
-            jobs: Union[BaseTrigger, List[BaseTrigger], dict, List[dict]] = None,
-            start_now: bool = False,
+        self,
+        func: Union[str, Callable],
+        args: list = None,
+        kwargs: dict = None,
+        jobs: Union[BaseTrigger, List[BaseTrigger], dict, List[dict]] = None,
+        start_now: bool = False,
     ):
         args = args or []
         kwargs = kwargs or {}
@@ -514,10 +548,11 @@ class Scheduler:
             job.do(func, *args, **kwargs)
             job not in self.jobs and self.jobs.append(job)
         else:
-            if start_now: func(*args, **kwargs)
+            if start_now:
+                func(*args, **kwargs)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     s = Scheduler()
-    s.add("interval", 'seconds=1').do(lambda: (time.sleep(5), print('xxx')))
+    s.add("interval", "seconds=1").do(lambda: (time.sleep(5), print("xxx")))
     s.run()

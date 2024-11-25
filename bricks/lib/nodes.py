@@ -11,7 +11,7 @@ from typing import Any, Callable, Optional, Literal, Mapping, Union, List, Tuple
 
 from bricks.utils import pandora
 
-FORMAT_REGEX = re.compile(r'{(\w+)(?::(\w+))?}')
+FORMAT_REGEX = re.compile(r"{(\w+)(?::(\w+))?}")
 
 
 class UnRendered:
@@ -25,8 +25,7 @@ _adapters: dict = {
     "float": float,
     "list": pandora.json_or_eval,
     "dict": pandora.json_or_eval,
-    "json": lambda value: json.dumps(pandora.json_or_eval(value), ensure_ascii=False)
-
+    "json": lambda value: json.dumps(pandora.json_or_eval(value), ensure_ascii=False),
 }
 
 
@@ -36,7 +35,9 @@ class RenderNode:
     miss: Literal["fix", "raise", "ignore"] = "fix"
 
     # 不需要渲染的字段
-    un_rendered: Union[List[str], Tuple[str]] = dataclasses.field(default_factory=lambda: [])
+    un_rendered: Union[List[str], Tuple[str]] = dataclasses.field(
+        default_factory=lambda: []
+    )
 
     # 适配器, 可以改造渲染语法
     adapters: dict = dataclasses.field(default_factory=lambda: {})
@@ -50,15 +51,13 @@ class RenderNode:
                 try:
                     return value.format(**base)
                 except (ValueError, TypeError):
-
                     placeholders = FORMAT_REGEX.findall(value)
                     for placeholder, type_str in placeholders:
-
                         if placeholder not in base or not placeholder:
                             if self.miss == "raise":
                                 raise ValueError(f"Missing key in base: {placeholder}")
 
-                            elif self.miss == 'ignore':
+                            elif self.miss == "ignore":
                                 return value
 
                             else:
@@ -71,7 +70,11 @@ class RenderNode:
                         else:
                             tpl = f"{{{placeholder}}}"
 
-                        value = self.run_adapter(value.replace(tpl, str(placeholder_value)), type_str, base=base)
+                        value = self.run_adapter(
+                            value.replace(tpl, str(placeholder_value)),
+                            type_str,
+                            base=base,
+                        )
 
                     return value
 
@@ -79,7 +82,7 @@ class RenderNode:
                     if self.miss == "raise":
                         raise ValueError(f"Missing key in base: {e}")
 
-                    elif self.miss == 'ignore':
+                    elif self.miss == "ignore":
                         return value
 
                     else:
@@ -87,11 +90,15 @@ class RenderNode:
 
         elif isinstance(value, (list, tuple, set)):
             return type(value)(
-                self.format(item, base, ident=".".join([ident, str(idx)]).strip(".")) for idx, item in enumerate(value)
+                self.format(item, base, ident=".".join([ident, str(idx)]).strip("."))
+                for idx, item in enumerate(value)
             )
 
         elif isinstance(value, dict):
-            return {k: self.format(v, base, ident=".".join([ident, str(k)]).strip(".")) for k, v in value.items()}
+            return {
+                k: self.format(v, base, ident=".".join([ident, str(k)]).strip("."))
+                for k, v in value.items()
+            }
 
         elif isinstance(value, UnRendered):
             return value.value
@@ -132,7 +139,7 @@ class RenderNode:
 @dataclasses.dataclass
 class LinkNode:
     root: Callable = None
-    prev: Optional['LinkNode'] = None
+    prev: Optional["LinkNode"] = None
     callback: Optional[Callable] = None
 
     def __setattr__(self, key, value):
@@ -145,7 +152,7 @@ class LinkNode:
         return bool(self.root)
 
     def __str__(self):
-        return f'LinkNode({self.root})'
+        return f"LinkNode({self.root})"
 
     def __eq__(self, other):
         if not isinstance(other, LinkNode):

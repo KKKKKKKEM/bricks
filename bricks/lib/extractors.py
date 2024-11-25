@@ -20,19 +20,18 @@ from bricks.utils import pandora
 
 
 class Rule:
-
     def __init__(
-            self,
-            exprs: Optional[Union[str, Callable]] = "",
-            condition: Optional[Callable] = None,
-            pre_script: Optional[Callable] = None,
-            post_script: Optional[Callable] = None,
-            is_array: Optional[bool] = None,
-            acquire: bool = True,
-            options: Optional[dict] = None,
-            const: Optional[Any] = ...,
-            default: Optional[Any] = None,
-            engine: Optional[Union[Type["Extractor"], str]] = None,
+        self,
+        exprs: Optional[Union[str, Callable]] = "",
+        condition: Optional[Callable] = None,
+        pre_script: Optional[Callable] = None,
+        post_script: Optional[Callable] = None,
+        is_array: Optional[bool] = None,
+        acquire: bool = True,
+        options: Optional[dict] = None,
+        const: Optional[Any] = ...,
+        default: Optional[Any] = None,
+        engine: Optional[Union[Type["Extractor"], str]] = None,
     ):
         self.exprs = exprs
         self.condition = condition
@@ -58,11 +57,13 @@ class Rule:
         if self.engine or not value:
             return
 
-        if isinstance(value, Extractor) or (inspect.isclass(value) and issubclass(value, Extractor)):
+        if isinstance(value, Extractor) or (
+            inspect.isclass(value) and issubclass(value, Extractor)
+        ):
             self.engine = value
 
         elif isinstance(value, str):
-            self.engine = globals()[f'{value.title()}Extractor']
+            self.engine = globals()[f"{value.title()}Extractor"]
 
         else:
             raise ValueError("engine must be a string or Extractor instance")
@@ -122,10 +123,10 @@ class Group:
     """
 
     def __init__(
-            self,
-            exprs: List[Union[Rule, 'Group']],
-            pre_script: Optional[Callable] = None,
-            post_script: Optional[Callable] = None,
+        self,
+        exprs: List[Union[Rule, "Group"]],
+        pre_script: Optional[Callable] = None,
+        post_script: Optional[Callable] = None,
     ):
         self.exprs = pandora.iterable(exprs)
         self.pre_script = pre_script
@@ -143,7 +144,7 @@ class Group:
             except Extractor.Empty:
                 pass
         else:
-            if strict == 'ignore':
+            if strict == "ignore":
                 res = self.exprs[-1].default
             else:
                 raise Extractor.Empty
@@ -178,8 +179,7 @@ class Extractor:
     is_array = False
     empty = (None,)
 
-    class Empty(Exception):
-        ...
+    class Empty(Exception): ...
 
     @classmethod
     def extract(cls, obj: Any, exprs: str, **kwargs):
@@ -191,11 +191,7 @@ class Extractor:
 
     @classmethod
     def extract_first(cls, obj: Any, exprs: str, default: Any = None, **kwargs):
-        res = cls.extract(
-            obj=obj,
-            exprs=exprs,
-            **kwargs
-        )
+        res = cls.extract(obj=obj, exprs=exprs, **kwargs)
         return pandora.first(res, default=default)
 
     @classmethod
@@ -209,11 +205,12 @@ class Extractor:
             vessel = tree()
 
             for item in cls._match(
-                    obj=[obj],
-                    rules=rule,
+                obj=[obj],
+                rules=rule,
             ):
                 key, value, rkey1, rkey2, rkey3 = item
-                if value is not None: vessel[rkey1][rkey2][rkey3][key] = value
+                if value is not None:
+                    vessel[rkey1][rkey2][rkey3][key] = value
 
             cleans = []
             for k1, v1 in vessel.items():
@@ -227,13 +224,16 @@ class Extractor:
                                 hit = True
                                 v3.update({**v2, **v3})
 
-                        if not hit: d2.update({k2: v2})
+                        if not hit:
+                            d2.update({k2: v2})
 
                 else:
                     # 不同层级执行笛卡尔积
                     cleans = [
                         {**i[1], **i[0]}
-                        for i in itertools.product(v1[skeys[-1]].values(), cleans or [{}])
+                        for i in itertools.product(
+                            v1[skeys[-1]].values(), cleans or [{}]
+                        )
                     ]
 
             if isinstance(rules, list):
@@ -245,7 +245,8 @@ class Extractor:
 
     @classmethod
     def _match(cls, obj: Any, rules: dict, rkey="", pkey="", deep=0):
-        if obj in [None, []]: obj = [None]
+        if obj in [None, []]:
+            obj = [None]
         obj = pandora.iterable(obj, enforce=object, exclude=(set, list, tuple))
 
         def get_rkey(*keys, splice="."):
@@ -254,37 +255,39 @@ class Extractor:
         number_of_digits = math.ceil(math.log(len(obj), 10))
 
         for index, _obj in enumerate(obj):
-
             for k, v in rules.items():
-
                 if not isinstance(v, dict):
                     rule = Rule.parse(v, engine=cls)
                     _rkey = (
                         rkey.split(".")[0],
                         pkey.count(".") + deep,
-                        get_rkey(pkey, str(index).zfill(number_of_digits)) if deep else pkey
+                        get_rkey(pkey, str(index).zfill(number_of_digits))
+                        if deep
+                        else pkey,
                     )
 
-                    if rule.exprs == '@index':
+                    if rule.exprs == "@index":
                         yield k, index, *_rkey
 
-                    elif rule.exprs == '@ts':
+                    elif rule.exprs == "@ts":
                         yield k, time.time(), *_rkey
 
-                    elif rule.exprs == '@date':
-                        yield k, time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), *_rkey
+                    elif rule.exprs == "@date":
+                        yield (
+                            k,
+                            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+                            *_rkey,
+                        )
 
                     elif rule.is_work(_obj):
                         _unpack_obj = rule.apply(_obj)
 
-                        if k == '@unpack':
-
+                        if k == "@unpack":
                             if isinstance(_unpack_obj, dict):
                                 for _k, _v in _unpack_obj.items():
                                     yield _k, _v, *_rkey
 
                             elif isinstance(_unpack_obj, (list, tuple, set)):
-
                                 for _k, _v in enumerate(_unpack_obj):
                                     yield _k, _v, *_rkey
 
@@ -297,17 +300,16 @@ class Extractor:
 
                 # 代表进入下一级别 / 提取功能参数
                 else:
-
                     rule = Rule.parse(k, engine=cls)
                     if rule.is_work(_obj):
                         sub_obj = rule.apply(_obj)
 
                         for i in cls._match(
-                                obj=sub_obj,
-                                rules=v,
-                                rkey=get_rkey(rkey, rule.exprs),
-                                pkey=get_rkey(pkey, str(index).zfill(number_of_digits)),
-                                deep=bool(isinstance(sub_obj, list))
+                            obj=sub_obj,
+                            rules=v,
+                            rkey=get_rkey(rkey, rule.exprs),
+                            pkey=get_rkey(pkey, str(index).zfill(number_of_digits)),
+                            deep=bool(isinstance(sub_obj, list)),
                         ):
                             yield i
 
@@ -317,18 +319,20 @@ class XpathExtractor(Extractor):
     xpath 提取器
 
     """
+
     is_array = True
     empty = (None, [])
 
     @classmethod
-    def extract(cls, obj: Union[etree.HTML, str], exprs: str, parser=None, base_url=None):
+    def extract(
+        cls, obj: Union[etree.HTML, str], exprs: str, parser=None, base_url=None
+    ):
         obj = cls.fmt(obj, parser=parser, base_url=base_url)
         ret = obj.xpath(exprs, parser=parser, base_url=base_url)
         return [i.strip() if isinstance(i, str) else i for i in ret]
 
     @classmethod
     def fmt(cls, obj, parser=None, base_url=None):
-
         if isinstance(obj, str):
             if obj.strip().startswith("<?xml "):
                 obj = etree.fromstring(obj, parser=parser, base_url=base_url)
@@ -342,11 +346,19 @@ class JsonExtractor(Extractor):
     json jmespath 提取器
 
     """
+
     is_array = False
     empty = (None,)
 
     @classmethod
-    def extract(cls, obj: Union[dict, list, str], exprs: str, jsonp=False, errors='strict', options=None):
+    def extract(
+        cls,
+        obj: Union[dict, list, str],
+        exprs: str,
+        jsonp=False,
+        errors="strict",
+        options=None,
+    ):
         obj = cls.fmt(obj, jsonp=jsonp, errors=errors)
         ret = jmespath.search(
             data=obj,
@@ -358,10 +370,7 @@ class JsonExtractor(Extractor):
     @staticmethod
     def fmt(obj, **kwargs):
         if isinstance(obj, str):
-            obj = pandora.json_or_eval(
-                text=obj,
-                **kwargs
-            )
+            obj = pandora.json_or_eval(text=obj, **kwargs)
 
         return obj
 
@@ -371,26 +380,28 @@ class JsonpathExtractor(Extractor):
     empty = (None,)
 
     @classmethod
-    def extract(cls, obj: Union[dict, list, str], exprs: str, jsonp=False, errors='strict', result_type='VALUE',
-                debug=0, use_eval=True):
+    def extract(
+        cls,
+        obj: Union[dict, list, str],
+        exprs: str,
+        jsonp=False,
+        errors="strict",
+        result_type="VALUE",
+        debug=0,
+        use_eval=True,
+    ):
         obj = cls.fmt(obj, jsonp=jsonp, errors=errors)
         ret = jsonpath.jsonpath(
-            obj=obj,
-            expr=exprs,
-            result_type=result_type,
-            debug=debug,
-            use_eval=use_eval
+            obj=obj, expr=exprs, result_type=result_type, debug=debug, use_eval=use_eval
         )
-        if ret is False: ret = None
+        if ret is False:
+            ret = None
         return ret
 
     @staticmethod
     def fmt(obj, **kwargs):
         if isinstance(obj, str):
-            obj = pandora.json_or_eval(
-                text=obj,
-                **kwargs
-            )
+            obj = pandora.json_or_eval(text=obj, **kwargs)
 
         return obj
 
@@ -400,6 +411,7 @@ class RegexExtractor(Extractor):
     正则提取器
 
     """
+
     is_array = True
     empty = (None, [], "")
 
@@ -419,15 +431,7 @@ class RegexExtractor(Extractor):
         return obj
 
 
-if __name__ == '__main__':
-    data = {
-        "data": [
-            {"id": i, "name": f"name-{i}"} for i in range(10)
-        ]
-    }
+if __name__ == "__main__":
+    data = {"data": [{"id": i, "name": f"name-{i}"} for i in range(10)]}
 
-    print(JsonExtractor.match(data, {
-        "data": {
-            "id": "id"
-        }
-    }))
+    print(JsonExtractor.match(data, {"data": {"id": "id"}}))

@@ -5,6 +5,7 @@
 @Author  : yintian
 @Desc    : 生产种子插件
 """
+
 import re
 from typing import Optional, Union, List, Literal
 from urllib.parse import urlencode
@@ -23,12 +24,12 @@ def _make_key(query: dict):
 
 
 def by_csv(
-        path: str,
-        query: str = None,
-        batch_size: int = 10000,
-        skip: Union[str, int] = ...,
-        reader_options: Optional[dict] = None,
-        record: Optional[dict] = None,
+    path: str,
+    query: str = None,
+    batch_size: int = 10000,
+    skip: Union[str, int] = ...,
+    reader_options: Optional[dict] = None,
+    record: Optional[dict] = None,
 ):
     """
     从 `CSV` 中获取种子, `csv` 必须有表头，可以使用 `SQL` 进行数据查询
@@ -45,7 +46,7 @@ def by_csv(
     reader_options = reader_options or {}
     if skip is ...:
         if record:
-            skip = 'auto'
+            skip = "auto"
         else:
             skip = 0
 
@@ -55,13 +56,15 @@ def by_csv(
     for file in Reader.get_files(path):
         reader = Reader(file, **reader_options)
 
-        record_key = _make_key({
-            "path": path,
-            "file": file,
-            "query": query,
-            "skip": raw_skip,
-        })
-        if raw_skip == 'auto':
+        record_key = _make_key(
+            {
+                "path": path,
+                "file": file,
+                "query": query,
+                "skip": raw_skip,
+            }
+        )
+        if raw_skip == "auto":
             skip = int(record.get(record_key, 0))
         else:
             skip = raw_skip
@@ -69,6 +72,7 @@ def by_csv(
         if skip != 0:
             # 原来就有 offset
             if OFFSET_PATTERN.search(query):
+
                 def add_skip(match):
                     # 将捕获的数字转换为整数，加上 skip，然后格式化回字符串
                     return f"{match.group(1)}{int(match.group(2)) + skip}"
@@ -90,15 +94,15 @@ def by_csv(
 
 
 def by_mongo(
-        path: str,
-        conn,
-        query: Optional[dict] = None,
-        projection: Optional[dict] = None,
-        database: str = None,
-        batch_size: int = 10000,
-        skip: Union[str, int] = ...,
-        record: Optional[dict] = None,
-        sort: Optional[List[tuple]] = None,
+    path: str,
+    conn,
+    query: Optional[dict] = None,
+    projection: Optional[dict] = None,
+    database: str = None,
+    batch_size: int = 10000,
+    skip: Union[str, int] = ...,
+    record: Optional[dict] = None,
+    sort: Optional[List[tuple]] = None,
 ):
     """
     从 `Mongo` 中加载数据作为种子
@@ -115,40 +119,50 @@ def by_mongo(
     :return:
     """
     from bricks.db.mongo import Mongo
+
     conn: Mongo
     record = record or {}
     if skip is ...:
         if record:
-            skip = 'auto'
+            skip = "auto"
         else:
             skip = 0
 
     raw_skip = skip
-    record_key = _make_key({
-        "path": path,
-        "conn": conn,
-        "query": query,
-        "skip": raw_skip,
-        "database": database,
-        "sort": sort,
-    })
-    if raw_skip == 'auto':
+    record_key = _make_key(
+        {
+            "path": path,
+            "conn": conn,
+            "query": query,
+            "skip": raw_skip,
+            "database": database,
+            "sort": sort,
+        }
+    )
+    if raw_skip == "auto":
         skip = int(record.get(record_key, 0))
     else:
         skip = raw_skip
 
-    for rows in conn.iter_data(collection=path, query=query, skip=skip, count=batch_size, database=database, sort=sort):
+    for rows in conn.iter_data(
+        collection=path,
+        query=query,
+        skip=skip,
+        count=batch_size,
+        database=database,
+        sort=sort,
+    ):
         skip += len(rows)
         record.update({record_key: skip})
         yield rows
 
 
 def by_sqlite(
-        path: str,
-        conn: Sqlite,
-        batch_size: int = 10000,
-        skip: Union[str, int] = ...,
-        record: Optional[dict] = None,
+    path: str,
+    conn: Sqlite,
+    batch_size: int = 10000,
+    skip: Union[str, int] = ...,
+    record: Optional[dict] = None,
 ):
     """
     通过 sqlite 初始化
@@ -163,22 +177,25 @@ def by_sqlite(
     record = record or {}
     if skip is ...:
         if record:
-            skip = 'auto'
+            skip = "auto"
         else:
             skip = 0
 
     raw_skip = skip
-    record_key = _make_key({
-        "path": path,
-        "skip": raw_skip,
-    })
-    if raw_skip == 'auto':
+    record_key = _make_key(
+        {
+            "path": path,
+            "skip": raw_skip,
+        }
+    )
+    if raw_skip == "auto":
         skip = int(record.get(record_key, 0))
     else:
         skip = raw_skip
     if skip != 0:
         # 原来就有 offset
         if OFFSET_PATTERN.search(path):
+
             def add_skip(match):
                 # 将捕获的数字转换为整数，加上 skip，然后格式化回字符串
                 return f"{match.group(1)}{int(match.group(2)) + skip}"
@@ -200,10 +217,10 @@ def by_sqlite(
 
 
 def by_redis(
-        path: str,
-        conn: Redis,
-        batch_size: int = 10000,
-        key_type: Literal["set", "list", "string"] = 'set',
+    path: str,
+    conn: Redis,
+    batch_size: int = 10000,
+    key_type: Literal["set", "list", "string"] = "set",
 ):
     """
     通过 `redis` 初始化种子, 仅支持小批量数据, 不支持断点续投
@@ -214,15 +231,19 @@ def by_redis(
     :param key_type: 存储类型
     :return:
     """
-    assert key_type in ["set", "list", "string"], ValueError(f'不支持的存储类型-{key_type}')
-    assert conn.type(path) == key_type or key_type == 'string', f'读取类型错误-{path}:{conn.type(path)}, 读取类型-{key_type}'
+    assert key_type in ["set", "list", "string"], ValueError(
+        f"不支持的存储类型-{key_type}"
+    )
+    assert (
+        conn.type(path) == key_type or key_type == "string"
+    ), f"读取类型错误-{path}:{conn.type(path)}, 读取类型-{key_type}"
 
     def read():
-        if key_type == 'string':
+        if key_type == "string":
             keys: list = conn.keys(path)
             if keys:
                 return conn.mget(keys)
-        elif key_type == 'list':
+        elif key_type == "list":
             return conn.lrange(path, 0, -1)
         else:
             return list(conn.smembers(path))
@@ -230,12 +251,13 @@ def by_redis(
 
     data = read()
     for i in range(0, len(data), batch_size):
-        _data = data[i: i + batch_size]
+        _data = data[i : i + batch_size]
         _data = [json_or_eval(_, errors="ignore") for _ in _data]
         yield _data
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     from no_views.conn import redis
+
     for _ in by_redis(path="*|*", conn=redis, key_type="string", batch_size=1):
         print(_)

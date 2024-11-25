@@ -49,16 +49,17 @@ class Downloader(AbstractDownloader):
         options = {
             **self.options,
             **request.options.get("$options", {}),
-            'method': request.method.upper(),
-            'headers': request.headers,
-            'cookies': request.cookies,
-            "data": self.parse_data(request)['data'],
-            'files': request.options.get('files'),
-            'auth': request.options.get('auth'),
-            'timeout': 5 if request.timeout is ... else request.timeout,
-            'allow_redirects': False,
-            'proxies': request.proxies and {"http": request.proxies, "https": request.proxies},  # noqa
-            'verify': request.options.get("verify", False),
+            "method": request.method.upper(),
+            "headers": request.headers,
+            "cookies": request.cookies,
+            "data": self.parse_data(request)["data"],
+            "files": request.options.get("files"),
+            "auth": request.options.get("auth"),
+            "timeout": 5 if request.timeout is ... else request.timeout,
+            "allow_redirects": False,
+            "proxies": request.proxies
+            and {"http": request.proxies, "https": request.proxies},  # noqa
+            "verify": request.options.get("verify", False),
         }
 
         next_url = request.real_url
@@ -71,7 +72,10 @@ class Downloader(AbstractDownloader):
         while True:
             assert _redirect_count < 999, "已经超过最大重定向次数: 999"
             response = session.request(**{**options, "url": next_url})
-            last_url, next_url = next_url, response.headers.get('location') or response.headers.get('Location')
+            last_url, next_url = (
+                next_url,
+                response.headers.get("location") or response.headers.get("Location"),
+            )
             if request.allow_redirects and next_url:
                 next_url = urllib.parse.urljoin(response.url, next_url)
                 _redirect_count += 1
@@ -85,11 +89,13 @@ class Downloader(AbstractDownloader):
                         request=Request(
                             url=last_url,
                             method=request.method,
-                            headers=copy.deepcopy(options.get('headers'))
-                        )
+                            headers=copy.deepcopy(options.get("headers")),
+                        ),
                     )
                 )
-                request.options.get('$referer', False) and options['headers'].update(Referer=response.url)
+                request.options.get("$referer", False) and options["headers"].update(
+                    Referer=response.url
+                )
 
             else:
                 res.content = response.content
@@ -105,7 +111,7 @@ class Downloader(AbstractDownloader):
         return requests.Session()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     downloader = Downloader()
     res = downloader.fetch({"url": "http://www.baidu.com"})
     print(res)

@@ -7,7 +7,6 @@ from typing import Mapping
 
 
 class Header(UserDict):
-
     def __init__(self, data=None, **kwargs):
         self.caches = {}
         if data is None:
@@ -22,7 +21,6 @@ class Header(UserDict):
             return super().__setitem__(key, value)
 
     def __getitem__(self, key):
-
         if key.lower() in self.caches:
             return super().__getitem__(self.caches[key.lower()])
         else:

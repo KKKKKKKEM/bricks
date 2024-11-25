@@ -20,12 +20,14 @@ class FastWriteCounter:
     def increment(self, step: int = 1):
         if self._disable:
             return
-        for _ in range(step): next(self._in_counter)
+        for _ in range(step): 
+            next(self._in_counter)
 
     def decrement(self, step: int = 1):
         if self._disable:
             return
-        for _ in range(step): next(self._de_counter)
+        for _ in range(step): 
+            next(self._de_counter)
 
     @property
     def value(self):

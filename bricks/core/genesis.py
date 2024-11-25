@@ -202,7 +202,9 @@ class Pangu(Chaos):
 
         while True:
             context: Flow = context.produce()
-            if context is None: return
+            if context is None: 
+                return
+            
             with context:
                 while context.next and callable(context.next.root):
                     try:

@@ -22,17 +22,13 @@ from bricks.utils import pandora
 
 
 class Callback:
-
     @staticmethod
     def build(fns, request=None, **kwargs):
         def main(fu: asyncio.Future):
             if not fns or fu.cancelled():
                 return
 
-            namespace = {
-                "fu": fu,
-                "request": request
-            }
+            namespace = {"fu": fu, "request": request}
 
             annotations = {
                 type(fu): fu,
@@ -49,10 +45,7 @@ class Callback:
             for fn in pandora.iterable(fns):
                 if callable(fn) and not inspect.iscoroutinefunction(fn):
                     prepared = pandora.prepare(
-                        fn,
-                        kwargs=kwargs,
-                        namespace=namespace,
-                        annotations=annotations
+                        fn, kwargs=kwargs, namespace=namespace, annotations=annotations
                     )
                     try:
                         prepared.func(*prepared.args, **prepared.kwargs)
@@ -66,10 +59,7 @@ class Callback:
         if not fns:
             return
 
-        namespace = {
-            "fu": fu,
-            "request": request
-        }
+        namespace = {"fu": fu, "request": request}
 
         annotations = {
             type(fu): fu,
@@ -89,16 +79,15 @@ class Callback:
         for fn in pandora.iterable(fns):
             if callable(fn):
                 prepared = pandora.prepare(
-                    fn,
-                    kwargs=kwargs,
-                    namespace=namespace,
-                    annotations=annotations
+                    fn, kwargs=kwargs, namespace=namespace, annotations=annotations
                 )
                 try:
                     if inspect.iscoroutinefunction(fn):
                         await prepared.func(*prepared.args, **prepared.kwargs)
                     else:
-                        await Gateway.awaitable_call(prepared.func, *prepared.args, **prepared.kwargs)
+                        await Gateway.awaitable_call(
+                            prepared.func, *prepared.args, **prepared.kwargs
+                        )
                 except signals.Break:
                     return
 
@@ -112,7 +101,6 @@ class Gateway:
     @staticmethod
     async def awaitable_call(func, *args, **kwargs):
         def sync2future():
-
             def callback():
                 try:
                     ret = func(*args, **kwargs)
@@ -153,7 +141,7 @@ class Gateway:
         callback: List[Callable] = None,
         errback: List[Callable] = None,
         methods: List[str] = ["GET"],
-        **options
+        **options,
     ):
         """
         绑定一个路由
@@ -169,7 +157,16 @@ class Gateway:
         """
 
         def inner(func):
-            return self.bind_view(path=uri, handler=func, timeout=timeout, concurrency=concurrency, callback=callback, errback=errback, methods=methods, **options)
+            return self.bind_view(
+                path=uri,
+                handler=func,
+                timeout=timeout,
+                concurrency=concurrency,
+                callback=callback,
+                errback=errback,
+                methods=methods,
+                **options,
+            )
 
         return inner
 
@@ -181,11 +178,12 @@ class Gateway:
         concurrency: int = None,
         callback: List[Callable] = None,
         errback: List[Callable] = None,
-        **options
+        **options,
     ) -> Callable:
         """
         绑定一个路由
         """
+
         async def normal_view(request=None, is_alive: Callable = None):
             if semaphore and semaphore.locked():
                 raise signals.Wait(1)
@@ -211,12 +209,12 @@ class Gateway:
                 handler,
                 kwargs=options,
                 namespace={"request": request},
-                annotations={type(request): request}
+                annotations={type(request): request},
             )
-            fu = asyncio.ensure_future(self.awaitable_call(
-                prepared.func, *prepared.args, **prepared.kwargs))
-            fu.add_done_callback(Callback.build(
-                cb1, request=request))
+            fu = asyncio.ensure_future(
+                self.awaitable_call(prepared.func, *prepared.args, **prepared.kwargs)
+            )
+            fu.add_done_callback(Callback.build(cb1, request=request))
 
             try:
                 ctx = await asyncio.wait_for(fu, timeout=timeout)
@@ -226,7 +224,7 @@ class Gateway:
 
             except Exception as e:
                 if isinstance(e, asyncio.TimeoutError):
-                    raise asyncio.TimeoutError(f'任务超过最大超时时间 {timeout} s')
+                    raise asyncio.TimeoutError(f"任务超过最大超时时间 {timeout} s")
                 else:
                     raise e
             else:
@@ -252,16 +250,16 @@ class Gateway:
         self.create_view(uri=path, adapter=normal_view, **options)
 
     def bind_addon(
-            self,
-            obj: Union[Rpc, Listener],
-            path: str,
-            form: Literal['$response', '$items', '$request'] = '$response',
-            max_retry: int = 10,
-            timeout: int = None,
-            concurrency: int = None,
-            callback: List[Callable] = None,
-            errback: List[Callable] = None,
-            **options
+        self,
+        obj: Union[Rpc, Listener],
+        path: str,
+        form: Literal["$response", "$items", "$request"] = "$response",
+        max_retry: int = 10,
+        timeout: int = None,
+        concurrency: int = None,
+        callback: List[Callable] = None,
+        errback: List[Callable] = None,
+        **options,
     ):
         """
         绑定 listener / rpc
@@ -285,22 +283,27 @@ class Gateway:
             if is_failure(context):
                 context.response = Response(
                     status_code=403,
-                    content=json.dumps({
-                        "code": 403,
-                        "msg": context.seeds.get("$msg"),
-                        "data": {k.strip("$"): v for k, v in sorted(context.seeds.items()) if
-                                 k not in ["$status", "$msg"]}
-                    }),
-                    headers={"Content-type": "application/json"}
+                    content=json.dumps(
+                        {
+                            "code": 403,
+                            "msg": context.seeds.get("$msg"),
+                            "data": {
+                                k.strip("$"): v
+                                for k, v in sorted(context.seeds.items())
+                                if k not in ["$status", "$msg"]
+                            },
+                        }
+                    ),
+                    headers={"Content-type": "application/json"},
                 )
 
                 raise signals.Break
 
-            if form == '$response' and not getattr(context, "response", None):
+            if form == "$response" and not getattr(context, "response", None):
                 context.response = Response(
                     status_code=204,
                     content="",
-                    headers={"Content-type": "application/json"}
+                    headers={"Content-type": "application/json"},
                 )
 
         async def submit(seeds: dict, request=None, is_alive: Callable = None):
@@ -319,7 +322,7 @@ class Gateway:
                 while not fu.done():
                     alive = await is_alive(raw_req)
                     if not alive:
-                        logger.warning(f'{data} 被取消')
+                        logger.warning(f"{data} 被取消")
                         fu.cancel()
                     else:
                         await asyncio.sleep(0.01)
@@ -330,7 +333,7 @@ class Gateway:
                 **seeds,
                 "$futureType": form,
                 "$futureMaxRetry": max_retry,
-                "$interfaceStart": time.time()
+                "$interfaceStart": time.time(),
             }
             asyncio.ensure_future(monitor())
             if "timeout" in inspect.signature(obj.execute).parameters:
@@ -339,8 +342,7 @@ class Gateway:
                 args = [data]
 
             fu = loop.run_in_executor(pool, obj.execute, *args)
-            fu.add_done_callback(Callback.build(
-                cb1, request=request, seeds=seeds))
+            fu.add_done_callback(Callback.build(cb1, request=request, seeds=seeds))
             ctx = None
 
             try:
@@ -355,7 +357,7 @@ class Gateway:
 
             except Exception as e:
                 if isinstance(e, asyncio.TimeoutError):
-                    raise asyncio.TimeoutError(f'任务超过最大超时时间 {timeout} s')
+                    raise asyncio.TimeoutError(f"任务超过最大超时时间 {timeout} s")
                 else:
                     raise e
             else:
@@ -388,13 +390,9 @@ class Gateway:
         for ws, cid in self.connections.items():
             if cid in orders:
                 future = asyncio.Future()
-                future_id = f'future-{id(future)}'
+                future_id = f"future-{id(future)}"
                 self._futures[future_id] = future
-                ctx = {
-                    "MID": future_id,
-                    "CID": cid,
-                    "CTX": orders[cid]
-                }
+                ctx = {"MID": future_id, "CID": cid, "CTX": orders[cid]}
                 await ws.send(json.dumps(ctx, default=str))
                 futures.append(future)
 
@@ -407,40 +405,26 @@ class Gateway:
             return ret
 
     async def invoke(
-            self,
-            orders: Dict[str, List[dict]],
-            timeout: int = None,
+        self,
+        orders: Dict[str, List[dict]],
+        timeout: int = None,
     ):
-
         future = asyncio.ensure_future(self._invoke(orders, timeout=timeout))
         if timeout == 0:
-            ret = {
-                "code": 0,
-                "msg": "成功提交任务"
-            }
+            ret = {"code": 0, "msg": "成功提交任务"}
 
         else:
-
             try:
                 await future
-                ret = {
-                    "code": 0,
-                    "msg": "任务执行成功",
-                    "result": future.result()
-                }
+                ret = {"code": 0, "msg": "任务执行成功", "result": future.result()}
             except asyncio.TimeoutError:
-                ret = {
-                    "code": 1,
-                    "msg": "任务执行超时"
-                }
+                ret = {"code": 1, "msg": "任务执行超时"}
 
         return ret
 
-    def run(self, *args, **kwargs):
-        ...
+    def run(self, *args, **kwargs): ...
 
-    async def websocket_endpoint(self, *args, **kwargs):
-        ...
+    async def websocket_endpoint(self, *args, **kwargs): ...
 
     def add_route(self, *args, **kwargs):
         return self.router.add_route(*args, **kwargs)
@@ -448,5 +432,4 @@ class Gateway:
     def add_websocket_route(self, *args, **kwargs):
         return self.router.add_websocket_route(*args, **kwargs)
 
-    def add_middleware(self, *args, **kwargs):
-        ...
+    def add_middleware(self, *args, **kwargs): ...

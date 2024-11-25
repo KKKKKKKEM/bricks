@@ -124,7 +124,7 @@ class Downloader(AbstractDownloader):
         if isinstance(tls_config, dict):
             tls_config = to_tls_config(tls_config)
         assert isinstance(
-            tls_config, TLSConfig), f'tls_config 需要为 dict 或者 TLSConfig'
+            tls_config, TLSConfig), 'tls_config 需要为 dict 或者 TLSConfig'
         return tls_config
 
 

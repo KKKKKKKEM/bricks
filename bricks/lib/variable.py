@@ -14,6 +14,7 @@ class Variable:
     """
     变量
     """
+
     value: any
     init_time: float = time.time()
     use_count: itertools.count = itertools.count()
@@ -32,7 +33,6 @@ class Variable:
 
 
 class VariableG:
-
     def __init__(self):
         self._map: Dict[str, Variable] = {}
         self._lock = threading.RLock()
@@ -41,7 +41,9 @@ class VariableG:
         return None
 
     def __setitem__(self, key, value):
-        self._map[key] = Variable(value=value, init_time=time.time(), use_count=itertools.count(1))
+        self._map[key] = Variable(
+            value=value, init_time=time.time(), use_count=itertools.count(1)
+        )
 
     def __delitem__(self, key):
         return self._map.pop(key, None)
@@ -66,15 +68,14 @@ class VariableG:
         self._lock.release()
 
     def __repr__(self):
-        return f'<VariableG [map:{self._map}]>'
+        return f"<VariableG [map:{self._map}]>"
 
     def expire(
-            self,
-            key,
-            count: int = None,
-            until: int = None,
+        self,
+        key,
+        count: int = None,
+        until: int = None,
     ):
-
         if key in self._map:
             self._map[key].max_count = count
             self._map[key].until = until
@@ -103,4 +104,4 @@ class VariableT(threading.local, VariableG):
     """线程专用变量[各线程独立]"""
 
     def __repr__(self):
-        return f'<VariableT [map:{self._map}]>'
+        return f"<VariableT [map:{self._map}]>"

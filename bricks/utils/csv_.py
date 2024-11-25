@@ -3,8 +3,9 @@
 @File    : csv.py
 @Date    : 2023-12-08 11:10
 @Author  : yintian
-@Desc    : 
+@Desc    :
 """
+
 import atexit
 import csv
 import functools
@@ -35,14 +36,14 @@ def generate_hashed_name(input_string):
     str: 符合文件名或表名命名规范的哈希字符串，确保不以数字开头。
     """
     # 计算MD5哈希
-    md5_hash = hashlib.md5(input_string.encode('utf-8')).hexdigest()
+    md5_hash = hashlib.md5(input_string.encode("utf-8")).hexdigest()
 
     # 从MD5哈希值中取前16位，以确保长度适中且相对唯一
     hashed_name = md5_hash[:16]
 
     # 检查是否以数字开头，并在是的情况下添加下划线
     if hashed_name[0].isdigit():
-        hashed_name = '_' + hashed_name
+        hashed_name = "_" + hashed_name
     return hashed_name
 
 
@@ -53,11 +54,11 @@ def _get_writer(p, **options):
 
 class Reader:
     def __init__(
-            self,
-            path: str,
-            structure: dict = None,
-            options: dict = None,
-            encoding: str = 'utf-8-sig',
+        self,
+        path: str,
+        structure: dict = None,
+        options: dict = None,
+        encoding: str = "utf-8-sig",
     ):
         """
         强调: csv 文件必须有表头
@@ -112,31 +113,35 @@ class Reader:
                 structure = None
 
             try:
-                logger.debug(f'[加载数据] database: {database}, table: {table}, path: {path}')
+                logger.debug(
+                    f"[加载数据] database: {database}, table: {table}, path: {path}"
+                )
                 conn = Sqlite.load_csv(
                     database=database + ".db",
                     table=table,
                     path=path,
-                    structure=structure
+                    structure=structure,
                 )
-                for data in conn.find(TABLE_PATTERN.sub(table, sql), batch_size=batch_size):
+                for data in conn.find(
+                    TABLE_PATTERN.sub(table, sql), batch_size=batch_size
+                ):
                     yield data
                 else:
                     conn.close()
 
             finally:
-                rmtree(f'{database}.db', ignore_errors=True)
+                rmtree(f"{database}.db", ignore_errors=True)
 
 
 class Writer:
     def __init__(
-            self,
-            path: str,
-            header: list,
-            schema: Literal["sqlite:storage", "sqlite:memory", ""] = "",
-            mode: str = "a+",
-            newline="",
-            encoding: str = 'utf-8-sig'
+        self,
+        path: str,
+        header: list,
+        schema: Literal["sqlite:storage", "sqlite:memory", ""] = "",
+        mode: str = "a+",
+        newline="",
+        encoding: str = "utf-8-sig",
     ):
         """
         csv writer
@@ -174,7 +179,8 @@ class Writer:
     def install_sqlite(self):
         self.writerows = self._by_sqlite
         self.conn = Sqlite(self.database)
-        if "w" in self.mode: self.conn.drop(self.table)
+        if "w" in self.mode:
+            self.conn.drop(self.table)
         self.init_table()
         atexit.register(lambda: self.flush(done=True))
 
@@ -185,7 +191,9 @@ class Writer:
         else:
             write_header = True
 
-        self.file = open(self.path, mode=self.mode, newline=self.newline, encoding=self.encoding)
+        self.file = open(
+            self.path, mode=self.mode, newline=self.newline, encoding=self.encoding
+        )
         atexit.register(lambda: self.file.close())
         self.writer = csv.DictWriter(self.file, self.header)
         write_header and self.writer.writeheader()
@@ -213,7 +221,7 @@ class Writer:
         :return:
         """
         if "sqlite" in self.schema:
-            self.conn.to_csv(sql=f'select * from {self.table}', path=self.path)
+            self.conn.to_csv(sql=f"select * from {self.table}", path=self.path)
             self.conn.drop(self.table)
             if done:
                 os.remove(f"{self.conn.database}")
@@ -226,6 +234,6 @@ class Writer:
     @classmethod
     def create_safe_writer(cls, path: str, **options):
         if "header" in options:
-            options['header'] = tuple(options['header'])
+            options["header"] = tuple(options["header"])
         with _lock:
             return _get_writer(path, **options)

@@ -172,7 +172,8 @@ class BaseRunner:
                         cmds.insert(0, f"{sys.executable} -m pip install -U bricks-py=={ver} --target={packages_path}")
 
                 for cmd in cmds:
-                    if pypi: cmd += f" -i {pypi} --upgrade --trusted-host {parse.urlparse(pypi).hostname}"
+                    if pypi: 
+                        cmd += f" -i {pypi} --upgrade --trusted-host {parse.urlparse(pypi).hostname}"
                     rret = subprocess.call(cmd.strip().split(" "))
                     if rret != 0:
                         shutil.rmtree(venv_folder, ignore_errors=True)

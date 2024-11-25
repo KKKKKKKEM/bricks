@@ -217,7 +217,9 @@ class Dispatcher:
         self.doing = _TaskQueue()
         self.workers: Dict[str, Worker] = {}
         self._remain_workers = queue.Queue()
-        for i in range(self.max_workers): self._remain_workers.put(f"Worker-{i}")
+        for i in range(self.max_workers): 
+            self._remain_workers.put(f"Worker-{i}")
+            
         self._running_tasks = threading.Semaphore(self.max_workers)
         self._active_tasks = threading.Semaphore(self.max_workers)
         self._shutdown = asyncio.Event()
@@ -255,7 +257,8 @@ class Dispatcher:
             worker and worker.stop()
             worker and waiters.append(worker)
 
-        for waiter in waiters: waiter.wait()
+        for waiter in waiters: 
+            waiter.wait()
 
     def pause_worker(self, *idents: str):
         """

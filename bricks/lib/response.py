@@ -20,34 +20,34 @@ _HEADER_ENCODING_RE = re.compile(r"charset=([\w-]+)", re.I)
 
 class Response:
     __slots__ = (
-        'content',
-        'status_code',
-        '_headers',
-        'url',
-        'encoding',
-        'reason',
-        'cookies',
-        'history',
-        'request',
-        'error',
-        'callback',
-        '_cache',
-        'cost',
+        "content",
+        "status_code",
+        "_headers",
+        "url",
+        "encoding",
+        "reason",
+        "cookies",
+        "history",
+        "request",
+        "error",
+        "callback",
+        "_cache",
+        "cost",
     )
 
     def __init__(
-            self,
-            content: Any = None,
-            status_code: int = 200,
-            headers: Union[Header, dict, Mapping] = None,
-            url: str = None,
-            encoding: str = None,
-            reason: str = 'ok',
-            cookies: Cookies = None,
-            history: List['Response'] = None,
-            request: 'Request' = ...,
-            error: Any = "",
-            callback: Callable = None
+        self,
+        content: Any = None,
+        status_code: int = 200,
+        headers: Union[Header, dict, Mapping] = None,
+        url: str = None,
+        encoding: str = None,
+        reason: str = "ok",
+        cookies: Cookies = None,
+        history: List["Response"] = None,
+        request: "Request" = ...,
+        error: Any = "",
+        callback: Callable = None,
     ):
         self.content: Union[str, bytes] = content
         self.status_code = status_code
@@ -56,8 +56,8 @@ class Response:
         self.encoding = encoding or self.guess_encoding()
         self.reason = reason
         self.cookies = cookies
-        self.history: List['Response'] = history or []
-        self.request: 'Request' = request
+        self.history: List["Response"] = history or []
+        self.request: "Request" = request
         self.error = error
         self.callback = callback
         self._cache = {}
@@ -67,7 +67,7 @@ class Response:
         fget=lambda self: self._headers,
         fset=lambda self, v: setattr(self, "_headers", Header(v)),
         fdel=lambda self: setattr(self, "_headers", Header({})),
-        doc="请求头"
+        doc="请求头",
     )
 
     def guess_encoding(self):
@@ -84,7 +84,7 @@ class Response:
         if temp:
             return temp
 
-        return 'utf-8'
+        return "utf-8"
 
     @property
     def text(self):
@@ -92,14 +92,13 @@ class Response:
         :return: the str for response content.
         """
         if isinstance(self.content, bytes):
-
             if not self.content:
-                return str('')
+                return str("")
 
             try:
-                return str(self.content, self.encoding, errors='replace')
+                return str(self.content, self.encoding, errors="replace")
             except (LookupError, TypeError):
-                return str(self.content, errors='replace')
+                return str(self.content, errors="replace")
 
         else:
             return self.content
@@ -113,7 +112,7 @@ class Response:
         """
         :return:the length of response content.
         """
-        return len(self.content or '')
+        return len(self.content or "")
 
     @property
     def size(self):
@@ -126,12 +125,16 @@ class Response:
         """
         Deserialize a JSON document to a Python object.
         """
-        return pandora.json_or_eval(self.text, **kwargs) if isinstance(self.text, str) else self.text
+        return (
+            pandora.json_or_eval(self.text, **kwargs)
+            if isinstance(self.text, str)
+            else self.text
+        )
 
     def extract_all(
-            self,
-            engine: Union[str, Callable],
-            rules: Union[dict, list],
+        self,
+        engine: Union[str, Callable],
+        rules: Union[dict, list],
     ):
         """
         根据多个规则循环匹配
@@ -148,10 +151,9 @@ class Response:
             )
 
     def extract(
-            self,
-            engine: Union[str, Callable],
-            rules: dict,
-
+        self,
+        engine: Union[str, Callable],
+        rules: dict,
     ):
         """
         提取引擎, 生成器模式, 支持 Rule, 批量匹配
@@ -162,10 +164,10 @@ class Response:
         """
 
         exs = {
-            'JSON': extractors.JsonExtractor,
-            'XPATH': extractors.XpathExtractor,
-            'JASONPATH': extractors.JsonpathExtractor,
-            'REGEX': extractors.RegexExtractor,
+            "JSON": extractors.JsonExtractor,
+            "XPATH": extractors.XpathExtractor,
+            "JASONPATH": extractors.JsonpathExtractor,
+            "REGEX": extractors.RegexExtractor,
         }
         if not engine:
             return []
@@ -174,21 +176,19 @@ class Response:
             if isinstance(engine, str):
                 if engine.upper() in exs:
                     extractor: extractors.Extractor = exs[engine.upper()]
-                    ret = extractor.match(
-                        obj=self.text,
-                        rules=rules
-                    )
+                    ret = extractor.match(obj=self.text, rules=rules)
                     return ret
                 else:
                     engine = pandora.load_objects(engine)
 
             if callable(engine):
-
-                return engine({
-                    'response': self,
-                    'request': self.request,
-                    'rules': rules,
-                })
+                return engine(
+                    {
+                        "response": self,
+                        "request": self.request,
+                        "rules": rules,
+                    }
+                )
 
             else:
                 raise ValueError(f"无法识别的引擎类型: {engine}")
@@ -211,11 +211,7 @@ class Response:
 
         obj = obj or self.html
 
-        return extractors.XpathExtractor.extract(
-            obj=obj,
-            exprs=xpath,
-            **kwargs
-        )
+        return extractors.XpathExtractor.extract(obj=obj, exprs=xpath, **kwargs)
 
     def xpath_first(self, xpath, obj=None, default=None, **kwargs):
         """
@@ -240,13 +236,11 @@ class Response:
         :param kwargs:
         :return:
         """
-        if not jpath: return obj
+        if not jpath:
+            return obj
         obj = obj or self.text
         return extractors.JsonpathExtractor.extract(
-            obj=obj,
-            exprs=jpath,
-            jsonp=not strict,
-            **kwargs
+            obj=obj, exprs=jpath, jsonp=not strict, **kwargs
         )
 
     def jsonpath_first(self, jpath, obj=None, default=None, strict=True, **kwargs):
@@ -260,7 +254,9 @@ class Response:
         :param kwargs:
         :return:
         """
-        return pandora.first(self.jsonpath(jpath, obj, strict, **kwargs), default=default)
+        return pandora.first(
+            self.jsonpath(jpath, obj, strict, **kwargs), default=default
+        )
 
     def re(self, regex, obj=None, **kwargs):
         """
@@ -276,11 +272,7 @@ class Response:
         if not regex:
             return obj
 
-        return extractors.RegexExtractor.extract(
-            obj=obj,
-            exprs=regex,
-            **kwargs
-        )
+        return extractors.RegexExtractor.extract(obj=obj, exprs=regex, **kwargs)
 
     def re_first(self, regex, default=None, obj=None, **kwargs):
         """
@@ -313,10 +305,7 @@ class Response:
             return obj
 
         return extractors.JsonExtractor.extract(
-            obj=obj,
-            exprs=rule,
-            jsonp=not strict,
-            **kwargs
+            obj=obj, exprs=rule, jsonp=not strict, **kwargs
         )
 
     def get_first(self, rule: str, default=None, obj=None, strict=True, **kwargs):
@@ -362,7 +351,7 @@ class Response:
             return False
 
     def __str__(self):
-        return f'<Response [{self.error if self.status_code == -1 else self.status_code}] {self.url}>'
+        return f"<Response [{self.error if self.status_code == -1 else self.status_code}] {self.url}>"
 
     __repr__ = __str__
 
@@ -370,7 +359,6 @@ class Response:
         return self.ok
 
     def __setattr__(self, key, value):
-
         if key in ["encoding", "content"]:
             # 修改这三个属性的时候, 需要把缓存清空
             object.__setattr__(self, "_cache", {})
@@ -378,7 +366,6 @@ class Response:
         return object.__setattr__(self, key, value)
 
     def __getattribute__(self, item):
-
         def cache_method(func):
             def wrapper(*args, **kwargs):
                 # 生成缓存的键
@@ -406,7 +393,7 @@ class Response:
         del self._cache
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     res = Response('{"name":"kem"}')
     print(res.json())
     print(res.json())

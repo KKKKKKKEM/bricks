@@ -15,7 +15,7 @@ def random(length: int, base_str: str = ""):
     :param length: 字符串长度
     :return:
     """
-    random_str = ''
+    random_str = ""
     base_str = base_str or string.ascii_letters + string.digits
     for i in range(length):
         random_str += base_str[random_.randint(0, len(base_str) - 1)]
@@ -31,8 +31,8 @@ def num(length, start=0, end=None):
     :param end: 最大值
     :return:
     """
-    end = end or int('9' * length)
-    return f'{random_.randint(start, end):0{length}d}'
+    end = end or int("9" * length)
+    return f"{random_.randint(start, end):0{length}d}"
 
 
 def letters(length, base_str: str = ""):
@@ -64,8 +64,10 @@ def mac():
     """
     macstring = "0123456789abcdef" * 12
     macstringlist = random_.sample(macstring, 12)
-    return "{0[0]}{0[1]}:{0[2]}{0[3]}:{0[4]}{0[5]}:{0[6]}{0[7]}:{0[8]}{0[9]}:{0[10]}{0[11]}".format(macstringlist)
+    return "{0[0]}{0[1]}:{0[2]}{0[3]}:{0[4]}{0[5]}:{0[6]}{0[7]}:{0[8]}{0[9]}:{0[10]}{0[11]}".format(
+        macstringlist
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     print(hexdigits())

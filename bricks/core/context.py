@@ -115,7 +115,8 @@ class Flow(Context):
     def flow(self, attrs=None, flag=True):
         # 更新属性
         attrs = attrs or {}
-        if not flag: attrs.setdefault("next", self.next)
+        if not flag: 
+            attrs.setdefault("next", self.next)
         self.update(attrs)
 
         if "next" not in attrs:
@@ -193,7 +194,8 @@ class Flow(Context):
         attrs = attrs or {}
         attrs.setdefault("next", None)
         self.flow(attrs)
-        if shutdown: raise signals.Switch()
+        if shutdown: 
+            raise signals.Switch()
 
     def update(self, attrs: dict = None):
         attrs = attrs or {}

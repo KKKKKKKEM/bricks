@@ -22,7 +22,9 @@ from bricks.utils import pandora
 class Context(air.Context):
     target: "Spider"
 
-    def __init__(self, target: "Spider", form: str = state.const.ON_CONSUME, **kwargs) -> None:
+    def __init__(
+        self, target: "Spider", form: str = state.const.ON_CONSUME, **kwargs
+    ) -> None:
         super().__init__(target, form, **kwargs)
 
     def retry(self):
@@ -31,12 +33,18 @@ class Context(air.Context):
         bookmark = self.seeds.get("$bookmark", 0)
         self.seeds["$signpost"] = bookmark
 
-    def submit(self, *obj: Union[Item, dict], call_later=False, attrs: dict = None) -> List["Context"]:
-        signpost = self.seeds.get('$bookmark', 0)
+    def submit(
+        self, *obj: Union[Item, dict], call_later=False, attrs: dict = None
+    ) -> List["Context"]:
+        signpost = self.seeds.get("$bookmark", 0)
         attrs = attrs or {}
         if not call_later:
-            attrs.setdefault('next', self.target.on_flow)
-        return super().submit(*[{**o, "$signpost": signpost} for o in obj], call_later=call_later, attrs=attrs)
+            attrs.setdefault("next", self.target.on_flow)
+        return super().submit(
+            *[{**o, "$signpost": signpost} for o in obj],
+            call_later=call_later,
+            attrs=attrs,
+        )
 
     def get_node(self, signpost=None):
         if signpost is None:
@@ -73,7 +81,7 @@ class Download(RenderNode):
     # 请求 URL 参数
     params: Optional[dict] = None
     # 请求方法, 默认 GET
-    method: str = 'GET'
+    method: str = "GET"
     # body: 请求 Body, 支持字典 / 字符串, 传入为字典的时候, 具体编码方式看 headers 里面的 Content - type
     # 请求的 body, 全部设置为字典时需要和 headers 配合, 规则如下
     # 如果是 json 格式, headers 里面设置 Content-Type 为 application/json
@@ -124,7 +132,7 @@ class Download(RenderNode):
             ok=self.ok,
             retry=self.retry,
             max_retry=self.max_retry,
-            use_session=self.use_session
+            use_session=self.use_session,
         )
 
 
@@ -185,21 +193,23 @@ class Spider(air.Spider):
 
     def on_flow(self, context: Context):
         if not self.config.spider:
-            logger.warning('没有配置 Spider 节点流程..')
+            logger.warning("没有配置 Spider 节点流程..")
             raise signals.Exit
 
         while True:
             signpost: int = context.signpost
-            context.seeds.setdefault('$bookmark', 0)
+            context.seeds.setdefault("$bookmark", 0)
 
             try:
-                node: Union[Download, Task, Parse, Pipeline] = context.get_node(signpost)
+                node: Union[Download, Task, Parse, Pipeline] = context.get_node(
+                    signpost
+                )
             except IndexError:
                 context.flow({"next": None})
 
                 raise signals.Switch()
             else:
-                context.seeds['$signpost'] += 1
+                context.seeds["$signpost"] += 1
 
                 # 种子 -> Request
                 if isinstance(node, Download):
@@ -208,7 +218,7 @@ class Spider(air.Spider):
                         context.flow({"next": self.on_request})
                     else:
                         # 将种子 -> request -> 发送请求
-                        context.seeds['$bookmark'] = signpost
+                        context.seeds["$bookmark"] = signpost
                         node.archive and context.archive(signpost)
                         context.flow({"next": self.make_request})
                     raise signals.Switch()
@@ -235,15 +245,15 @@ class Spider(air.Spider):
                             Response: context.response,
                             Request: context.request,
                             Item: context.seeds,
-                            Items: context.items
+                            Items: context.items,
                         },
                         namespace={
                             "context": context,
                             "response": context.response,
                             "request": context.request,
                             "seeds": context.seeds,
-                            "items": context.items
-                        }
+                            "items": context.items,
+                        },
                     )
 
                 else:
@@ -268,7 +278,7 @@ class Spider(air.Spider):
                 args=node_args,
                 kwargs={**kwargs, **node_kwargs},
                 annotations={Context: context},
-                namespace={"context": context}
+                namespace={"context": context},
             )
             layout = layout.render(seeds)
 
@@ -316,14 +326,14 @@ class Spider(air.Spider):
                     Context: context,
                     Response: context.response,
                     Request: context.request,
-                    Item: context.seeds
+                    Item: context.seeds,
                 },
                 namespace={
                     "context": context,
                     "response": context.response,
                     "request": context.request,
-                    "seeds": context.seeds
-                }
+                    "seeds": context.seeds,
+                },
             )
         else:
             if not callable(engine):
@@ -337,14 +347,14 @@ class Spider(air.Spider):
                     Context: context,
                     Response: context.response,
                     Request: context.request,
-                    Item: context.seeds
+                    Item: context.seeds,
                 },
                 namespace={
                     "context": context,
                     "response": context.response,
                     "request": context.request,
-                    "seeds": context.seeds
-                }
+                    "seeds": context.seeds,
+                },
             )
 
         pandora.clean_rows(
@@ -386,15 +396,15 @@ class Spider(air.Spider):
                     Response: context.response,
                     Request: context.request,
                     Item: context.seeds,
-                    Items: context.items
+                    Items: context.items,
                 },
                 namespace={
                     "context": context,
                     "response": context.response,
                     "request": context.request,
                     "seeds": context.seeds,
-                    "items": context.items
-                }
+                    "items": context.items,
+                },
             )
         finally:
             context.items = backup
@@ -406,4 +416,3 @@ class Spider(air.Spider):
 
         for form, events in (self.config.events or {}).items():
             self.use(form, *events)
-

@@ -22,7 +22,7 @@ from typing import Any, List, Union, Mapping, Callable, Literal, Tuple, Dict
 import better_exceptions
 from loguru import logger
 
-JSONP_REGEX = re.compile(r'\S+?\((?P<obj>[\s\S]*)\)')
+JSONP_REGEX = re.compile(r"\S+?\((?P<obj>[\s\S]*)\)")
 PACKAGE_REGEX = re.compile(r"([a-zA-Z0-9_\-]+)([<>=]*)(.*)")
 
 # 一般而言, 是一个以 simple 结尾的 url
@@ -33,7 +33,7 @@ PYPI_MIRROR = {
     "Aliyun": "http://mirrors.aliyun.com/pypi/simple/",
     "Tencent": "https://mirrors.cloud.tencent.com/pypi/simple/",
     "Huawei": "https://repo.huaweicloud.com/repository/pypi/simple/",
-    "pypi": "https://pypi.org/simple/"
+    "pypi": "https://pypi.org/simple/",
 }
 
 
@@ -43,7 +43,7 @@ exec_formatter = better_exceptions.ExceptionFormatter(
     theme=better_exceptions.THEME,
     max_length=better_exceptions.MAX_LENGTH,
     pipe_char=better_exceptions.PIPE_CHAR,
-    cap_char=better_exceptions.CAP_CHAR
+    cap_char=better_exceptions.CAP_CHAR,
 )
 
 
@@ -62,9 +62,13 @@ def load_objects(path_or_reference, reload=False):
         # 尝试作为文件路径导入
         try:
             module_name = os.path.splitext(os.path.basename(path_or_reference))[0]
-            spec = importlib.util.spec_from_file_location(module_name, path_or_reference)
+            spec = importlib.util.spec_from_file_location(
+                module_name, path_or_reference
+            )
 
-            assert spec and spec.loader, ImportError(f"无法从文件路径导入模块：{path_or_reference}")
+            assert spec and spec.loader, ImportError(
+                f"无法从文件路径导入模块：{path_or_reference}"
+            )
             module = importlib.util.module_from_spec(spec)
             sys.modules[module_name] = module
             spec.loader.exec_module(module)
@@ -73,9 +77,9 @@ def load_objects(path_or_reference, reload=False):
             raise e
     else:
         # 尝试作为模块或模块内属性导入
-        parts = path_or_reference.split('.')
+        parts = path_or_reference.split(".")
         for i in range(len(parts), 0, -1):
-            module_name = '.'.join(parts[:i])
+            module_name = ".".join(parts[:i])
             try:
                 module = importlib.import_module(module_name)
                 for attribute in parts[i:]:
@@ -94,10 +98,10 @@ def load_objects(path_or_reference, reload=False):
 
 
 def require(
-        package_spec: str,
-        action: Literal["raise", "fix"] = "fix",
-        mirror_sources: str = "TUNA",
-        pip_kwargs: Dict[str, str] = None
+    package_spec: str,
+    action: Literal["raise", "fix"] = "fix",
+    mirror_sources: str = "TUNA",
+    pip_kwargs: Dict[str, str] = None,
 ) -> str:
     """
     依赖 python 包
@@ -115,8 +119,10 @@ def require(
     pip_kwargs = pip_kwargs or {}
 
     assert match, ValueError(f"无效的包规范: {package_spec}")
-    assert not mirror_sources or PIPY_REGEX.match(mirror_sources), ValueError(f"无效的镜像源: {mirror_sources}")
-    mirror_sources and pip_kwargs.setdefault('-i', mirror_sources)
+    assert not mirror_sources or PIPY_REGEX.match(mirror_sources), ValueError(
+        f"无效的镜像源: {mirror_sources}"
+    )
+    mirror_sources and pip_kwargs.setdefault("-i", mirror_sources)
 
     package, operator, required_version = match.groups()
 
@@ -125,14 +131,15 @@ def require(
         installed_version = importlib_metadata.version(package)
         # 检查是否需要安装或更新
         from bricks.utils.package import parse as version_parse  # noqa
+
         if required_version and not eval(
-                f'version_parse({installed_version!r}) {operator} version_parse({required_version!r})'):
+            f"version_parse({installed_version!r}) {operator} version_parse({required_version!r})"
+        ):
             raise importlib_metadata.PackageNotFoundError
         else:
             return installed_version
 
     except importlib_metadata.PackageNotFoundError:
-
         # 包没有安装或版本不符合要求
         install_command = package_spec if required_version else package
         cmd = [sys.executable, "-m", "pip", "install"]
@@ -141,14 +148,23 @@ def require(
             v and cmd.append(v)
         cmd.append(install_command)
         if action == "raise":
-            raise importlib_metadata.PackageNotFoundError(f"依赖包不符合要求, 请使用以下命令安装: {' '.join(cmd)}")
+            raise importlib_metadata.PackageNotFoundError(
+                f"依赖包不符合要求, 请使用以下命令安装: {' '.join(cmd)}"
+            )
         else:
             logger.debug(f"依赖包不符合要求, 自动修正, 命令: {' '.join(cmd)}")
             subprocess.check_call(cmd)
             return importlib_metadata.version(package)
 
 
-def invoke(func, args=None, kwargs: dict = None, annotations: dict = None, namespace: dict = None, ignore: list = None):
+def invoke(
+    func,
+    args=None,
+    kwargs: dict = None,
+    annotations: dict = None,
+    namespace: dict = None,
+    ignore: list = None,
+):
     """
     调用函数, 自动修正参数
 
@@ -165,12 +181,12 @@ def invoke(func, args=None, kwargs: dict = None, annotations: dict = None, names
 
 
 def prepare(
-        func: Callable,
-        args=None,
-        kwargs: dict = None,
-        annotations: dict = None,
-        namespace: dict = None,
-        ignore: list = None
+    func: Callable,
+    args=None,
+    kwargs: dict = None,
+    annotations: dict = None,
+    namespace: dict = None,
+    ignore: list = None,
 ):
     """
     筛选出函数的相关参数
@@ -226,7 +242,11 @@ def prepare(
             value = namespace[param.name]
 
         # 参数类型存在于 annotations, 并且还可以从 args 里面取值, 并且刚好取到的对应的值也是当前类型 -> 直接从 args 里面取
-        elif param.annotation in annotations and index < len(args) and type(args[index]) is param.annotation:
+        elif (
+            param.annotation in annotations
+            and index < len(args)
+            and type(args[index]) is param.annotation
+        ):
             value = args[index]
             index += 1
 
@@ -244,21 +264,26 @@ def prepare(
 
         # 没有传这个参数, 并且也没有可以备选的 annotations  -> 报错
         else:
-            raise TypeError(f"missing required argument: {name}, signature: {dict(parameters)}")
+            raise TypeError(
+                f"missing required argument: {name}, signature: {dict(parameters)}"
+            )
         if param.kind in [inspect.Parameter.POSITIONAL_ONLY]:
             new_args.append(value)
 
-        if param.kind in [inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD]:
+        if param.kind in [
+            inspect.Parameter.KEYWORD_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        ]:
             new_kwargs[name] = value
 
     return prepared(func=func, args=new_args, kwargs=new_kwargs)
 
 
 def iterable(
-        _object: Any,
-        enforce=(dict, str, bytes, collections.UserDict, Mapping),
-        exclude=(),
-        convert_null=True
+    _object: Any,
+    enforce=(dict, str, bytes, collections.UserDict, Mapping),
+    exclude=(),
+    convert_null=True,
 ) -> List[Any]:
     """
     用列表将 `exclude` 类型中的其他类型包装起来
@@ -295,11 +320,7 @@ def first(_object, default=None):
 
 
 def json_or_eval(
-        text,
-        jsonp=False,
-        errors: Literal["strict", "ignore"] = "strict",
-        _step=0,
-        **kwargs
+    text, jsonp=False, errors: Literal["strict", "ignore"] = "strict", _step=0, **kwargs
 ) -> Union[dict, list, str]:
     """
     通过字符串获取 python 对象，支持json类字符串和jsonp字符串
@@ -319,7 +340,7 @@ def json_or_eval(
         return json.loads(text)
 
     def use_jsonp():
-        real_text = JSONP_REGEX.search(text).group('obj')
+        real_text = JSONP_REGEX.search(text).group("obj")
         return json_or_eval(real_text, jsonp=True, _step=_step + 1, **kwargs)
 
     if not isinstance(text, str):
@@ -334,7 +355,7 @@ def json_or_eval(
             pass
 
     else:
-        assert errors == "ignore", ValueError(f'illegal json string: `{text}`')
+        assert errors == "ignore", ValueError(f"illegal json string: `{text}`")
         return text
 
 
@@ -345,7 +366,7 @@ def get_simple_stack(e):
     tb = e.__traceback__
 
     # 开始格式化
-    formatted_trace = f""
+    formatted_trace = ""
 
     while tb is not None:
         # 获取当前堆栈帧的详细信息
@@ -357,7 +378,7 @@ def get_simple_stack(e):
         # 获取出错的代码行
         line = linecache.getline(filename, lineno).strip()
 
-        formatted_trace += f"  File \"{filename}\", line {lineno}, in {code.co_name}\n"
+        formatted_trace += f'  File "{filename}", line {lineno}, in {code.co_name}\n'
         formatted_trace += f"    {line}\n"
         tb = tb.tb_next
     return formatted_trace
@@ -368,7 +389,9 @@ def get_pretty_stack(e: Exception):
     获取 stack 信息
 
     """
-    return "".join(list(exec_formatter.format_exception(e.__class__, e, sys.exc_info()[2])))
+    return "".join(
+        list(exec_formatter.format_exception(e.__class__, e, sys.exc_info()[2]))
+    )
 
 
 def clean_rows(*rows: dict, **layout):
@@ -391,8 +414,9 @@ def clean_rows(*rows: dict, **layout):
     def _show(rule: dict, data: dict):
         for key, flag in rule.items():
             if (
-                    callable(flag) and not invoke(flag, args=[data.get(key, None)], kwargs={"row": row})
-                    or not flag
+                callable(flag)
+                and not invoke(flag, args=[data.get(key, None)], kwargs={"row": row})
+                or not flag
             ):
                 rule.pop(key, None)
 
@@ -411,7 +435,6 @@ def clean_rows(*rows: dict, **layout):
         (layout.get("show") or {}, _show),
         (layout.get("factory") or {}, _factory),
         (layout.get("rename") or {}, _rename),
-
     ]
     for row in rows:
         for _rule, flow in flows:
@@ -422,12 +445,12 @@ def clean_rows(*rows: dict, **layout):
 
 
 def with_metaclass(
-        singleton: bool = False,
-        thread_safe: bool = True,
-        key_maker: Callable = None,
-        autonomous: (Tuple[Union[str, Callable]], List[Union[str, Callable]]) = (),
-        wrappers: Union[dict, str] = None,
-        modded: dict = None
+    singleton: bool = False,
+    thread_safe: bool = True,
+    key_maker: Callable = None,
+    autonomous: (Tuple[Union[str, Callable]], List[Union[str, Callable]]) = (),
+    wrappers: Union[dict, str] = None,
+    modded: dict = None,
 ):
     """
     魔改 class
@@ -441,11 +464,15 @@ def with_metaclass(
     :return:
     """
     key_maker = key_maker or (
-        lambda cls, *args, **kwargs: hash(json.dumps({"cls": cls, "args": args, "kwargs": kwargs}, default=str))
+        lambda cls, *args, **kwargs: hash(
+            json.dumps({"cls": cls, "args": args, "kwargs": kwargs}, default=str)
+        )
     )
 
     def outer(clazz):
-        assert inspect.isclass(clazz), ValueError(f"clazz must be class, but got {type(clazz)}")
+        assert inspect.isclass(clazz), ValueError(
+            f"clazz must be class, but got {type(clazz)}"
+        )
 
         _instance = {}
         if thread_safe:
@@ -454,7 +481,6 @@ def with_metaclass(
             _lock = contextlib.nullcontext()
 
         class CustomMeta(type):
-
             def __call__(cls, *args, **kwargs):
                 if singleton:
                     with _lock:
@@ -471,7 +497,7 @@ def with_metaclass(
                 if wrappers is None:
                     interceptors = {
                         i.replace("_when_", ""): i
-                        for i in filter(lambda x: x.startswith('_when_'), dir(ins))
+                        for i in filter(lambda x: x.startswith("_when_"), dir(ins))
                     }
                 else:
                     interceptors = wrappers

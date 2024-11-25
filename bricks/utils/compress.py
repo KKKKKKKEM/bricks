@@ -20,12 +20,12 @@ def with_gz(source: str, output: str = None):
 
     # 如果没有指定输出文件名，则默认为源目录名+.tar.gz
     if output is None:
-        output = Path(str(source.with_suffix('.tar.gz').resolve()))
+        output = Path(str(source.with_suffix(".tar.gz").resolve()))
     else:
         output = Path(output)
 
     # 使用tarfile创建tar.gz归档
-    with tarfile.open(output, 'w:gz') as tar:
+    with tarfile.open(output, "w:gz") as tar:
         # 添加目录到归档，保持内部结构，arcname确保根目录正确
         tar.add(str(source), arcname=os.path.basename(str(source)), recursive=True)
 
@@ -62,13 +62,15 @@ def with_zip(source: str, output: str = None):
     else:
         raise ValueError(f"未知的路径类型: {source}")
 
-    with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as zipf:
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zipf:
         if source.is_dir():
             # 遍历目录，递归添加文件和子目录到zip归档
             for root, dirs, files in os.walk(source):
                 for file in files:
                     # 获取相对于源目录的路径，确保在zip中保持相同结构
-                    relative_path = os.path.relpath(os.path.join(root, file), str(dir_name))
+                    relative_path = os.path.relpath(
+                        os.path.join(root, file), str(dir_name)
+                    )
                     zipf.write(os.path.join(root, file), relative_path)
         elif source.is_file():
             # 直接添加文件到zip归档

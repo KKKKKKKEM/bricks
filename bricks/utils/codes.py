@@ -30,20 +30,28 @@ class Generator:
 
             elif ctype == Type.define:
                 value: Union[tuple, list]
-                value and tpls.append(f"{value[0]} = " + (" and ".join(iterable(value[1])) or "1"))
+                value and tpls.append(
+                    f"{value[0]} = " + (" and ".join(iterable(value[1])) or "1")
+                )
 
             elif ctype == Type.choice:
                 value: dict = value or {}
                 for i, (cond, action) in enumerate(value.items()):
                     if i == 0:
-                        tpls.append(f"if {cond}:\n    {';'.join(iterable(action)) or 'pass'}")
+                        tpls.append(
+                            f"if {cond}:\n    {';'.join(iterable(action)) or 'pass'}"
+                        )
                     else:
-                        tpls.append(f"elif {cond}:\n    {';'.join(iterable(action)) or 'pass'}")
+                        tpls.append(
+                            f"elif {cond}:\n    {';'.join(iterable(action)) or 'pass'}"
+                        )
 
             elif ctype == Type.condition:
                 value: dict = value or {}
                 for cond, action in value.items():
-                    tpls.append(f"if {cond}:\n    {';'.join(iterable(action)) or 'pass'}")
+                    tpls.append(
+                        f"if {cond}:\n    {';'.join(iterable(action)) or 'pass'}"
+                    )
 
         else:
             self.code = "\n".join(tpls)

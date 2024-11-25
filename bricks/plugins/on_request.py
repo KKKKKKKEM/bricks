@@ -36,10 +36,7 @@ class Before:
         if not request.proxies:
             proxy: Union[dict, BaseProxy, str] = request.proxy or context.target.proxy
             if isinstance(proxy, str):
-                proxy = {
-                    "ref": "bricks.lib.proxies.CustomProxy",
-                    "key": proxy
-                }
+                proxy = {"ref": "bricks.lib.proxies.CustomProxy", "key": proxy}
 
             proxy_ = proxies.manager.get(*pandora.iterable(proxy), timeout=timeout)
             request.proxies = proxy_.proxy
@@ -65,13 +62,12 @@ class Before:
         raw: str = request.headers.get("User-Agent")
         raw = raw or ""
         if raw.startswith("@"):
-
-            if raw.startswith('@random'):
+            if raw.startswith("@random"):
                 raw = "@get" + raw[7:]
 
             if not raw.endswith(")"):
                 raw = raw + "()"
-            raw = eval(f'user_agent.{raw[1:]}', {"user_agent": user_agent})
+            raw = eval(f"user_agent.{raw[1:]}", {"user_agent": user_agent})
             request.headers["User-Agent"] = raw
 
 
@@ -95,30 +91,32 @@ class After:
         response = context.obtain("response")
 
         if fmt == 0:
-            msg = " ".join([
-                F"\033[34m[{request.method.upper()}]\033[0m",
-                F"\033[33m[{request.retry}]\033[0m",
-                F"\033[{response.ok and 32 or 31}m[{response.status_code or response.error}]\033[0m",
-                F"\033[37m[{request.proxies or threading.current_thread().name}]\033[0m",
-                F"\033[{response.ok and 35 or 31}m[{response.size}]\033[0m",
-                F"{response.url or response.request.real_url}",
-            ])
+            msg = " ".join(
+                [
+                    f"\033[34m[{request.method.upper()}]\033[0m",
+                    f"\033[33m[{request.retry}]\033[0m",
+                    f"\033[{response.ok and 32 or 31}m[{response.status_code or response.error}]\033[0m",
+                    f"\033[37m[{request.proxies or threading.current_thread().name}]\033[0m",
+                    f"\033[{response.ok and 35 or 31}m[{response.size}]\033[0m",
+                    f"{response.url or response.request.real_url}",
+                ]
+            )
         else:
-            indent = '\n            '
+            indent = "\n            "
             header = f"\n{'=' * 50}"
             msg = [
                 "",
-                F"url: {response.url or request.url}",
-                F"method: {request.method.upper()}",
-                F"headers: {request.headers}",
-                F"status: \033[{response.ok and 32 or 31}m[{response.status_code or response.error}]\033[0m",
-                F"proxies: {request.proxies}",
-                F"thread: {threading.current_thread().name}",
-                ""
+                f"url: {response.url or request.url}",
+                f"method: {request.method.upper()}",
+                f"headers: {request.headers}",
+                f"status: \033[{response.ok and 32 or 31}m[{response.status_code or response.error}]\033[0m",
+                f"proxies: {request.proxies}",
+                f"thread: {threading.current_thread().name}",
+                "",
             ]
-            request.method.upper() != "GET" and msg.insert(3, F"body: {request.body}")
+            request.method.upper() != "GET" and msg.insert(3, f"body: {request.body}")
 
-            msg = f'{header}\n{indent.join(msg)}{header}'
+            msg = f"{header}\n{indent.join(msg)}{header}"
 
         handle(msg)
 
@@ -163,7 +161,12 @@ class After:
                             raise sig
 
                     if callable(sig):
-                        pandora.invoke(sig, args=[context], annotations=annotations, namespace=namespace)
+                        pandora.invoke(
+                            sig,
+                            args=[context],
+                            annotations=annotations,
+                            namespace=namespace,
+                        )
                         return
             else:
                 is_pass = response.ok
@@ -194,12 +197,14 @@ class After:
                 (codes.Type.condition, scripts),
             ]
         )
-        obj.run({
-            **globals(),
-            "context": context,
-            "time": time,
-            "signals": signals,
-            "request": request,
-            "response": response,
-            "logger": logger
-        })
+        obj.run(
+            {
+                **globals(),
+                "context": context,
+                "time": time,
+                "signals": signals,
+                "request": request,
+                "response": response,
+                "logger": logger,
+            }
+        )

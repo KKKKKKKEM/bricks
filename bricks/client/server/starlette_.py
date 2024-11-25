@@ -23,7 +23,7 @@ from starlette.applications import Starlette  # noqa E402
 from starlette.endpoints import HTTPEndpoint  # noqa E402
 from starlette.routing import Route, WebSocketRoute  # noqa E402
 from starlette.websockets import WebSocketDisconnect  # noqa E402
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint, DispatchFunction  # noqa E402
+from starlette.middleware.base import ( BaseHTTPMiddleware,RequestResponseEndpoint,DispatchFunction)  # noqa E402
 from starlette.types import ASGIApp  # noqa E402
 
 
@@ -36,19 +36,25 @@ class Middleware:
 
 
 class GlobalMiddleware(BaseHTTPMiddleware):
-
-    def __init__(self, app: ASGIApp, dispatch: DispatchFunction | None = None, gateway: "APP" = None) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        dispatch: DispatchFunction | None = None,
+        gateway: "APP" = None,
+    ) -> None:
         super().__init__(app, dispatch)
         self.gateway = gateway
 
-    async def dispatch(self, request: requests.Request, call_next: RequestResponseEndpoint):
+    async def dispatch(
+        self, request: requests.Request, call_next: RequestResponseEndpoint
+    ):
         try:
-
             for middleware in self.gateway.middlewares["request"]:
-
                 req = AddonView.make_req(request)
 
-                if middleware.pattern and not middleware.pattern.search(str(request.url)):
+                if middleware.pattern and not middleware.pattern.search(
+                    str(request.url)
+                ):
                     continue
 
                 prepared = pandora.prepare(
@@ -62,15 +68,19 @@ class GlobalMiddleware(BaseHTTPMiddleware):
                     annotations={
                         type(req): req,
                         type(self.gateway): self.gateway,
-                    }
+                    },
                 )
 
-                await self.gateway.awaitable_call(prepared.func, *prepared.args, **prepared.kwargs)
+                await self.gateway.awaitable_call(
+                    prepared.func, *prepared.args, **prepared.kwargs
+                )
 
             response = await call_next(request)
 
             for middleware in self.gateway.middlewares["response"]:
-                if middleware.pattern and not middleware.pattern.search(str(request.url)):
+                if middleware.pattern and not middleware.pattern.search(
+                    str(request.url)
+                ):
                     continue
 
                 prepared = pandora.prepare(
@@ -86,17 +96,21 @@ class GlobalMiddleware(BaseHTTPMiddleware):
                         type(request): request,
                         type(response): response,
                         type(self.gateway): self.gateway,
-                    }
+                    },
                 )
-                await self.gateway.awaitable_call(prepared.func, *prepared.args, **prepared.kwargs)
+                await self.gateway.awaitable_call(
+                    prepared.func, *prepared.args, **prepared.kwargs
+                )
 
             return response
         except Exception as e:
-            return responses.JSONResponse({"status": 403, "msg": str(e)}, status_code=403)
+            return responses.JSONResponse(
+                {"status": 403, "msg": str(e)}, status_code=403
+            )
 
     @staticmethod
     async def get_body(resp):
-        original_body = b''
+        original_body = b""
         async for chunk in resp.body_iterator:
             original_body += chunk
         original_data = original_body.decode()
@@ -112,13 +126,14 @@ async def make_req(request: requests.Request):
         body=body.decode(),
         headers=dict(request.headers),
         cookies=request.cookies,
-        options={"$request": request}
+        options={"$request": request},
     )
 
 
 class AddonView(HTTPEndpoint):
-
-    def __init__(self, *args, main: Callable = None, future_type: str = "$response", **kwargs):
+    def __init__(
+        self, *args, main: Callable = None, future_type: str = "$response", **kwargs
+    ):
         super().__init__(*args, **kwargs)
         self.main = main
         self.future_type = future_type
@@ -135,20 +150,12 @@ class AddonView(HTTPEndpoint):
 
         except signals.Wait:
             return responses.JSONResponse(
-                content={
-                    "code": 429,
-                    "msg": "Too Many Requests"
-                },
-                status_code=429
+                content={"code": 429, "msg": "Too Many Requests"}, status_code=429
             )
 
         except Exception as e:
             return responses.JSONResponse(
-                content={
-                    "code": 500,
-                    "msg": str(e)
-                },
-                status_code=500
+                content={"code": 500, "msg": str(e)}, status_code=500
             )
 
     async def post(self, request: requests.Request):
@@ -162,20 +169,12 @@ class AddonView(HTTPEndpoint):
 
         except signals.Wait:
             return responses.JSONResponse(
-                content={
-                    "code": 429,
-                    "msg": "Too Many Requests"
-                },
-                status_code=429
+                content={"code": 429, "msg": "Too Many Requests"}, status_code=429
             )
 
         except Exception as e:
             return responses.JSONResponse(
-                content={
-                    "code": 500,
-                    "msg": str(e)
-                },
-                status_code=500
+                content={"code": 500, "msg": str(e)}, status_code=500
             )
 
     def fmt(self, context: Context):
@@ -183,27 +182,28 @@ class AddonView(HTTPEndpoint):
             return responses.Response()
 
         future_type = context.seeds.get("$futureType", self.future_type)
-        if future_type == '$items':
+        if future_type == "$items":
             if context.items:
                 return responses.JSONResponse(context.items.data)
             else:
                 return responses.Response()
 
-        elif future_type == '$response':
+        elif future_type == "$response":
             if context.response.status_code != -1:
                 return responses.Response(
                     context.response.text,
                     media_type=context.response.headers.get(
-                        "Content-Type", "text/plain"),
-                    status_code=context.response.status_code
+                        "Content-Type", "text/plain"
+                    ),
+                    status_code=context.response.status_code,
                 )
             else:
                 return responses.JSONResponse(
                     {
                         "code": -1,
-                        "msg": f"error: {context.response.error}, reason: {context.response.reason}"
+                        "msg": f"error: {context.response.error}, reason: {context.response.reason}",
                     },
-                    status_code=500
+                    status_code=500,
                 )
 
         else:
@@ -224,10 +224,17 @@ class APP(Gateway):
         self.connections: Dict[websockets.WebSocket, str] = {}
         self.router = Starlette(
             routes=[
-                Route(path="/invoke", methods=["POST"],
-                      name='发布指令/调用', endpoint=self.invoke),
-                WebSocketRoute(path="/ws/<client_id>",
-                               name='websocket', endpoint=self.websocket_endpoint)
+                Route(
+                    path="/invoke",
+                    methods=["POST"],
+                    name="发布指令/调用",
+                    endpoint=self.invoke,
+                ),
+                WebSocketRoute(
+                    path="/ws/<client_id>",
+                    name="websocket",
+                    endpoint=self.websocket_endpoint,
+                ),
             ]
         )
         self.router.add_middleware(GlobalMiddleware, gateway=self)  # noqa
@@ -239,13 +246,10 @@ class APP(Gateway):
     def create_addon(self, uri: str, adapter: Callable = None, **options):
         options.setdefault("methods", ["GET", "POST"])
         self.router.add_route(
-            route=functools.partial(AddonView, main=adapter),
-            path=uri,
-            **options
+            route=functools.partial(AddonView, main=adapter), path=uri, **options
         )
 
     def create_view(self, uri: str, adapter: Callable = None, **options):
-
         async def handler(request: requests.Request):
             try:
                 req = await make_req(request)
@@ -255,7 +259,9 @@ class APP(Gateway):
                         "request": req,
                     },
                 )
-                ret = await Gateway.awaitable_call(prepared.func, *prepared.args, **prepared.kwargs)
+                ret = await Gateway.awaitable_call(
+                    prepared.func, *prepared.args, **prepared.kwargs
+                )
 
                 if not ret:
                     return responses.Response()
@@ -274,28 +280,15 @@ class APP(Gateway):
 
             except signals.Wait:
                 return responses.JSONResponse(
-                    content={
-                        "code": 429,
-                        "msg": "Too Many Requests"
-                    },
-                    status_code=429
+                    content={"code": 429, "msg": "Too Many Requests"}, status_code=429
                 )
 
             except Exception as e:
                 return responses.JSONResponse(
-                    content={
-                        "code": 500,
-                        "msg": str(e)
-                    },
-                    status_code=500
+                    content={"code": 500, "msg": str(e)}, status_code=500
                 )
 
-        self.router.add_route(
-            route=handler,
-            path=uri,
-            **options
-        )
-
+        self.router.add_route(route=handler, path=uri, **options)
 
     async def websocket_endpoint(self, ws: websockets.WebSocket, client_id: str):
         """
@@ -309,7 +302,7 @@ class APP(Gateway):
         try:
             await ws.accept()
             self.connections[ws] = client_id
-            logger.debug(f'[连接成功] {client_id} | {ws}')
+            logger.debug(f"[连接成功] {client_id} | {ws}")
             async for msg in ws.iter_json():
                 future_id = msg["MID"]
                 # ptr = ctypes.cast(future_id, ctypes.py_object)
@@ -322,13 +315,19 @@ class APP(Gateway):
             raise
         finally:
             self.connections.pop(ws, None)
-            logger.debug(f'[断开连接] {client_id} | {ws} ')
+            logger.debug(f"[断开连接] {client_id} | {ws} ")
 
     def run(self, host: str = "0.0.0.0", port: int = 8888, **options):
         uvicorn.run(self.router, host=host, port=port, **options)
 
-    def add_middleware(self, form: Literal['request', 'response'], adapter: Callable, *args, pattern: str = "",
-                       **kwargs):
+    def add_middleware(
+        self,
+        form: Literal["request", "response"],
+        adapter: Callable,
+        *args,
+        pattern: str = "",
+        **kwargs,
+    ):
         """
         设置拦截器
 
@@ -342,12 +341,9 @@ class APP(Gateway):
         else:
             re_pattern = None
 
-        self.middlewares[form].append(Middleware(
-            pattern=re_pattern,
-            adapter=adapter,
-            args=args,
-            kwargs=kwargs
-        ))
+        self.middlewares[form].append(
+            Middleware(pattern=re_pattern, adapter=adapter, args=args, kwargs=kwargs)
+        )
 
 
 app = APP()

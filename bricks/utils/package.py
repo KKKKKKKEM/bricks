@@ -3,9 +3,14 @@
 @File    : package.py
 @Date    : 2024/6/29 下午3:28
 @Author  : yintian
-@Desc    : 
+@Desc    :
 """
+
 from __future__ import annotations
+import itertools
+import re
+from typing import Any, Callable, NamedTuple, SupportsInt, Tuple, Union
+
 
 # This file is dual licensed under the terms of the Apache License, Version
 # 2.0, and the BSD License. See the LICENSE file in the root of this repository
@@ -15,10 +20,6 @@ from __future__ import annotations
 
     from packaging.version import parse, Version
 """
-
-import itertools
-import re
-from typing import Any, Callable, NamedTuple, SupportsInt, Tuple, Union
 
 
 class InfinityType:
@@ -515,7 +516,7 @@ class Version(_BaseVersion):
 
 
 def _parse_letter_version(
-        letter: str | None, number: str | bytes | SupportsInt | None
+    letter: str | None, number: str | bytes | SupportsInt | None
 ) -> tuple[str, int] | None:
     if letter:
         # We consider there to be an implicit 0 in a pre-release if there is
@@ -565,12 +566,12 @@ def _parse_local_version(local: str | None) -> LocalType | None:
 
 
 def _cmpkey(
-        epoch: int,
-        release: tuple[int, ...],
-        pre: tuple[str, int] | None,
-        post: tuple[str, int] | None,
-        dev: tuple[str, int] | None,
-        local: LocalType | None,
+    epoch: int,
+    release: tuple[int, ...],
+    pre: tuple[str, int] | None,
+    post: tuple[str, int] | None,
+    dev: tuple[str, int] | None,
+    local: LocalType | None,
 ) -> CmpKey:
     # When we compare a release version, we want to compare it with all of the
     # trailing zeros removed. So we'll use a reverse the list, drop all the now
@@ -626,5 +627,5 @@ def _cmpkey(
     return epoch, _release, _pre, _post, _dev, _local
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     pass

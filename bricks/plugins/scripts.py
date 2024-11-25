@@ -11,7 +11,9 @@ from bricks.core.context import Context
 from bricks.utils import codes
 
 
-def is_success(match: List[str], pre: List[str] = None, post: List[str] = None, flow: dict = None):
+def is_success(
+    match: List[str], pre: List[str] = None, post: List[str] = None, flow: dict = None
+):
     """
     判断是否成功
 
@@ -34,25 +36,27 @@ def is_success(match: List[str], pre: List[str] = None, post: List[str] = None, 
             (codes.Type.choice, flow),
         ]
     )
-    obj.run({
-        **globals(),
-        "context": context,
-        "signals": signals,
-        "request": request,
-        "response": response,
-        "logger": logger
-    })
+    obj.run(
+        {
+            **globals(),
+            "context": context,
+            "signals": signals,
+            "request": request,
+            "response": response,
+            "logger": logger,
+        }
+    )
 
 
 def turn_page(
-        match: List[str],
-        pre: List[str] = None,
-        post: List[str] = None,
-        flow: dict = None,
-        key: str = "page",
-        action: str = "+1",
-        call_later: bool = False,
-        success: bool = False
+    match: List[str],
+    pre: List[str] = None,
+    post: List[str] = None,
+    flow: dict = None,
+    key: str = "page",
+    action: str = "+1",
+    call_later: bool = False,
+    success: bool = False,
 ):
     """
     翻页
@@ -72,35 +76,48 @@ def turn_page(
     request = context.obtain("request")
     response = context.obtain("response")
     items = context.obtain("items")
-    flow.setdefault("ISPASS", [
-        f'context.submit(NEXT_SEEDS, call_later={call_later})',
-        f'logger.debug(f"[开始翻页] 当前页面: {{context.seeds[{key!r}]}}, 种子: {{context.seeds}}")',
-    ])
+    flow.setdefault(
+        "ISPASS",
+        [
+            f"context.submit(NEXT_SEEDS, call_later={call_later})",
+            f'logger.debug(f"[开始翻页] 当前页面: {{context.seeds[{key!r}]}}, 种子: {{context.seeds}}")',
+        ],
+    )
 
-    flow.setdefault("not ISPASS", [
-        f'logger.debug(f"[停止翻页] 当前页面: {{context.seeds[{key!r}]}}, 种子: {{context.seeds}}")',
-    ])
+    flow.setdefault(
+        "not ISPASS",
+        [
+            f'logger.debug(f"[停止翻页] 当前页面: {{context.seeds[{key!r}]}}, 种子: {{context.seeds}}")',
+        ],
+    )
 
     obj = codes.Generator(
         flows=[
             (codes.Type.code, pre),
             (codes.Type.define, ("ISPASS", match)),
-            (codes.Type.define, ("NEXT_SEEDS", f'{{**context.seeds, "{key}": context.seeds["{key}"] {action}}}')),
+            (
+                codes.Type.define,
+                (
+                    "NEXT_SEEDS",
+                    f'{{**context.seeds, "{key}": context.seeds["{key}"] {action}}}',
+                ),
+            ),
             (codes.Type.code, post),
             (codes.Type.choice, flow),
-            (codes.Type.code, f'{success} and context.success()'),
-
+            (codes.Type.code, f"{success} and context.success()"),
         ]
     )
-    obj.run({
-        **globals(),
-        "context": context,
-        "signals": signals,
-        "request": request,
-        "response": response,
-        "items": items,
-        "logger": logger
-    })
+    obj.run(
+        {
+            **globals(),
+            "context": context,
+            "signals": signals,
+            "request": request,
+            "response": response,
+            "items": items,
+            "logger": logger,
+        }
+    )
 
 
 def inject(flows: List[Tuple[codes.Type, Any]]):
@@ -111,13 +128,13 @@ def inject(flows: List[Tuple[codes.Type, Any]]):
     :return:
     """
 
-    obj = codes.Generator(
-        flows=flows
+    obj = codes.Generator(flows=flows)
+    obj.run(
+        {
+            **globals(),
+            "Context": Context,
+            "context": Context.get_context(),
+            "signals": signals,
+            "logger": logger,
+        }
     )
-    obj.run({
-        **globals(),
-        "Context": Context,
-        "context": Context.get_context(),
-        "signals": signals,
-        "logger": logger
-    })

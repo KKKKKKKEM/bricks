@@ -15,20 +15,18 @@ from loguru import logger
 from bricks.utils import pandora
 
 pandora.require("websockets==12.0")
-import websockets
+import websockets  # noqa E402
 
 
 class APP:
-
     def __init__(
-            self,
-
-            identifier: str = None,
-            host: str = "0.0.0.0",
-            path: str = "ws",
-            port: int = 8888,
-            scheme: str = "ws",
-            target: Any = None,
+        self,
+        identifier: str = None,
+        host: str = "0.0.0.0",
+        path: str = "ws",
+        port: int = 8888,
+        scheme: str = "ws",
+        target: Any = None,
     ):
         self.identifier = identifier or str(uuid.uuid4())
         self.adapters = {}
@@ -40,12 +38,13 @@ class APP:
 
     async def bind_sockets(self):
         identifier = self.identifier or str(uuid.uuid4())
-        uri = parse.urljoin(f"{self.scheme}://{self.host}:{self.port}", f'{self.path}/{identifier}')
+        uri = parse.urljoin(
+            f"{self.scheme}://{self.host}:{self.port}", f"{self.path}/{identifier}"
+        )
         while True:
-
             try:
                 async with websockets.connect(uri) as websocket:
-                    logger.debug(f'[成功连接] {uri}')
+                    logger.debug(f"[成功连接] {uri}")
                     while True:
                         greeting = await websocket.recv()
                         if not greeting:
@@ -56,20 +55,24 @@ class APP:
 
                             greeting: dict = json.loads(greeting)
 
-                            mid: str = greeting['MID']
-                            cid: str = greeting['CID']
-                            ctx: list = greeting['CTX']
-                            logger.debug(f'收到消息: {greeting}')
+                            mid: str = greeting["MID"]
+                            cid: str = greeting["CID"]
+                            ctx: list = greeting["CTX"]
+                            logger.debug(f"收到消息: {greeting}")
                             fs = []
 
                             for mctx in ctx:
-                                action: str = mctx.get('action') or ""
+                                action: str = mctx.get("action") or ""
                                 args: list = mctx.get("args") or []
                                 kwargs: dict = mctx.get("kwargs") or {}
 
                                 try:
-                                    if action.startswith('$') and hasattr(self.target, action[1:]):
-                                        action: Callable = getattr(self.target, action[1:])
+                                    if action.startswith("$") and hasattr(
+                                        self.target, action[1:]
+                                    ):
+                                        action: Callable = getattr(
+                                            self.target, action[1:]
+                                        )
 
                                     elif action in self.adapters:
                                         action: Callable = self.adapters[action]
@@ -99,25 +102,19 @@ class APP:
 
                         for f in fs:
                             try:
-                                ctx_lis.append({
-                                    "code": 0,
-                                    "message": "success",
-                                    "result": f.result()
-                                })
+                                ctx_lis.append(
+                                    {
+                                        "code": 0,
+                                        "message": "success",
+                                        "result": f.result(),
+                                    }
+                                )
                             except BaseException as e:
-                                ctx_lis.append({
-                                    "code": -1,
-                                    "message": e
-                                })
+                                ctx_lis.append({"code": -1, "message": e})
 
                         await websocket.send(
                             json.dumps(
-                                {
-                                    "MID": mid,
-                                    "CID": cid,
-                                    "CTX": ctx_lis
-                                },
-                                default=str
+                                {"MID": mid, "CID": cid, "CTX": ctx_lis}, default=str
                             )
                         )
             except (KeyboardInterrupt, SystemError, SystemExit):
@@ -134,7 +131,6 @@ class APP:
         fu = Future()
 
         def main():
-
             try:
                 ret = func(*args, **kwargs)
                 fu.set_result(ret)

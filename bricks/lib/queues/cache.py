@@ -19,13 +19,11 @@ class Collector:
     """
 
     def __init__(
-            self,
-            callback: Callable,
-            max_count: int = 0,
-            max_bytes: int = 256 * 1024,
-
+        self,
+        callback: Callable,
+        max_count: int = 0,
+        max_bytes: int = 256 * 1024,
     ) -> None:
-
         self.callback = callback
         self.max_count = max_count or math.inf
         self.max_bytes = max_bytes
@@ -81,7 +79,10 @@ class Collector:
 
         with self._queue.not_empty:
             pending = []
-            while not (sys.getsizeof(pending) >= self.max_bytes or len(pending) > self.max_count):
+            while not (
+                sys.getsizeof(pending) >= self.max_bytes
+                or len(pending) > self.max_count
+            ):
                 if not self._queue.queue:
                     break
 
@@ -92,7 +93,7 @@ class Collector:
             pandora.invoke(self.callback, args=pending)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     collect = Collector(lambda *a: print(a), max_count=10, max_bytes=1024)
     for i in range(100):
         collect.put({"id": i})

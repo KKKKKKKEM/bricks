@@ -17,42 +17,43 @@ from bricks.lib.headers import Header
 
 class Request:
     __slots__ = (
-        'url',
-        'use_session',
-        'params',
-        'cookies',
-        'method',
-        'body',
-        '_headers',
-        'options',
-        'timeout',
-        'allow_redirects',
-        'proxies',
-        'proxy',
-        'ok',
-        'retry',
-        'max_retry',
+        "url",
+        "use_session",
+        "params",
+        "cookies",
+        "method",
+        "body",
+        "_headers",
+        "options",
+        "timeout",
+        "allow_redirects",
+        "proxies",
+        "proxy",
+        "ok",
+        "retry",
+        "max_retry",
     )
 
     def __init__(
-            self,
-            url: str,
-            params: Optional[dict] = None,
-            method: str = 'GET',
-            body: Optional[Union[str, dict]] = None,
-            headers: Union[Header, dict] = None,
-            cookies: Dict[str, str] = None,
-            options: dict = None,
-            timeout: int = ...,
-            allow_redirects: bool = True,
-            proxies: Optional[str] = None,
-            proxy: Optional[Union[dict, str, List[Union[dict, str]]]] = None,
-            ok: Optional[Union[str, Dict[str,
-                                         Union[type(signals.Signal), Callable]]]] = ...,
-            retry: int = 1,
-            max_retry: [int, float] = 5,
-            use_session: bool = False,
-            **opts
+        self,
+        url: str,
+        params: Optional[dict] = None,
+        method: str = "GET",
+        body: Optional[Union[str, dict]] = None,
+        headers: Union[Header, dict] = None,
+        cookies: Dict[str, str] = None,
+        options: dict = None,
+        timeout: int = ...,
+        allow_redirects: bool = True,
+        proxies: Optional[str] = None,
+        proxy: Optional[Union[dict, str, List[Union[dict, str]]]] = None,
+        ok: Optional[
+            Union[str, Dict[str, Union[type(signals.Signal), Callable]]]
+        ] = ...,
+        retry: int = 1,
+        max_retry: [int, float] = 5,
+        use_session: bool = False,
+        **opts,
     ) -> None:
         """
 
@@ -99,7 +100,7 @@ class Request:
         fget=lambda self: self._headers,
         fset=lambda self, v: setattr(self, "_headers", Header(v)),
         fdel=lambda self: setattr(self, "_headers", Header({})),
-        doc="请求头"
+        doc="请求头",
     )
 
     @property
@@ -113,18 +114,19 @@ class Request:
         original_params.update(self.params or {})
 
         # 重新构建查询字符串
-        query_string = urllib.parse.urlencode(
-            original_params).replace('+', '%20')
+        query_string = urllib.parse.urlencode(original_params).replace("+", "%20")
 
         # 构建新的URL
-        new_url = urllib.parse.urlunparse((
-            parsed_url.scheme,
-            parsed_url.netloc,
-            parsed_url.path,
-            parsed_url.params,
-            query_string,
-            parsed_url.fragment
-        ))
+        new_url = urllib.parse.urlunparse(
+            (
+                parsed_url.scheme,
+                parsed_url.netloc,
+                parsed_url.path,
+                parsed_url.params,
+                query_string,
+                parsed_url.fragment,
+            )
+        )
 
         return new_url
 
@@ -136,8 +138,7 @@ class Request:
         # 添加请求头
 
         if self.cookies:
-            cookie_str = "; ".join(
-                [f'{k}={v}' for k, v in self.cookies.items()])
+            cookie_str = "; ".join([f"{k}={v}" for k, v in self.cookies.items()])
         else:
             cookie_str = ""
 
@@ -145,24 +146,22 @@ class Request:
         if self.headers:
             for header, value in self.headers.items():
                 value = str(value)
-                if header.lower() == 'cookie':
-                    cookie_str = "; ".join(
-                        list(filter(None, [value, cookie_str])))
+                if header.lower() == "cookie":
+                    cookie_str = "; ".join(list(filter(None, [value, cookie_str])))
                 else:
-                    if header.lower() == 'content-type':
+                    if header.lower() == "content-type":
                         content_type = value.lower()
                     parts.append(f"-H {shlex.quote(f'{header}: {value}')}")
 
-        cookie_str and parts.append(
-            f"-H {shlex.quote(f'Cookie: {cookie_str}')}")
+        cookie_str and parts.append(f"-H {shlex.quote(f'Cookie: {cookie_str}')}")
 
         # 添加请求体
         if self.body:
-            if content_type == 'application/json':
+            if content_type == "application/json":
                 # JSON格式的请求体
                 json_data = json.dumps(self.body)
                 parts.append(f"-d {shlex.quote(json_data)}")
-            elif content_type == 'application/x-www-form-urlencoded':
+            elif content_type == "application/x-www-form-urlencoded":
                 # URL编码格式的请求体
                 form_data = urllib.parse.urlencode(self.body)
                 parts.append(f"--data {shlex.quote(form_data)}")
@@ -190,26 +189,31 @@ class Request:
         """
 
         _parser = argparse.ArgumentParser()
-        _parser.add_argument('command')
-        _parser.add_argument('url')
-        _parser.add_argument('-d', '--data')
-        _parser.add_argument('-c', '--cookie', default=None)
-        _parser.add_argument('-r', '--request', default=None)
-        _parser.add_argument('-p', '--proxy', default=None)
-        _parser.add_argument('-b', '--data-binary', '--data-raw', default=None)
-        _parser.add_argument('-X', default='')
-        _parser.add_argument('-H', '--header', action='append', default=[])
-        _parser.add_argument('-du', '--data-urlencode',
-                             action='append', default=[], type=lambda x: x.split("="))
-        _parser.add_argument('--compressed', action='store_true')
-        _parser.add_argument('--location', action='store_true')
-        _parser.add_argument('-k', '--insecure', action='store_true')
-        _parser.add_argument('--user', '-u', default=())
-        _parser.add_argument('-i', '--include', action='store_true')
-        _parser.add_argument('-s', '--silent', action='store_true')
+        _parser.add_argument("command")
+        _parser.add_argument("url")
+        _parser.add_argument("-d", "--data")
+        _parser.add_argument("-c", "--cookie", default=None)
+        _parser.add_argument("-r", "--request", default=None)
+        _parser.add_argument("-p", "--proxy", default=None)
+        _parser.add_argument("-b", "--data-binary", "--data-raw", default=None)
+        _parser.add_argument("-X", default="")
+        _parser.add_argument("-H", "--header", action="append", default=[])
+        _parser.add_argument(
+            "-du",
+            "--data-urlencode",
+            action="append",
+            default=[],
+            type=lambda x: x.split("="),
+        )
+        _parser.add_argument("--compressed", action="store_true")
+        _parser.add_argument("--location", action="store_true")
+        _parser.add_argument("-k", "--insecure", action="store_true")
+        _parser.add_argument("--user", "-u", default=())
+        _parser.add_argument("-i", "--include", action="store_true")
+        _parser.add_argument("-s", "--silent", action="store_true")
 
         if isinstance(curl_command, str):
-            curl_command = curl_command.replace('curl --location', 'curl')
+            curl_command = curl_command.replace("curl --location", "curl")
             tokens = shlex.split(curl_command.replace(" \\\n", " "))
         else:
             tokens = curl_command
@@ -221,8 +225,13 @@ class Request:
         else:
             post_data = parsed_args.data or parsed_args.data_binary
 
-        method = parsed_args.request.lower(
-        ) if parsed_args.request else 'post' if post_data else "get"
+        method = (
+            parsed_args.request.lower()
+            if parsed_args.request
+            else "post"
+            if post_data
+            else "get"
+        )
 
         if parsed_args.X:
             method = parsed_args.X.lower()
@@ -230,24 +239,31 @@ class Request:
         cookie_dict = OrderedDict()
         if parsed_args.cookie:
             cookie = SimpleCookie(
-                bytes(parsed_args.cookie, "ascii").decode("unicode-escape"))
+                bytes(parsed_args.cookie, "ascii").decode("unicode-escape")
+            )
             for key in cookie:
                 cookie_dict[key] = cookie[key].value
 
         quoted_headers = OrderedDict()
 
         for curl_header in parsed_args.header:
-            if curl_header.startswith(':'):
-                occurrence = [m.start() for m in re.finditer(':', curl_header)]
-                header_key, header_value = curl_header[:occurrence[1]
-                                                       ], curl_header[occurrence[1] + 1:]
+            if curl_header.startswith(":"):
+                occurrence = [m.start() for m in re.finditer(":", curl_header)]
+                header_key, header_value = (
+                    curl_header[: occurrence[1]],
+                    curl_header[occurrence[1] + 1 :],
+                )
             else:
-                header_key, header_value = curl_header.split(
-                    ":", 1) if ':' in curl_header else (curl_header, "")
+                header_key, header_value = (
+                    curl_header.split(":", 1)
+                    if ":" in curl_header
+                    else (curl_header, "")
+                )
 
-            if header_key.lower().strip("$") == 'cookie':
+            if header_key.lower().strip("$") == "cookie":
                 cookie = SimpleCookie(
-                    bytes(header_value, "ascii").decode("unicode-escape"))
+                    bytes(header_value, "ascii").decode("unicode-escape")
+                )
                 for key in cookie:
                     cookie_dict[key] = cookie[key].value
             else:
@@ -274,12 +290,12 @@ class Request:
         return self.options.get(key, default)
 
     def __str__(self):
-        return f'<Request [{self.real_url}]>'
+        return f"<Request [{self.real_url}]>"
 
     __repr__ = __str__
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # req = Request(
     #     url="https://example.com/path",
     #     params={"query": "value"},

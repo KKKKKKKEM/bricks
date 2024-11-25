@@ -1,13 +1,11 @@
 import asyncio
 import collections
 import concurrent.futures
-import math
 import time
 from typing import Union, Type
 
 from loguru import logger
 
-from bricks import state
 from bricks.core import dispatch, signals
 from bricks.core.events import REGISTERED_EVENTS
 from bricks.lib.items import Items
@@ -27,15 +25,16 @@ def task_done(future_id: str, ctx: Context):
     """
     try:
         # ptr = ctypes.cast(future_id, ctypes.py_object)
-        future: [asyncio.Future, concurrent.futures.Future] = _futures.pop(future_id, None)
+        future: Union[asyncio.Future, concurrent.futures.Future] = _futures.pop(
+            future_id, None
+        )
         future and future.set_result(ctx)
 
     except Exception as e:
-        logger.warning(f'future id 不存在, 放弃存储: {future_id}, error: {e}')
+        logger.warning(f"future id 不存在, 放弃存储: {future_id}, error: {e}")
 
 
 class Listener:
-
     def __init__(self, spider: Spider):
         self.spider: Spider = spider
         self.running: bool = False
@@ -43,7 +42,9 @@ class Listener:
     def run(self):
         self.spider.dispatcher.start()
         self.spider.forever = True
-        self.spider.active(dispatch.Task(func=self.spider.run, kwargs={"task_name": "spider"}))
+        self.spider.active(
+            dispatch.Task(func=self.spider.run, kwargs={"task_name": "spider"})
+        )
         self.running = True
         return self
 
@@ -51,11 +52,7 @@ class Listener:
         self.spider.forever = False
         self.running = False
 
-    def execute(
-            self,
-            seeds: Union[dict, Item],
-            timeout: int = None
-    ) -> Context:
+    def execute(self, seeds: Union[dict, Item], timeout: int = None) -> Context:
         """
         给 listener 一个种子, 然后获取种子的消耗结果
         种子内特殊键值对说明:
@@ -66,14 +63,20 @@ class Listener:
         :return:
         """
         future = concurrent.futures.Future()
-        future_id = f'future-{id(future)}'
+        future_id = f"future-{id(future)}"
         seeds.update({"$futureID": future_id})
         _futures[future_id] = future
         self.spider.put_seeds(seeds)
         return future.result(timeout=timeout)
 
     @classmethod
-    def wrap(cls, spider: Type[Spider], attrs: dict = None, modded: dict = None, ctx_modded: dict = None):
+    def wrap(
+        cls,
+        spider: Type[Spider],
+        attrs: dict = None,
+        modded: dict = None,
+        ctx_modded: dict = None,
+    ):
         """
         将 Spider 转化为 Listener, 等于后台运行爬虫, 支持动态添加种子, 然后获取该种子消耗的结果
         实现类似将爬虫转化为 API 的效果, 避免维护多份代码
@@ -89,22 +92,18 @@ class Listener:
         ctx_modded = ctx_modded or {}
 
         def mock_success(self, shutdown=False):
-            future_id = self.seeds.get('$futureID')
+            future_id = self.seeds.get("$futureID")
             task_done(future_id, self)
             return super(self.__class__, self).success(shutdown)
 
-        key = f'{spider.__module__}.{spider.__name__}'
+        key = f"{spider.__module__}.{spider.__name__}"
         spider = type("Listen", (spider,), modded)
-        REGISTERED_EVENTS.lazy_loading[f'{spider.__module__}.{spider.__name__}'] = REGISTERED_EVENTS.lazy_loading[
-            key].copy()
+        REGISTERED_EVENTS.lazy_loading[f"{spider.__module__}.{spider.__name__}"] = (
+            REGISTERED_EVENTS.lazy_loading[key].copy()
+        )
 
         spider.Context = type(
-            "ListenContext",
-            (spider.Context,),
-            {
-                "success": mock_success,
-                **ctx_modded
-            }
+            "ListenContext", (spider.Context,), {"success": mock_success, **ctx_modded}
         )
         ins: Spider = spider(**attrs)
         default_attrs = {
@@ -145,12 +144,12 @@ class Rpc:
         :return:
         """
         seeds.update({"$spiderStart": time.time()})
-        task_queue: TaskQueue = self.spider.get("spider.task_queue") or self.spider.task_queue
+        task_queue: TaskQueue = (
+            self.spider.get("spider.task_queue") or self.spider.task_queue
+        )
         queue_name: str = self.spider.get("spider.queue_name") or self.spider.queue_name
         context: Context = self.spider.make_context(
-            task_queue=task_queue,
-            queue_name=queue_name,
-            seeds=seeds
+            task_queue=task_queue, queue_name=queue_name, seeds=seeds
         )
         context.flow({"next": self.spider.on_consume, "seeds": seeds})
         self.spider.on_consume(context=context)
@@ -158,7 +157,13 @@ class Rpc:
         return context
 
     @classmethod
-    def wrap(cls, spider: Type[Spider], attrs: dict = None, modded: dict = None, ctx_modded: dict = None):
+    def wrap(
+        cls,
+        spider: Type[Spider],
+        attrs: dict = None,
+        modded: dict = None,
+        ctx_modded: dict = None,
+    ):
         """
         将 Spider 转化为 RPC, 等于后台运行爬虫, 支持动态添加种子, 然后获取该种子消耗的结果
         实现类似将爬虫转化为 API 的效果, 避免维护多份代码
@@ -181,24 +186,31 @@ class Rpc:
         ctx_modded = ctx_modded or {}
 
         def mock_failure(self: Context, shutdown=False):
-            future_max_retry = self.seeds.get('$futureMaxRetry')
-            future_retry = self.seeds.get('$futureRetry') or 0
+            future_max_retry = self.seeds.get("$futureMaxRetry")
+            future_retry = self.seeds.get("$futureRetry") or 0
             if future_retry >= future_max_retry:
-                self.seeds.update({"$msg": f"超出最大重试次数: {future_max_retry} 次", "$status": -1})
+                self.seeds.update(
+                    {"$msg": f"超出最大重试次数: {future_max_retry} 次", "$status": -1}
+                )
                 return self.success(shutdown)
             else:
                 return super(self.__class__, self).retry()
 
         def mock_error(self, e: Exception, shutdown=True):
             if shutdown:
-                self.seeds.update({"$msg": f"请求遇到意料之外的异常: <{e.__class__.__name__} {e}>", "$status": -1})
+                self.seeds.update(
+                    {
+                        "$msg": f"请求遇到意料之外的异常: <{e.__class__.__name__} {e}>",
+                        "$status": -1,
+                    }
+                )
                 return self.success(shutdown)
             else:
                 return super(self.__class__, self).error(shutdown)
 
         def mock_on_request(self, context: Context):
-            future_type = context.seeds.get('$futureType', "$response")
-            if future_type == '$request':
+            future_type = context.seeds.get("$futureType", "$response")
+            if future_type == "$request":
                 raise signals.Success
             return super(self.__class__, self).on_request(context)
 
@@ -206,18 +218,18 @@ class Rpc:
             try:
                 return super(self.__class__, self).on_retry(context)
             except signals.Success:
-                context.seeds.update({"$msg": f"超出最大重试次数", "$status": -1})
+                context.seeds.update({"$msg": "超出最大重试次数", "$status": -1})
                 raise
 
         def mock_on_response(self, context: Context):
-            future_type = context.seeds.get('$futureType', "$response")
+            future_type = context.seeds.get("$futureType", "$response")
 
-            if future_type == '$response':
+            if future_type == "$response":
                 raise signals.Success
 
             items: Items = super(self.__class__, self).on_response(context)
 
-            if future_type == '$items':
+            if future_type == "$items":
                 raise signals.Success
 
             return items
@@ -226,19 +238,16 @@ class Rpc:
         modded.setdefault("on_response", mock_on_response)
         modded.setdefault("on_retry", mock_on_retry)
         local = LocalQueue()
-        key = f'{spider.__module__}.{spider.__name__}'
+        key = f"{spider.__module__}.{spider.__name__}"
         spider = type("RPC", (spider,), modded)
-        REGISTERED_EVENTS.lazy_loading[f'{spider.__module__}.{spider.__name__}'] = REGISTERED_EVENTS.lazy_loading[
-            key].copy()
+        REGISTERED_EVENTS.lazy_loading[f"{spider.__module__}.{spider.__name__}"] = (
+            REGISTERED_EVENTS.lazy_loading[key].copy()
+        )
 
         spider.Context = type(
             "RPCContext",
             (spider.Context,),
-            {
-                "failure": mock_failure,
-                "error": mock_error,
-                **ctx_modded
-            }
+            {"failure": mock_failure, "error": mock_error, **ctx_modded},
         )
         ins: Spider = spider(**attrs)
         default_attrs = {

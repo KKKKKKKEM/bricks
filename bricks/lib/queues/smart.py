@@ -17,7 +17,8 @@ class SmartQueue(queue.Queue):
         - 可选的唯一去重
 
     """
-    __slots__ = ['unique']
+
+    __slots__ = ["unique"]
 
     def __init__(self, maxsize=0, unique=False):
         """
@@ -30,7 +31,9 @@ class SmartQueue(queue.Queue):
         super().__init__(maxsize=maxsize)
         self.queue: deque
 
-    def put(self, *items, block=True, timeout=None, unique=None, limit=0, head=False) -> int:
+    def put(
+        self, *items, block=True, timeout=None, unique=None, limit=0, head=False
+    ) -> int:
         """
         将 `items` 投放至 队列中
 
@@ -56,7 +59,6 @@ class SmartQueue(queue.Queue):
         count = 0
         unique = self.unique if unique is None else unique
         for item in items:
-
             with self.not_full:
                 if unique:
                     if item in self.queue:

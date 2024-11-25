@@ -515,7 +515,7 @@ return  redis.call("DEL", unpack(ARGV))
         db_num = self.database if db_num is None else db_num
         keys = [db_num, genre or "set", maxsize, *pandora.iterable(name)]
         args = _to_str(*values)
-        lua = f'''
+        lua = '''
     local db_num = KEYS[1]
     local default_type = KEYS[2]
     local maxsize = KEYS[3]
@@ -662,7 +662,7 @@ return  redis.call("DEL", unpack(ARGV))
         db_num = self.database if db_num is None else db_num
         keys = [db_num, cmd]
         args = [*args]
-        lua = f"""
+        lua = """
     local db_num = KEYS[1]
     local cmd = KEYS[2]
     changeDataBase(db_num)

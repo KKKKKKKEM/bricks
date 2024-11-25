@@ -6,7 +6,6 @@ from __future__ import absolute_import
 
 import copy
 import http.client
-from tkinter import N
 import urllib.parse
 import warnings
 from typing import Union

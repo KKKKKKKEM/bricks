@@ -2,7 +2,6 @@ import asyncio
 import inspect
 import os.path
 import subprocess
-from tkinter import N
 from typing import Literal, Union, List, Awaitable, Callable
 from urllib import parse
 from urllib.parse import urlparse
@@ -37,7 +36,8 @@ class BrowserContext(async_api.PlaywrightContextManager):
         super().__init__()
 
     async def __aenter__(self) -> async_api.Browser:
-        if self._lock is ...: self._lock = asyncio.Lock()
+        if self._lock is ...:
+            self._lock = asyncio.Lock()
 
         async with self._lock:
             if self.browser is ...:

@@ -239,7 +239,9 @@ class Downloader(AbstractDownloader):
     @staticmethod
     def build_timeout_options(request: Request):
         """Returns the curl timeout options."""
-        if request.timeout is ...: request.timeout = 5
+        if request.timeout is ...: 
+            request.timeout = 5
+            
         if isinstance(request.timeout, (tuple, list)):
             conn_timeout, read_timeout = request.timeout
             total_timeout = conn_timeout + read_timeout

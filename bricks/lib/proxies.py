@@ -21,29 +21,30 @@ from bricks.db.redis_ import Redis
 from bricks.downloader import cffi
 from bricks.utils import pandora
 
-IP_MATCH_RULE = re.compile(r'(http://)?\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+/?')
-IP_EXTRACT_RULE = re.compile(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+')
+IP_MATCH_RULE = re.compile(r"(http://)?\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+/?")
+IP_EXTRACT_RULE = re.compile(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+")
 URL_MATCH_RULE = re.compile(
-    r'^(?:http|ftp)s?://'  # http:// or https://
-    r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'  # domain...
-    r'localhost|'  # localhost...
-    r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # ...or ip
-    r'(?::\d+)?'  # optional port
-    r'(?:/?|[/?]\S+)$', re.IGNORECASE
+    r"^(?:http|ftp)s?://"  # http:// or https://
+    r"(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|"  # domain...
+    r"localhost|"  # localhost...
+    r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"  # ...or ip
+    r"(?::\d+)?"  # optional port
+    r"(?:/?|[/?]\S+)$",
+    re.IGNORECASE,
 )
 DOWNLOADER = cffi.Downloader()
 
 
 class Proxy:
     def __init__(
-            self,
-            proxy: Optional[str] = None,
-            auth: Optional[Callable] = None,
-            recover: Optional[Callable] = ...,
-            clear: Optional[Callable] = ...,
-            threshold: int = math.inf,
-            derive: "BaseProxy" = None,
-            rkey: str = None
+        self,
+        proxy: Optional[str] = None,
+        auth: Optional[Callable] = None,
+        recover: Optional[Callable] = ...,
+        clear: Optional[Callable] = ...,
+        threshold: int = math.inf,
+        derive: "BaseProxy" = None,
+        rkey: str = None,
     ):
         """
         代理类
@@ -87,15 +88,14 @@ class Proxy:
 
 @pandora.with_metaclass(singleton=True)
 class BaseProxy:
-
     def __init__(
-            self,
-            scheme: str = "http",
-            username: str = None,
-            password: str = None,
-            auth: Optional[Callable] = None,
-            recover: Optional[Callable] = ...,
-            threshold: int = math.inf
+        self,
+        scheme: str = "http",
+        username: str = None,
+        password: str = None,
+        auth: Optional[Callable] = None,
+        recover: Optional[Callable] = ...,
+        threshold: int = math.inf,
     ):
         self.scheme = scheme
         self.username = username
@@ -113,7 +113,7 @@ class BaseProxy:
 
         parsed = urllib.parse.urlparse(proxy)
         if self.username and self.password:
-            prefix = f'{self.username}:{self.password}@'
+            prefix = f"{self.username}:{self.password}@"
         else:
             prefix = ""
 
@@ -122,10 +122,10 @@ class BaseProxy:
             proxy = f"{self.scheme}://{prefix}{proxy}"
         # //proxy:port
         elif parsed.netloc and not parsed.scheme:
-            proxy = f'{self.scheme}://{prefix}{proxy[2:]}'
+            proxy = f"{self.scheme}://{prefix}{proxy[2:]}"
         # scheme://proxy:port
         elif parsed.scheme and parsed.netloc:
-            proxy = f'{self.scheme}://{prefix}{parsed.netloc}'
+            proxy = f"{self.scheme}://{prefix}{parsed.netloc}"
 
         # scheme://username:password@proxy:port
         elif parsed.username and parsed.password:
@@ -145,7 +145,13 @@ class BaseProxy:
         def inner(*args, **kwargs):
             proxy = raw_method(*args, **kwargs)
             if not isinstance(proxy, Proxy):
-                proxy = Proxy(proxy, auth=self.auth, recover=self.recover, threshold=self.threshold, derive=self)
+                proxy = Proxy(
+                    proxy,
+                    auth=self.auth,
+                    recover=self.recover,
+                    threshold=self.threshold,
+                    derive=self,
+                )
             proxy.proxy = self.fmt(proxy=proxy.proxy)
             proxy.auth = self.auth
             proxy.clear = self.clear
@@ -159,16 +165,16 @@ class BaseProxy:
 
 class ApiProxy(BaseProxy):
     def __init__(
-            self,
-            key,
-            scheme: str = "http",
-            username: Optional[str] = None,
-            password: Optional[str] = None,
-            auth: Optional[Callable] = None,
-            threshold: int = math.inf,
-            options: Optional[dict] = None,
-            handle_response: Optional[Callable] = None,
-            recover: Optional[Callable] = ...
+        self,
+        key,
+        scheme: str = "http",
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        auth: Optional[Callable] = None,
+        threshold: int = math.inf,
+        options: Optional[dict] = None,
+        handle_response: Optional[Callable] = None,
+        recover: Optional[Callable] = ...,
     ):
         """
         直接从 API 获取代理的代理类型
@@ -185,7 +191,9 @@ class ApiProxy(BaseProxy):
         """
         self.key = key
         self.options = options or {}
-        self.handle_response = handle_response or (lambda res: IP_EXTRACT_RULE.findall(res.text))
+        self.handle_response = handle_response or (
+            lambda res: IP_EXTRACT_RULE.findall(res.text)
+        )
         self.container = queue.Queue()
         self.lock = threading.Lock()
         super().__init__(
@@ -194,7 +202,9 @@ class ApiProxy(BaseProxy):
             password=password,
             auth=auth,
             threshold=threshold,
-            recover=(lambda proxy: self.container.put(proxy.proxy)) if recover is ... else recover
+            recover=(lambda proxy: self.container.put(proxy.proxy))
+            if recover is ...
+            else recover,
         )
 
     def get(self, timeout=None) -> Proxy:
@@ -219,16 +229,18 @@ class ApiProxy(BaseProxy):
             res = DOWNLOADER.fetch({"url": self.key, **options})
             if not res:
                 logger.warning(f"[获取代理失败]  ref: {self}")
-                if time.time() - start > timeout: raise TimeoutError
+                if time.time() - start > timeout:
+                    raise TimeoutError
                 time.sleep(1)
 
             else:
                 proxies = self.handle_response(res)
-                for proxy in proxies: self.container.put(proxy)
+                for proxy in proxies:
+                    self.container.put(proxy)
                 return
 
     def __str__(self):
-        return f'<ApiProxy key={self.key}| options={self.options}>'
+        return f"<ApiProxy key={self.key}| options={self.options}>"
 
 
 class ClashProxy(BaseProxy):
@@ -238,16 +250,16 @@ class ClashProxy(BaseProxy):
     """
 
     def __init__(
-            self,
-            key: str,
-            secret: Optional[str] = None,
-            cache_ttl: int = -1,
-            selector: str = "GLOBAL",
-            match: Optional[Callable] = ...,
-            scheme: str = "http",
-            auth: Optional[Callable] = None,
-            threshold: [int, float, Callable] = ...,
-            recover: Optional[Callable] = ...
+        self,
+        key: str,
+        secret: Optional[str] = None,
+        cache_ttl: int = -1,
+        selector: str = "GLOBAL",
+        match: Optional[Callable] = ...,
+        scheme: str = "http",
+        auth: Optional[Callable] = None,
+        threshold: [int, float, Callable] = ...,
+        recover: Optional[Callable] = ...,
     ):
         """
         直接从 API 获取代理的代理类型
@@ -266,7 +278,8 @@ class ClashProxy(BaseProxy):
         if not key.startswith("http" + "://"):
             key = "http" + "://" + key
         if match is ...:
-            match = (lambda x: str(x) not in ['DIRECT', 'REJECT'])
+            def match(x):
+                return str(x) not in ["DIRECT", "REJECT"]
 
         self.key = key
         self.selector = selector
@@ -280,12 +293,7 @@ class ClashProxy(BaseProxy):
         self._proxy: Proxy = Proxy()
         self.lock = threading.Lock()
 
-        super().__init__(
-            scheme=scheme,
-            auth=auth,
-            threshold=threshold,
-            recover=recover
-        )
+        super().__init__(scheme=scheme, auth=auth, threshold=threshold, recover=recover)
 
         if self.selector.upper() == "GLOBAL":
             self.configs = {"mode": "Global"}
@@ -299,17 +307,17 @@ class ClashProxy(BaseProxy):
         """
 
         if name:
-            action = f'/proxies/{name}'
+            action = f"/proxies/{name}"
         else:
-            action = f'/proxies'
+            action = "/proxies"
 
         resp = self._run_cmd(action)
         data = resp.json()
         if "proxies" in data:
-            now = resp.get(f'proxies.{self.selector}.now')
-            nodes = resp.get(f'proxies.{self.selector}.all')
+            now = resp.get(f"proxies.{self.selector}.now")
+            nodes = resp.get(f"proxies.{self.selector}.all")
             if now in nodes:
-                nodes = [*nodes[nodes.index(now) + 1:], *nodes[:nodes.index(now) + 1]]
+                nodes = [*nodes[nodes.index(now) + 1 :], *nodes[: nodes.index(now) + 1]]
             self._nodes = self.iter_node(list(filter(self.match, nodes)))
             return nodes
         else:
@@ -364,37 +372,39 @@ class ClashProxy(BaseProxy):
     @property
     def configs(self):
         if not self._configs:
-            resp = self._run_cmd(f'/configs')
+            resp = self._run_cmd("/configs")
             self._configs = resp.json()
             key_parsed = urllib.parse.urlparse(self.key)
             if self.scheme == "http":
                 port = self._configs.get("mixed-port") or self._configs.get("port")
             else:
-                port = self._configs.get("mixed-port") or self._configs.get("socks-port")
-            self._proxy.proxy = f'{key_parsed.hostname}:{port}'
+                port = self._configs.get("mixed-port") or self._configs.get(
+                    "socks-port"
+                )
+            self._proxy.proxy = f"{key_parsed.hostname}:{port}"
 
         return self._configs
 
     @configs.setter
     def configs(self, v: dict):
         if "path" in v:
-            force = v.get('force', 1)
+            force = v.get("force", 1)
             path = v["path"]
 
             self._run_cmd(
-                f'/configs',
+                "/configs",
                 method="PUT",
                 params={"force": force},
                 body={"path": path},
-                headers={"Content-Type": "application/json"}
+                headers={"Content-Type": "application/json"},
             )
 
         else:
             self._run_cmd(
-                f'/configs',
+                "/configs",
                 method="PATCH",
                 body=v,
-                headers={"Content-Type": "application/json"}
+                headers={"Content-Type": "application/json"},
             )
 
         del self.configs
@@ -405,38 +415,32 @@ class ClashProxy(BaseProxy):
 
     def delay(self, name: str, timeout: int = 1, url: str = "https://www.github.com"):
         resp = self._run_cmd(
-            uri=f'/proxies/{name}/delay',
-            params={
-                "timeout": timeout,
-                "url": url
-            }
+            uri=f"/proxies/{name}/delay", params={"timeout": timeout, "url": url}
         )
         return resp.json()
 
     def switch(self, name: str, selector: str = None):
         resp = self._run_cmd(
-            f'/proxies/{selector or self.selector}',
+            f"/proxies/{selector or self.selector}",
             body={"name": name},
             method="PUT",
-            headers={"Content-Type": "application/json"}
+            headers={"Content-Type": "application/json"},
         )
         return resp.ok
 
     def rules(self):
-        resp = self._run_cmd(f'/rules')
+        resp = self._run_cmd("/rules")
         return resp.json()
 
     def _run_cmd(self, uri: str, method: str = "GET", retry: int = 5, **kwargs):
         uri = urllib.parse.urljoin(self.key, uri)
-        headers = kwargs.setdefault('headers', {})
-        self.secret and headers.setdefault("Authorization", f'Bearer {self.secret}')
+        headers = kwargs.setdefault("headers", {})
+        self.secret and headers.setdefault("Authorization", f"Bearer {self.secret}")
         for _ in range(retry):
             try:
-                resp = DOWNLOADER.fetch({
-                    "url": uri,
-                    "method": method.upper(),
-                    **kwargs
-                })
+                resp = DOWNLOADER.fetch(
+                    {"url": uri, "method": method.upper(), **kwargs}
+                )
                 assert resp.ok, f"请求失败: {resp.text}"
             except Exception as e:
                 logger.warning(str(e))
@@ -464,8 +468,8 @@ class ClashProxy(BaseProxy):
 
     def clear(self, proxy: Proxy):
         resp = self._run_cmd("/proxies")
-        now = resp.get(f'proxies.{self.selector}.now')
-        nodes = resp.get(f'proxies.{self.selector}.all')
+        now = resp.get(f"proxies.{self.selector}.now")
+        nodes = resp.get(f"proxies.{self.selector}.all")
         new = nodes[(nodes.index(now) + 1) % len(nodes)]
         self.switch(new)
 
@@ -481,33 +485,22 @@ class ClashProxy(BaseProxy):
             "log-level": "info",
             "external-controller": "0.0.0.0:9090",
             "proxies": [],
-            "proxy-groups": [
-                {
-                    "name": "Proxy",
-                    "type": "select",
-                    "proxies": []
-                }
-            ],
+            "proxy-groups": [{"name": "Proxy", "type": "select", "proxies": []}],
             "tun": {
                 "enable": False,
                 "stack": "system",
                 "macOS-auto-route": True,
                 "macOS-auto-detect-interface": True,
-                "dns-hijack": [
-                    "tcp://8.8.8.8:53",
-                    "tcp://8.8.4.4:53"
-                ]
+                "dns-hijack": ["tcp://8.8.8.8:53", "tcp://8.8.4.4:53"],
             },
-            "rules": [
-                "MATCH,Proxy"
-            ]
+            "rules": ["MATCH,Proxy"],
         }
 
     @staticmethod
     def extract_nodes(
-            path: str,
-            form: typing.Literal["clash-sub", "clash", "v2ray", "v2ray-sub"] = 'clash-sub',
-            env: dict = None,
+        path: str,
+        form: typing.Literal["clash-sub", "clash", "v2ray", "v2ray-sub"] = "clash-sub",
+        env: dict = None,
     ):
         try:
             import yaml
@@ -516,34 +509,35 @@ class ClashProxy(BaseProxy):
 
         def extract_from_v2ray(content: bytes):
             data = base64.b64decode(content).decode()
-            data = [json.loads(base64.b64decode(i.replace("vmess://", "", 1)).decode()) for i in data.split()]
+            data = [
+                json.loads(base64.b64decode(i.replace("vmess://", "", 1)).decode())
+                for i in data.split()
+            ]
             ret = []
             for i in data:
                 node = {
-                    "name": i['ps'],
-                    "server": i['add'],
-                    "port": int(i['port']),
+                    "name": i["ps"],
+                    "server": i["add"],
+                    "port": int(i["port"]),
                     "type": "vmess",
-                    "uuid": i['id'],
-                    "alterId": int(i['aid']),
+                    "uuid": i["id"],
+                    "alterId": int(i["aid"]),
                     "cipher": "auto",
-                    "tls": bool(i['tls']),
-                    "skip-cert-verify": False
+                    "tls": bool(i["tls"]),
+                    "skip-cert-verify": False,
                 }
                 if i.get("path"):
-                    node.update({
-                        "network": "ws",
-                        "ws-opts": {
-                            "path": i['path'],
-                            "headers": {
-                                "Host": i['host']
-                            }
-                        },
-                        "ws-path": i['path'],
-                        "headers": {
-                            "ws-headers": i['host']
+                    node.update(
+                        {
+                            "network": "ws",
+                            "ws-opts": {
+                                "path": i["path"],
+                                "headers": {"Host": i["host"]},
+                            },
+                            "ws-path": i["path"],
+                            "headers": {"ws-headers": i["host"]},
                         }
-                    })
+                    )
 
                 ret.append(node)
 
@@ -552,18 +546,20 @@ class ClashProxy(BaseProxy):
         def extract_from_clash(content: str):
             def fmt(x):
                 if isinstance(x, str) and x.isdigit():
-                    return f'str: {x}'
+                    return f"str: {x}"
                 else:
                     return x
 
             data = yaml.safe_load(content) or {}
-            return [{k: fmt(v) for k, v in i.items()} for i in (data.get("proxies") or [])]
+            return [
+                {k: fmt(v) for k, v in i.items()} for i in (data.get("proxies") or [])
+            ]
 
         def send_req(req: dict, retry: int = 5):
             headers = req.setdefault("headers", {})
             headers.setdefault("User-Agent", "ClashforWindows/0.19.10")
-            req.setdefault('timeout', 30)
-            req.setdefault('method', "GET")
+            req.setdefault("timeout", 30)
+            req.setdefault("method", "GET")
 
             for _ in range(retry):
                 try:
@@ -575,29 +571,29 @@ class ClashProxy(BaseProxy):
                     logger.error(f"【请求失败】, req: {req}, error: {e}")
                     time.sleep(1)
 
-            raise RuntimeError(f'【请求失败】, req: {req}')
+            raise RuntimeError(f"【请求失败】, req: {req}")
 
         env = env or {}
 
-        if form == 'clash-sub':
+        if form == "clash-sub":
             resp = send_req({"url": path, **env})
             return extract_from_clash(resp.text)
-        elif form == 'v2ray-sub':
+        elif form == "v2ray-sub":
             resp = send_req({"url": path, **env})
             return extract_from_v2ray(resp.content)
-        elif form == 'v2ray':
+        elif form == "v2ray":
             return extract_from_v2ray(path.encode())
-        elif form == 'clash':
+        elif form == "clash":
             return extract_from_clash(path)
         else:
             raise RuntimeError(f"不支持的订阅类型 path: {path}, form: {form}")
 
     @classmethod
     def subscribe(
-            cls,
-            *subs: dict,
-            http_port: int = 7890,
-            socks_port: int = 7891,
+        cls,
+        *subs: dict,
+        http_port: int = 7890,
+        socks_port: int = 7891,
     ):
         """
         获取订阅， 生成一个配置文件（字符串形式）
@@ -616,36 +612,38 @@ class ClashProxy(BaseProxy):
         counter = itertools.count()
         for sub in subs:
             try:
-                nodes = cls.extract_nodes(sub['uri'], sub['type'])
+                nodes = cls.extract_nodes(sub["uri"], sub["type"])
             except Exception as e:
-                logger.warning(f'提取节点失败: {e}')
+                logger.warning(f"提取节点失败: {e}")
                 continue
 
             for node in nodes:
-                node['name'] = f"{node['name']}-{next(counter)}"
-                node not in config['proxies'] and config['proxies'].append(node)
+                node["name"] = f"{node['name']}-{next(counter)}"
+                node not in config["proxies"] and config["proxies"].append(node)
 
-        nodes_name = [i["name"] for i in config['proxies']]
-        for group in config['proxy-groups']: group['proxies'] = nodes_name
+        nodes_name = [i["name"] for i in config["proxies"]]
+        for group in config["proxy-groups"]:
+            group["proxies"] = nodes_name
 
-        if not config['proxies']:
+        if not config["proxies"]:
             return ""
 
-        return yaml.safe_dump(config, default_flow_style=False, encoding='utf-8', allow_unicode=True).decode()
+        return yaml.safe_dump(
+            config, default_flow_style=False, encoding="utf-8", allow_unicode=True
+        ).decode()
 
 
 class RedisProxy(BaseProxy):
-
     def __init__(
-            self,
-            key: str,
-            options: dict = None,
-            scheme: str = "http",
-            username: str = None,
-            password: str = None,
-            auth: Optional[Callable] = None,
-            threshold: int = math.inf,
-            recover: Optional[Callable] = ...
+        self,
+        key: str,
+        options: dict = None,
+        scheme: str = "http",
+        username: str = None,
+        password: str = None,
+        auth: Optional[Callable] = None,
+        threshold: int = math.inf,
+        recover: Optional[Callable] = ...,
     ):
         """
         从 redis 的 key 里面提取代理
@@ -667,7 +665,9 @@ class RedisProxy(BaseProxy):
             password=password,
             auth=auth,
             threshold=threshold,
-            recover=(lambda proxy: self.container.add(self.key, proxy.proxy)) if recover is ... else recover
+            recover=(lambda proxy: self.container.add(self.key, proxy.proxy))
+            if recover is ...
+            else recover,
         )
 
     def get(self, timeout=None) -> Proxy:
@@ -678,27 +678,26 @@ class RedisProxy(BaseProxy):
         while time.time() - start < timeout:
             proxy = self.container.pop(self.key)
             if not proxy:
-                logger.warning(f'[获取代理失败] ref: {self}')
+                logger.warning(f"[获取代理失败] ref: {self}")
                 time.sleep(1)
             else:
                 return Proxy(proxy)
         raise TimeoutError
 
     def __str__(self):
-        return f'<RedisProxy [key: {self.key} | options:{self.options}]>'
+        return f"<RedisProxy [key: {self.key} | options:{self.options}]>"
 
 
 class CustomProxy(BaseProxy):
-
     def __init__(
-            self,
-            key: str,
-            scheme: str = "http",
-            username: str = None,
-            password: str = None,
-            auth: Optional[Callable] = None,
-            threshold: int = math.inf,
-            recover: Optional[Callable] = None
+        self,
+        key: str,
+        scheme: str = "http",
+        username: str = None,
+        password: str = None,
+        auth: Optional[Callable] = None,
+        threshold: int = math.inf,
+        recover: Optional[Callable] = None,
     ):
         self.key = key
         super().__init__(
@@ -707,7 +706,7 @@ class CustomProxy(BaseProxy):
             password=password,
             auth=auth,
             threshold=threshold,
-            recover=recover
+            recover=recover,
         )
 
     def get(self, timeout=None) -> Proxy:
@@ -715,14 +714,12 @@ class CustomProxy(BaseProxy):
 
 
 class Manager:
-
     def __init__(self):
         self._local = threading.local()
         self._context = contextlib.nullcontext()
         self.container = {}
 
     def build(self, obj: (dict, BaseProxy)) -> BaseProxy:
-
         rkey = self.get_rkey(obj)
         if rkey not in self.container:
             if isinstance(obj, BaseProxy):
@@ -804,7 +801,9 @@ class Manager:
                 rkey = self.get_rkey(config)
                 if hasattr(self._local, rkey):
                     proxy: Proxy = getattr(self._local, rkey)
-                    callable(proxy.recover) and pandora.invoke(proxy.recover, args=[proxy])
+                    callable(proxy.recover) and pandora.invoke(
+                        proxy.recover, args=[proxy]
+                    )
                     delattr(self._local, rkey)
 
     def fresh(self, *objs: (dict, BaseProxy)) -> Proxy:
@@ -845,10 +844,12 @@ class Manager:
 
 
 manager = Manager()
-if __name__ == '__main__':
+if __name__ == "__main__":
     # p = ClashProxy("http://127.0.0.1:9097")
-    cfg = ClashProxy.subscribe({
-        "uri": "https://sub1.smallstrawberry.com/api/v1/client/subscribe?token=xxx&flag=clash",
-        "type": "clash-sub"
-    })
+    cfg = ClashProxy.subscribe(
+        {
+            "uri": "https://sub1.smallstrawberry.com/api/v1/client/subscribe?token=xxx&flag=clash",
+            "type": "clash-sub",
+        }
+    )
     print(cfg)

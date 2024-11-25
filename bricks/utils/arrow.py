@@ -10,14 +10,14 @@ from typing import Callable, Tuple, Union
 
 class _Range:
     def __init__(
-            self,
-            years: Tuple['Arrow', 'Arrow'],
-            quarters: Tuple['Arrow', 'Arrow'],
-            months: Tuple['Arrow', 'Arrow'],
-            days: Tuple['Arrow', 'Arrow'],
-            hours: Tuple['Arrow', 'Arrow'],
-            minutes: Tuple['Arrow', 'Arrow'],
-            seconds: Tuple['Arrow', 'Arrow'],
+        self,
+        years: Tuple["Arrow", "Arrow"],
+        quarters: Tuple["Arrow", "Arrow"],
+        months: Tuple["Arrow", "Arrow"],
+        days: Tuple["Arrow", "Arrow"],
+        hours: Tuple["Arrow", "Arrow"],
+        minutes: Tuple["Arrow", "Arrow"],
+        seconds: Tuple["Arrow", "Arrow"],
     ):
         self.seconds: Tuple[Arrow, Arrow] = seconds
         self.minutes: Tuple[Arrow, Arrow] = minutes
@@ -29,16 +29,15 @@ class _Range:
 
 
 class _Offset:
-
     def __init__(
-            self,
-            years: Callable,
-            quarters: Callable,
-            months: Callable,
-            days: Callable,
-            hours: Callable,
-            minutes: Callable,
-            seconds: Callable,
+        self,
+        years: Callable,
+        quarters: Callable,
+        months: Callable,
+        days: Callable,
+        hours: Callable,
+        minutes: Callable,
+        seconds: Callable,
     ):
         self.seconds: Arrow = seconds  # noqa
         self.minutes: Arrow = minutes  # noqa
@@ -66,13 +65,13 @@ class _Offset:
 
 class _Statistics:
     def __init__(
-            self,
-            number_of_days_for_this_year: int,
-            number_of_days_for_this_month: int,
-            number_of_days_for_this_quarter: int,
-            days_for_this_year: int,
-            days_for_this_month: int,
-            is_leap_year: bool,
+        self,
+        number_of_days_for_this_year: int,
+        number_of_days_for_this_month: int,
+        number_of_days_for_this_quarter: int,
+        days_for_this_year: int,
+        days_for_this_month: int,
+        is_leap_year: bool,
     ):
         self.number_of_days_for_this_year = number_of_days_for_this_year
         self.number_of_days_for_this_month = number_of_days_for_this_month
@@ -83,10 +82,20 @@ class _Statistics:
 
 
 class Arrow(datetime.datetime):
-
-    def __new__(cls, year=None, month=None, day=None, hour=0, minute=0, second=0,
-                microsecond=0, tzinfo=None, *, fold=0, date=None) -> 'Arrow':
-
+    def __new__(
+        cls,
+        year=None,
+        month=None,
+        day=None,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+        tzinfo=None,
+        *,
+        fold=0,
+        date=None,
+    ) -> "Arrow":
         if not date:
             now = datetime.datetime.now()
             year = year or now.year
@@ -137,20 +146,20 @@ class Arrow(datetime.datetime):
             )
 
     def shift(
-            self,
-            years: int = ...,
-            quarters: int = ...,
-            months: int = ...,
-            weeks: float = ...,
-            days: Union[float, str] = ...,
-            hours: float = ...,
-            minutes: float = ...,
-            seconds: float = ...,
-            microseconds: float = ...,
-            milliseconds: float = ...,
-            *,
-            fold: int = ...,
-    ) -> 'Arrow':
+        self,
+        years: int = ...,
+        quarters: int = ...,
+        months: int = ...,
+        weeks: float = ...,
+        days: Union[float, str] = ...,
+        hours: float = ...,
+        minutes: float = ...,
+        seconds: float = ...,
+        microseconds: float = ...,
+        milliseconds: float = ...,
+        *,
+        fold: int = ...,
+    ) -> "Arrow":
         """
 
         :param years:
@@ -166,7 +175,8 @@ class Arrow(datetime.datetime):
         :param fold:
         :return:
         """
-        if days == ">": days = calendar.monthrange(self.year, self.month)[-1] - self.day
+        if days == ">":
+            days = calendar.monthrange(self.year, self.month)[-1] - self.day
 
         raw_parameter = {
             "years": years,
@@ -187,18 +197,27 @@ class Arrow(datetime.datetime):
             y = self.year + math.ceil((self.month + count) / 12) - 1
 
             m = (self.month + count) % 12
-            if m == 0: m = 12
-            return (self.replace(year=y, month=m, day=min([self.day, calendar.monthrange(y, m)[-1]])) - self).days
+            if m == 0:
+                m = 12
+            return (
+                self.replace(
+                    year=y, month=m, day=min([self.day, calendar.monthrange(y, m)[-1]])
+                )
+                - self
+            ).days
 
-        raw_parameter.setdefault('days', 0)
+        raw_parameter.setdefault("days", 0)
 
-        if 'months' in raw_parameter: raw_parameter['days'] += cacl_days(raw_parameter.pop('months'))
-        if 'years' in raw_parameter: raw_parameter['days'] += cacl_days(raw_parameter.pop('years') * 12)
-        if 'quarters' in raw_parameter: raw_parameter['days'] += cacl_days(raw_parameter.pop('quarters') * 3)
+        if "months" in raw_parameter:
+            raw_parameter["days"] += cacl_days(raw_parameter.pop("months"))
+        if "years" in raw_parameter:
+            raw_parameter["days"] += cacl_days(raw_parameter.pop("years") * 12)
+        if "quarters" in raw_parameter:
+            raw_parameter["days"] += cacl_days(raw_parameter.pop("quarters") * 3)
 
         return self.__class__(date=self + datetime.timedelta(**raw_parameter))
 
-    def to(self, action: str, unit="months") -> 'Arrow':
+    def to(self, action: str, unit="months") -> "Arrow":
         """
         移动至
 
@@ -209,20 +228,20 @@ class Arrow(datetime.datetime):
         return getattr(getattr(self, action), unit)
 
     def format(self, fmt: str) -> str:
-        return f'{self:{fmt}}'
+        return f"{self:{fmt}}"
 
     @classmethod
     def get(
-            cls,
-            __date: Union[str, datetime.datetime, datetime.date, int, float],
-            fmt: str = "%Y-%m-%d %H:%M:%S"
-    ) -> 'Arrow':
+        cls,
+        __date: Union[str, datetime.datetime, datetime.date, int, float],
+        fmt: str = "%Y-%m-%d %H:%M:%S",
+    ) -> "Arrow":
         if isinstance(__date, str):
             return cls.strptime(__date, fmt)
 
         elif isinstance(__date, (int, float)):
             if isinstance(__date, int) and len(str(__date)) > 10:
-                __date = float(f'{str(__date)[:10]}.{str(__date)[10:]}')
+                __date = float(f"{str(__date)[:10]}.{str(__date)[10:]}")
 
             return cls.fromtimestamp(__date)
 
@@ -257,55 +276,45 @@ class Arrow(datetime.datetime):
     def end(self) -> _Offset:
         return _Offset(
             years=lambda: self.replace(
-                month=12,
-                day=31,
-                hour=23,
-                minute=59,
-                second=59,
-                microsecond=10 ** 6 - 1
+                month=12, day=31, hour=23, minute=59, second=59, microsecond=10**6 - 1
             ),
             quarters=lambda: self.replace(
                 month=(abs(self.month - 1) // 3 + 1 - 1) * 3 + 3,
-                day=calendar.monthrange(self.year, (abs(self.month - 1) // 3 + 1 - 1) * 3 + 3)[-1],
+                day=calendar.monthrange(
+                    self.year, (abs(self.month - 1) // 3 + 1 - 1) * 3 + 3
+                )[-1],
                 hour=23,
                 minute=59,
                 second=59,
-                microsecond=10 ** 6 - 1
+                microsecond=10**6 - 1,
             ),
             months=lambda: self.replace(
                 day=calendar.monthrange(self.year, self.month)[-1],
                 hour=23,
                 minute=59,
                 second=59,
-                microsecond=10 ** 6 - 1
-
+                microsecond=10**6 - 1,
             ),
             days=lambda: self.replace(
-                hour=23,
-                minute=59,
-                second=59,
-                microsecond=10 ** 6 - 1
+                hour=23, minute=59, second=59, microsecond=10**6 - 1
             ),
-            hours=lambda: self.replace(
-                minute=59,
-                second=59,
-                microsecond=10 ** 6 - 1
-            ),
-            minutes=lambda: self.replace(
-                second=59,
-                microsecond=10 ** 6 - 1
-            ),
-            seconds=lambda: self.replace(
-                microsecond=10 ** 6 - 1
-            ),
+            hours=lambda: self.replace(minute=59, second=59, microsecond=10**6 - 1),
+            minutes=lambda: self.replace(second=59, microsecond=10**6 - 1),
+            seconds=lambda: self.replace(microsecond=10**6 - 1),
         )
 
     @property
     def start(self) -> _Offset:
         return _Offset(
-            years=lambda: self.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0),
-            quarters=lambda: self.replace(day=1, month=(abs(self.month - 1) // 3 + 1 - 1) * 3 + 1),
-            months=lambda: self.replace(day=1, hour=0, minute=0, second=0, microsecond=0),
+            years=lambda: self.replace(
+                month=1, day=1, hour=0, minute=0, second=0, microsecond=0
+            ),
+            quarters=lambda: self.replace(
+                day=1, month=(abs(self.month - 1) // 3 + 1 - 1) * 3 + 1
+            ),
+            months=lambda: self.replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            ),
             days=lambda: self.replace(hour=0, minute=0, second=0, microsecond=0),
             hours=lambda: self.replace(minute=0, second=0, microsecond=0),
             minutes=lambda: self.replace(second=0, microsecond=0),
@@ -314,7 +323,6 @@ class Arrow(datetime.datetime):
 
     @property
     def range(self) -> _Range:
-
         return _Range(
             years=(self.start.years, self.end.years),
             quarters=(self.start.quarters, self.end.quarters),
@@ -327,14 +335,17 @@ class Arrow(datetime.datetime):
 
     @property
     def statistics(self) -> _Statistics:
-
         ndm = calendar.monthrange(self.year, self.month)[-1]
         quarters_range = self.range.quarters
-        ndq = sum([
-            calendar.monthrange(self.year, i)[-1] for i in
-            range(quarters_range[0].month, quarters_range[1].month + 1)
-        ])
-        is_leap_year = (self.year % 4 == 0 and self.year % 100 != 0) or (self.year % 400 == 0)
+        ndq = sum(
+            [
+                calendar.monthrange(self.year, i)[-1]
+                for i in range(quarters_range[0].month, quarters_range[1].month + 1)
+            ]
+        )
+        is_leap_year = (self.year % 4 == 0 and self.year % 100 != 0) or (
+            self.year % 400 == 0
+        )
         ndy = 366 if is_leap_year else 365
 
         return _Statistics(
@@ -343,7 +354,7 @@ class Arrow(datetime.datetime):
             number_of_days_for_this_quarter=ndq,
             days_for_this_year=(self - self.start.years).days + 1,
             days_for_this_month=(self - self.start.months).days + 1,
-            is_leap_year=is_leap_year
+            is_leap_year=is_leap_year,
         )
 
     def ts(self, length=10, fmt=int):
@@ -358,18 +369,20 @@ class Arrow(datetime.datetime):
         return fmt(ts * 10 ** (length - 10))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # 获取当前时间
     arrow = Arrow()
 
     # 获取当前时间的相关信息
-    print(f'{arrow.year=}, {arrow.month=}, {arrow.day=}, {arrow.hour=}, {arrow.minute=}, {arrow.second=}')
+    print(
+        f"{arrow.year=}, {arrow.month=}, {arrow.day=}, {arrow.hour=}, {arrow.minute=}, {arrow.second=}"
+    )
 
     # 当前时间往后面偏移一年 + 一个月
     print(arrow.shift(years=1, months=1))
 
     # 获取当前时间当前月份有多少天
-    print(f'{arrow.statistics.number_of_days_for_this_month=}')
+    print(f"{arrow.statistics.number_of_days_for_this_month=}")
 
     # 将当前时间转化为时间戳
     print(arrow.ts())

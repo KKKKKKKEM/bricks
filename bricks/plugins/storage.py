@@ -13,31 +13,32 @@ from bricks.utils.pandora import iterable
 
 
 def to_sqlite(
-        path: str,
-        conn: Sqlite,
-        items: Union[List[dict], Items],
-        row_keys: Optional[List[str]] = None,
+    path: str,
+    conn: Sqlite,
+    items: Union[List[dict], Items],
+    row_keys: Optional[List[str]] = None,
 ):
     """
     存入数据至 sqlite
-    
+
     :param path: 表名
     :param conn: sqlite 实例
     :param items: 数据
     :param row_keys: 主键
-    :return: 
+    :return:
     """
-    if not items: return
+    if not items:
+        return
     return conn.insert(path, *items, row_keys=row_keys)
 
 
 def to_mongo(
-        path: str,
-        conn,
-        items: Union[List[dict], Items],
-        row_keys: Optional[List[str]] = None,
-        database: str = None,
-        **kwargs
+    path: str,
+    conn,
+    items: Union[List[dict], Items],
+    row_keys: Optional[List[str]] = None,
+    database: str = None,
+    **kwargs,
 ):
     """
     存入数据至 mongo
@@ -52,17 +53,19 @@ def to_mongo(
     """
 
     from bricks.db.mongo import Mongo
-    if not items: return
+
+    if not items:
+        return
     conn: Mongo
     return conn.write(path, *items, query=row_keys, database=database, **kwargs)
 
 
 def to_csv(
-        path: str,
-        items: Union[List[dict], Items],
-        conn: Optional[Writer] = None,
-        encoding: str = 'utf-8-sig',
-        **kwargs
+    path: str,
+    items: Union[List[dict], Items],
+    conn: Optional[Writer] = None,
+    encoding: str = "utf-8-sig",
+    **kwargs,
 ):
     """
     存入数据至 csv
@@ -74,7 +77,8 @@ def to_csv(
     :param kwargs: DictWriter 的其他参数
     :return:
     """
-    if not items: return
+    if not items:
+        return
     if not isinstance(items, Items):
         items = Items(items)
     kwargs.setdefault("header", tuple(items.columns))
@@ -83,13 +87,13 @@ def to_csv(
 
 
 def to_redis(
-        path: str,
-        conn: Redis,
-        items: Union[List[dict], Items],
-        key_type: Literal["set", "list", "string"] = 'set',
-        row_keys: Optional[list] = None,
-        splice: str = '|',
-        ttl: int = 0,
+    path: str,
+    conn: Redis,
+    items: Union[List[dict], Items],
+    key_type: Literal["set", "list", "string"] = "set",
+    row_keys: Optional[list] = None,
+    splice: str = "|",
+    ttl: int = 0,
 ):
     """
     存入数据至 redis
@@ -106,12 +110,17 @@ def to_redis(
     row_keys = row_keys or []
 
     # 仅支持 set, list, string
-    assert key_type in ["set", "list", "string"], ValueError(f'不支持的存储类型-{key_type}')
+    assert key_type in ["set", "list", "string"], ValueError(
+        f"不支持的存储类型-{key_type}"
+    )
     # 当存储类型不为 string 时, path 不能为空且类型必须与预期一致
-    assert (path and conn.type(path) in [key_type,
-                                         'none']) or key_type == 'string', f'存储类型错误, 已存在-{path}:{conn.type(path)}, 存储类型-{key_type}'
+    assert (
+        (path and conn.type(path) in [key_type, "none"]) or key_type == "string"
+    ), f"存储类型错误, 已存在-{path}:{conn.type(path)}, 存储类型-{key_type}"
     # 当存储类型为 string 时, row_keys 不能为空
-    assert row_keys or key_type != 'string', ValueError(f'存储类型为 string 时必须存在 row_keys')
+    assert row_keys or key_type != "string", ValueError(
+        "存储类型为 string 时必须存在 row_keys"
+    )
 
     def generate_key(_row):
         key = splice.join([str(_row.get(key, "")) for key in row_keys])
@@ -120,8 +129,8 @@ def to_redis(
     def write(item):
         nonlocal path
 
-        if key_type == 'string':
-            rows = {_.pop('$key'): json.dumps(_) for _ in item}
+        if key_type == "string":
+            rows = {_.pop("$key"): json.dumps(_) for _ in item}
             conn.mset(rows)
             path = list(rows.keys())
         else:
@@ -133,5 +142,5 @@ def to_redis(
 
     if row_keys:
         for row in items:
-            row['$key'] = generate_key(row)
+            row["$key"] = generate_key(row)
     write(items)

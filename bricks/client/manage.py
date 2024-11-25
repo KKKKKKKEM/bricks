@@ -15,10 +15,7 @@ from bricks.utils import pandora
 @pandora.with_metaclass(singleton=True, autonomous=("install",))
 class Manager:
     def __init__(self):
-
-        self.adapters = {
-            "run_task": self.run_task
-        }
+        self.adapters = {"run_task": self.run_task}
 
     @staticmethod
     def _parse(argvs: list) -> Argv:
@@ -33,7 +30,7 @@ class Manager:
 
         def _2dict(obj):
             kw = {}
-            for (key, value) in parse.parse_qsl("&".join(pandora.iterable(obj))):
+            for key, value in parse.parse_qsl("&".join(pandora.iterable(obj))):
                 kw[key] = pandora.guess(value)
             return kw
 
@@ -65,7 +62,7 @@ class Manager:
         """
         argvs = [*sys.argv]
         if isinstance(argv, str):
-            argvs.extend(argv.split(' '))
+            argvs.extend(argv.split(" "))
         else:
             argvs.extend(pandora.iterable(argv))
 

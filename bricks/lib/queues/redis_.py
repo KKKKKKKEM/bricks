@@ -272,7 +272,9 @@ class RedisQueue(TaskQueue):
             return 0
 
         backup = kwargs.get('backup', "")
-        if backup: backup = self.name2key(name, backup)
+        if backup: 
+            backup = self.name2key(name, backup)
+            
         db_num = kwargs.get('db_num', self.database)
         genre = kwargs.get('genre', self.genre)
         qtypes = kwargs.get('qtypes', ["temp"])

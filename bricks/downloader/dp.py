@@ -2,7 +2,6 @@ import copy
 import functools
 import urllib
 from typing import Union, Literal
-from urllib import parse
 from urllib.parse import urlparse
 
 from bricks import Request, Response
