@@ -30,6 +30,9 @@ class Downloader(AbstractDownloader):
 
     """
 
+    def __init__(self, options: dict = None):
+        self.options = options or {}
+
     def fetch(self, request: Union[Request, dict]) -> Response:
         """
         真使用 requests 发送请求并获取响应
@@ -41,6 +44,7 @@ class Downloader(AbstractDownloader):
 
         res = Response.make_response(request=request)
         options = {
+            **self.options,
             'method': request.method.upper(),
             'headers': request.headers,
             'cookies': request.cookies,
@@ -74,7 +78,8 @@ class Downloader(AbstractDownloader):
             while True:
                 assert _redirect_count < 999, "已经超过最大重定向次数: 999"
                 response = session.request(**{**options, "url": next_url})
-                last_url, next_url = next_url, response.headers.get('location') or response.headers.get('Location')
+                last_url, next_url = next_url, response.headers.get(
+                    'location') or response.headers.get('Location')
                 if request.allow_redirects and next_url:
                     next_url = urllib.parse.urljoin(request.real_url, next_url)
                     _redirect_count += 1
@@ -93,7 +98,8 @@ class Downloader(AbstractDownloader):
                             )
                         )
                     )
-                    request.options.get('$referer', False) and options['headers'].update(Referer=request.real_url)
+                    request.options.get('$referer', False) and options['headers'].update(
+                        Referer=request.real_url)
 
                 else:
                     res.content = response.content
@@ -115,8 +121,10 @@ class Downloader(AbstractDownloader):
 if __name__ == '__main__':
     downloader = Downloader()
     downloader.debug = True
-    rsp = downloader.fetch(Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=False))
+    rsp = downloader.fetch(
+        Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=False))
     # 不知道为什么 pyhttpx 会多一次重定向
     print(rsp.history[0].cookies)
-    rsp = downloader.fetch(Request(url="https://httpbin.org/cookies", use_session=False))
+    rsp = downloader.fetch(
+        Request(url="https://httpbin.org/cookies", use_session=False))
     print(rsp.text)

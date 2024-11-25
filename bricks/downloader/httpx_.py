@@ -6,6 +6,7 @@ from __future__ import absolute_import
 
 import copy
 import http.client
+from tkinter import N
 import urllib.parse
 import warnings
 from typing import Union
@@ -32,6 +33,10 @@ class Downloader(AbstractDownloader):
 
 
     """
+    
+    def __init__(self, options:dict=None):
+        self.options = options or {}
+    
 
     def fetch(self, request: Union[Request, dict]) -> Response:
         """
@@ -44,6 +49,7 @@ class Downloader(AbstractDownloader):
 
         res = Response.make_response(request=request)
         options = {
+            **self.options,
             'method': request.method.upper(),
             'headers': request.headers,
             'cookies': request.cookies,

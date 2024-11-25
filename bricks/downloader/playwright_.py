@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import os.path
 import subprocess
+from tkinter import N
 from typing import Literal, Union, List, Awaitable, Callable
 from urllib import parse
 from urllib.parse import urlparse
@@ -68,6 +69,7 @@ class Downloader(AbstractDownloader):
             mode: Literal["automation", "api"] = "automation",
             headless: bool = True,
             reuse: bool = True,
+            options: dict=None,
     ):
         """
 
@@ -80,7 +82,7 @@ class Downloader(AbstractDownloader):
         self.reuse = reuse
         self.scripts = scripts or []
         self.browser_context: BrowserContext = BrowserContext(driver=driver, reuse=self.reuse)
-
+        self.options = options or {}
     def install(self):
         """
         安装 playwright 环境
@@ -122,6 +124,7 @@ class Downloader(AbstractDownloader):
         if self.mode == "automation":
             timeout = 60 * 1000 if request.timeout is ... else request.timeout * 1000
             options = {
+                **self.options,
                 "timeout": timeout,
                 "url": request.real_url,
                 "wait_until": request.get_options("wait_until") or "networkidle",
@@ -132,6 +135,7 @@ class Downloader(AbstractDownloader):
         else:
             timeout = 30 * 1000 if request.timeout is ... else request.timeout * 1000
             options = {
+                **self.options,
                 "url_or_request": request.url,
                 "params": request.params,
                 "timeout": timeout,

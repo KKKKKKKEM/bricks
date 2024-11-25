@@ -33,6 +33,9 @@ class Downloader(AbstractDownloader):
 
     """
 
+    def __init__(self, options: dict = None):
+        self.options = options or {}
+
     def fetch(self, request: Union[Request, dict]) -> Response:
         """
         真使用 requests 发送请求并获取响应
@@ -44,6 +47,7 @@ class Downloader(AbstractDownloader):
 
         res = Response.make_response(request=request)
         options = {
+            **self.options,
             'method': request.method.upper(),
             'headers': request.headers,
             'cookies': request.cookies,

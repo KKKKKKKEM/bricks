@@ -25,8 +25,9 @@ class Downloader(AbstractDownloader):
 
     """
 
-    def __init__(self, tls_config: [dict] = None) -> None:
+    def __init__(self, tls_config: dict = None, options: dict = None) -> None:
         self.tls_config = tls_config or {}
+        self.options = options or {}
 
     def fetch(self, request: Union[Request, dict]) -> Response:
         """
@@ -39,6 +40,7 @@ class Downloader(AbstractDownloader):
 
         res = Response.make_response(request=request)
         options = {
+            **self.options,
             'method': request.method.upper(),
             'headers': request.headers,
             'cookies': request.cookies,
@@ -56,14 +58,17 @@ class Downloader(AbstractDownloader):
             tls_config = self.tls_config
 
         if request.use_session:
-            session = request.get_options("$session") or self.get_session(**tls_config)
+            session = request.get_options(
+                "$session") or self.get_session(**tls_config)
         else:
             session = tls_client.Session(**tls_config)
         try:
             while True:
                 assert _redirect_count < 999, "已经超过最大重定向次数: 999"
-                response = session.execute_request(**{**options, "url": next_url})
-                last_url, next_url = next_url, response.headers.get('location') or response.headers.get('Location')
+                response = session.execute_request(
+                    **{**options, "url": next_url})
+                last_url, next_url = next_url, response.headers.get(
+                    'location') or response.headers.get('Location')
                 if request.allow_redirects and next_url:
                     next_url = urllib.parse.urljoin(response.url, next_url)
                     _redirect_count += 1
@@ -81,7 +86,8 @@ class Downloader(AbstractDownloader):
                             )
                         )
                     )
-                    request.options.get('$referer', False) and options['headers'].update(Referer=response.url)
+                    request.options.get('$referer', False) and options['headers'].update(
+                        Referer=response.url)
 
                 else:
                     res.content = response.content
@@ -100,7 +106,9 @@ class Downloader(AbstractDownloader):
 
 if __name__ == '__main__':
     downloader = Downloader()
-    rsp = downloader.fetch(Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True))
+    rsp = downloader.fetch(
+        Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True))
     print(rsp.cookies)
-    rsp = downloader.fetch(Request(url="https://httpbin.org/cookies", use_session=True))
+    rsp = downloader.fetch(
+        Request(url="https://httpbin.org/cookies", use_session=True))
     print(rsp.text)

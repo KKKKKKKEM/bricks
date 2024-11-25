@@ -35,12 +35,14 @@ class Downloader(AbstractDownloader):
             ciphers: list = None,
             random_ciphers=False,
             httpversion: str = '1.1',
-            sslversion: str = '1.2'
+            sslversion: str = '1.2',
+            options: dict = None,
     ):
         self._ciphers = ciphers
         self.random_ciphers = random_ciphers
         self.sslversion = sslversion
         self.httpversion = httpversion
+        self.options = options or {}
 
     def fetch(self, request: Union[Request, dict]) -> Response:
         """
@@ -85,6 +87,7 @@ class Downloader(AbstractDownloader):
         next_url = request.real_url
 
         options = {
+            **self.options,
             pycurl.SSL_CIPHER_LIST: self.set_cipher,
             pycurl.AUTOREFERER: 1,
             pycurl.VERBOSE: 0,

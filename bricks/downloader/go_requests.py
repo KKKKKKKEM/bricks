@@ -31,8 +31,9 @@ class Downloader(AbstractDownloader):
 
     """
 
-    def __init__(self, tls_config: [dict, TLSConfig] = None) -> None:
+    def __init__(self, tls_config: [dict, TLSConfig] = None, options: dict = None) -> None:
         self.tls_config = tls_config
+        self.options = options or {}
 
     def fetch(self, request: Union[Request, dict]) -> Response:
         """
@@ -45,6 +46,7 @@ class Downloader(AbstractDownloader):
 
         res = Response.make_response(request=request)
         options = {
+            **self.options,
             'method': request.method.upper(),
             'headers': request.headers,
             'cookies': request.cookies,

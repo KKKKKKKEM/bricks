@@ -23,11 +23,12 @@ class Downloader(AbstractDownloader):
 
     """
 
-    def __init__(self, impersonate: Union[requests.BrowserType, str] = None):
+    def __init__(self, impersonate: Union[requests.BrowserType, str] = None, options: dict=None):
         if isinstance(impersonate, requests.BrowserType):
             impersonate = impersonate.value
 
         self.impersonate = impersonate
+        self.options = options or {}
 
     def fetch(self, request: Union[Request, dict]) -> Response:
         """
@@ -40,6 +41,7 @@ class Downloader(AbstractDownloader):
 
         res = Response.make_response(request=request)
         options = {
+            **self.options,
             'method': request.method.upper(),
             'headers': request.headers,
             'cookies': request.cookies,
@@ -52,6 +54,9 @@ class Downloader(AbstractDownloader):
             'verify': request.options.get("verify", False),
             'impersonate': request.options.get("impersonate") or self.impersonate,
             'http_version': request.options.get("http_version"),
+            'ja3': request.options.get("ja3"),
+            'akamai': request.options.get("akamai"),
+            'extra_fp': request.options.get("extra_fp"),
         }
 
         next_url = request.real_url

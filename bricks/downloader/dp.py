@@ -25,11 +25,13 @@ class Downloader(AbstractDownloader):
     def __init__(
             self,
             mode: Literal["d", "s"] = "s",
+            options: dict = None
     ):
         """
 
         """
         self.mode = mode
+        self.options = options or {}
 
     def fetch(self, request: Union[Request, dict]) -> Response:
         """
@@ -46,6 +48,7 @@ class Downloader(AbstractDownloader):
         _redirect_count = 0
         session_or_options = request.get_options("session_or_options") or {}
         options = {
+            **self.options,
             'headers': dict(request.headers),
             'cookies': request.cookies,
             "data": self.parse_data(request)['data'],
