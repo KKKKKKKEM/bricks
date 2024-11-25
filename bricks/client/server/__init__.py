@@ -202,7 +202,6 @@ class Gateway:
                 while not fu.done():
                     alive = await is_alive(raw_req)
                     if not alive:
-                        logger.warning(f'{data} 被取消')
                         fu.cancel()
                     else:
                         await asyncio.sleep(0.01)
