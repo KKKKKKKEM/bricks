@@ -235,7 +235,7 @@ class APP(Gateway):
                     },
                 )
 
-                await app.awaitable_call(
+                return await app.awaitable_call(
                     prepared.func, *prepared.args, **prepared.kwargs
                 )
 

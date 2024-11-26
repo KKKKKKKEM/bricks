@@ -71,9 +71,11 @@ class GlobalMiddleware(BaseHTTPMiddleware):
                     },
                 )
 
-                await self.gateway.awaitable_call(
+                ret = await self.gateway.awaitable_call(
                     prepared.func, *prepared.args, **prepared.kwargs
                 )
+                if isinstance(ret, responses.Response):
+                    return ret
 
             response = await call_next(request)
 
@@ -98,9 +100,11 @@ class GlobalMiddleware(BaseHTTPMiddleware):
                         type(self.gateway): self.gateway,
                     },
                 )
-                await self.gateway.awaitable_call(
+                ret = await self.gateway.awaitable_call(
                     prepared.func, *prepared.args, **prepared.kwargs
                 )
+                if isinstance(ret, responses.Response):
+                    return ret
 
             return response
         except Exception as e:
