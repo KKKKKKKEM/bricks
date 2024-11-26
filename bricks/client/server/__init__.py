@@ -299,7 +299,7 @@ class Gateway:
 
                 raise signals.Break
 
-            if form == "$response" and not getattr(context, "response", None):
+            if form == "$response" and getattr(context, "response", None) is None:
                 context.response = Response(
                     status_code=204,
                     content="",
