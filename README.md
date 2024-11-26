@@ -28,6 +28,13 @@ pip install -U git+https://github.com/KKKKKKKEM/bricks.git
 pip install -U bricks-py
 ```
 
+## 安装测试版
+```python
+# beta 版本全部都发布在 test.pypi.org
+pip install -i https://test.pypi.org/simple/ -U bricks-py
+
+```
+
 # 使用文档
 具体文档请查看 [Bricks Docs](https://kkkkkkkem.vercel.app/bricks)
 
