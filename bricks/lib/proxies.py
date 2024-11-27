@@ -13,7 +13,7 @@ import threading
 import time
 import typing
 import urllib.parse
-from typing import Optional, Callable, Type, Literal
+from typing import Callable, Literal, Optional, Type
 
 from loguru import logger
 
@@ -278,6 +278,7 @@ class ClashProxy(BaseProxy):
         if not key.startswith("http" + "://"):
             key = "http" + "://" + key
         if match is ...:
+
             def match(x):
                 return str(x) not in ["DIRECT", "REJECT"]
 

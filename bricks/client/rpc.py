@@ -7,7 +7,7 @@ import json
 import threading
 import uuid
 from concurrent.futures import Future
-from typing import Callable, Any
+from typing import Any, Callable
 from urllib import parse
 
 from loguru import logger

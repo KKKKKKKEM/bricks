@@ -2,10 +2,7 @@
 # @Time    : 2023-11-13 17:46
 # @Author  : Kem
 # @Desc    : task distribution
-__all__ = (
-    "Dispatcher",
-    "Task"
-)
+__all__ = ("Dispatcher", "Task")
 
 import asyncio
 import ctypes
@@ -13,22 +10,21 @@ import queue
 import sys
 import threading
 import time
-from asyncio import futures, ensure_future
+from asyncio import ensure_future, futures
 from concurrent.futures import Future
-from typing import Union, Dict, Optional
+from typing import Dict, Optional, Union
 
-from bricks.core import events, context, signals
+from bricks.core import context, events, signals
 from bricks.state import const
 
 
 class Exit(signals.Signal):
-    def __init__(self, target: 'Worker'):
+    def __init__(self, target: "Worker"):
         self.target = target
 
 
 class _TaskQueue(queue.Queue):
-
-    def get(self, block=True, timeout=None, worker: 'Worker' = None) -> 'Task':
+    def get(self, block=True, timeout=None, worker: "Worker" = None) -> "Task":
         with self.not_empty:
             while True:
                 if not block:
@@ -60,7 +56,9 @@ class Task(Future):
 
     """
 
-    def __init__(self, func, args=None, kwargs=None, callback=None, worker: "Worker" = None):
+    def __init__(
+        self, func, args=None, kwargs=None, callback=None, worker: "Worker" = None
+    ):
         self.func = func
         self.args = args or []
         self.kwargs = kwargs or {}
@@ -87,7 +85,15 @@ class Worker(threading.Thread):
 
     """
 
-    def __init__(self, dispatcher: 'Dispatcher', name: str, timeout=None, daemon=True, trace=False, **kwargs):
+    def __init__(
+        self,
+        dispatcher: "Dispatcher",
+        name: str,
+        timeout=None,
+        daemon=True,
+        trace=False,
+        **kwargs,
+    ):
         self.dispatcher = dispatcher
         self._shutdown = threading.Event()
         self.timeout = timeout
@@ -97,12 +103,16 @@ class Worker(threading.Thread):
         super().__init__(daemon=daemon, name=name, **kwargs)
 
     def run(self) -> None:
-        events.EventManager.invoke(context.Context(const.BEFORE_WORKER_START, target=...), errors='output')
+        events.EventManager.invoke(
+            context.Context(const.BEFORE_WORKER_START, target=...), errors="output"
+        )
         self.trace and sys.settrace(self._trace)
         while self.dispatcher.is_running() and not self._shutdown.is_set():
             not self.trace and self._awaken.wait()
             try:
-                task: Task = self.dispatcher.doing.get(timeout=self.timeout, worker=self)
+                task: Task = self.dispatcher.doing.get(
+                    timeout=self.timeout, worker=self
+                )
                 task.worker = self
 
             except queue.Empty:
@@ -132,7 +142,8 @@ class Worker(threading.Thread):
         if not self.is_alive() or self._shutdown.is_set():
             return
 
-        def main(obj): raise Exit(obj)
+        def main(obj):
+            raise Exit(obj)
 
         self.dispatcher.doing.put(Task(func=main, args=[self], worker=self))
 
@@ -151,8 +162,7 @@ class Worker(threading.Thread):
 
     def clean(self):
         events.EventManager.invoke(
-            context.Context(const.BEFORE_WORKER_CLOSE, target=...),
-            errors='output'
+            context.Context(const.BEFORE_WORKER_CLOSE, target=...), errors="output"
         )
         self._shutdown.set()
 
@@ -169,14 +179,14 @@ class Worker(threading.Thread):
         self._awaken.set()
 
     def _trace(self, frame, event, arg):  # noqa
-        if event == 'call':
+        if event == "call":
             return self._localtrace
         else:
             return None
 
     def _localtrace(self, frame, event, arg):  # noqa
         self._awaken.wait()
-        if self._shutdown.is_set() and event == 'line':
+        if self._shutdown.is_set() and event == "line":
             raise SystemExit()
         return self._localtrace
 
@@ -217,9 +227,9 @@ class Dispatcher:
         self.doing = _TaskQueue()
         self.workers: Dict[str, Worker] = {}
         self._remain_workers = queue.Queue()
-        for i in range(self.max_workers): 
+        for i in range(self.max_workers):
             self._remain_workers.put(f"Worker-{i}")
-            
+
         self._running_tasks = threading.Semaphore(self.max_workers)
         self._active_tasks = threading.Semaphore(self.max_workers)
         self._shutdown = asyncio.Event()
@@ -238,7 +248,7 @@ class Dispatcher:
 
         for _ in range(size):
             ident = self._remain_workers.get()
-            options.setdefault('trace', False)
+            options.setdefault("trace", False)
             worker = Worker(self, name=ident, **options)
             self.workers[worker.name] = worker
             worker.start()
@@ -257,7 +267,7 @@ class Dispatcher:
             worker and worker.stop()
             worker and waiters.append(worker)
 
-        for waiter in waiters: 
+        for waiter in waiters:
             waiter.wait()
 
     def pause_worker(self, *idents: str):
@@ -301,7 +311,9 @@ class Dispatcher:
 
         timeout != -1 and self._running_tasks.acquire(timeout=timeout)
         submit()
-        timeout != -1 and task.add_done_callback(lambda x: self._running_tasks.release())
+        timeout != -1 and task.add_done_callback(
+            lambda x: self._running_tasks.release()
+        )
 
         self.adjust_workers()
         return task
@@ -319,7 +331,10 @@ class Dispatcher:
             def callback():
                 try:
                     futures._chain_future(  # noqa
-                        ensure_future(task.func(*task.args, **task.kwargs), loop=self.loop), task
+                        ensure_future(
+                            task.func(*task.args, **task.kwargs), loop=self.loop
+                        ),
+                        task,
                     )
                 except (SystemExit, KeyboardInterrupt):
                     raise
@@ -331,7 +346,6 @@ class Dispatcher:
             self.loop.call_soon_threadsafe(callback)
 
         def run_sync_task():
-
             def callback():
                 try:
                     ret = task.func(*task.args, **task.kwargs)
@@ -393,14 +407,16 @@ class Dispatcher:
         if isinstance(task, Task):
             return task
 
-        func = task.get('func')
+        func = task.get("func")
 
         # get positional parameters
-        positional = task.get('args', [])
-        positional = [positional] if not isinstance(positional, (list, tuple)) else positional
+        positional = task.get("args", [])
+        positional = (
+            [positional] if not isinstance(positional, (list, tuple)) else positional
+        )
 
         # get keyword parameters
-        keyword = task.get('kwargs', {})
+        keyword = task.get("kwargs", {})
         keyword = {} if not isinstance(keyword, dict) else keyword
 
         # get callback function

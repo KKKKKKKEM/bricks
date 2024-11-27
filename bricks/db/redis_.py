@@ -9,7 +9,7 @@ import datetime
 import functools
 import json
 import time
-from typing import Union, List, Literal
+from typing import List, Literal, Union
 
 import redis
 from loguru import logger
@@ -26,13 +26,13 @@ def _to_str(*args):
             ensure_ascii=False,
             # escape_forward_slashes=False
         )
-        if not isinstance(value, (bytes, str, int, float)) else value
+        if not isinstance(value, (bytes, str, int, float))
+        else value
         for value in args
     ]
 
 
 class LUA:
-
     def __init__(self, conn: "Redis", base: str = ...) -> None:
         self.conn = conn
         if base is ...:
@@ -289,7 +289,9 @@ class Redis(redis.client.Redis):
     Redis 工具
     """
 
-    def __init__(self, host='127.0.0.1', password=None, port=6379, database=0, **kwargs):
+    def __init__(
+        self, host="127.0.0.1", password=None, port=6379, database=0, **kwargs
+    ):
         """
         实例化一个 Redis 对象
 
@@ -313,7 +315,7 @@ class Redis(redis.client.Redis):
             port=port,
             db=database,
             decode_responses=True,
-            **kwargs
+            **kwargs,
         )
 
     def setbits(self, names, offsets, value, db_num=None):
@@ -340,7 +342,7 @@ class Redis(redis.client.Redis):
             
             """,
             keys=keys,
-            args=args
+            args=args,
         )
 
     def getbits(self, names, offsets, db_num=None):
@@ -359,7 +361,9 @@ class Redis(redis.client.Redis):
             """
         return self.lua.run(lua=lua, args=args, keys=keys)
 
-    def acquire_lock(self, name, timeout=3600 * 24, block=False, prefix='', value=None, db_num=None):
+    def acquire_lock(
+        self, name, timeout=3600 * 24, block=False, prefix="", value=None, db_num=None
+    ):
         """
         获取redis全局锁
 
@@ -374,7 +378,11 @@ class Redis(redis.client.Redis):
         """
         prefix = prefix + ":Lock:" if prefix else ""
         db_num = db_num or self.database
-        keys = [f'{prefix}{name}', value or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), timeout]
+        keys = [
+            f"{prefix}{name}",
+            value or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            timeout,
+        ]
         args = [db_num]
         lua = """
 changeDataBase(ARGV[1])
@@ -391,10 +399,10 @@ return ret
             if ret or not block:
                 return ret
             else:
-                logger.debug(f'等待全局锁 {name} 释放')
+                logger.debug(f"等待全局锁 {name} 释放")
                 time.sleep(1)
 
-    def release_lock(self, name, prefix=''):
+    def release_lock(self, name, prefix=""):
         """
         释放redis全局锁
 
@@ -405,10 +413,10 @@ return ret
         """
 
         prefix = prefix + ":Lock:" if prefix else ""
-        name = f'{prefix}{name}'
+        name = f"{prefix}{name}"
         self.delete(name)
 
-    def wait_lock(self, name, prefix=''):
+    def wait_lock(self, name, prefix=""):
         """
         等待锁释放
 
@@ -418,7 +426,7 @@ return ret
         """
 
         prefix = prefix + ":Lock:" if prefix else ""
-        name = f'{prefix}{name}'
+        name = f"{prefix}{name}"
 
         while True:
             try:
@@ -491,14 +499,20 @@ return ret
         db_num = self.database if db_num is None else db_num
         keys = [db_num]
         args = names
-        lua = '''
+        lua = """
 changeDataBase(KEYS[1])
 return  redis.call("DEL", unpack(ARGV))
-'''
+"""
         return self.lua.run(lua=lua, keys=keys, args=args)
 
-    def add(self, name: Union[str, List[str]], *values, db_num=None, genre: Literal['set', 'zset', 'list'] = "set",
-            maxsize=0):
+    def add(
+        self,
+        name: Union[str, List[str]],
+        *values,
+        db_num=None,
+        genre: Literal["set", "zset", "list"] = "set",
+        maxsize=0,
+    ):
         """
         添加 `values` 至 `name` 中
 
@@ -515,7 +529,7 @@ return  redis.call("DEL", unpack(ARGV))
         db_num = self.database if db_num is None else db_num
         keys = [db_num, genre or "set", maxsize, *pandora.iterable(name)]
         args = _to_str(*values)
-        lua = '''
+        lua = """
     local db_num = KEYS[1]
     local default_type = KEYS[2]
     local maxsize = KEYS[3]
@@ -528,10 +542,17 @@ return  redis.call("DEL", unpack(ARGV))
         success = success + addItems(key, values, default_type, maxsize)
     end
     return success
-'''
+"""
         return self.lua.run(lua=lua, keys=keys, args=args)
 
-    def pop(self, name: Union[str, List[str]], count=1, db_num=None, backup=None, genre: Literal['set', 'zset', 'list'] = "set"):
+    def pop(
+        self,
+        name: Union[str, List[str]],
+        count=1,
+        db_num=None,
+        backup=None,
+        genre: Literal["set", "zset", "list"] = "set",
+    ):
         """
         从 `name` 中 pop 出 `count` 个值出来
 
@@ -545,9 +566,9 @@ return  redis.call("DEL", unpack(ARGV))
         if not name:
             return
         db_num = self.database if db_num is None else db_num
-        keys = [db_num, count, genre, backup or '']
+        keys = [db_num, count, genre, backup or ""]
         args = [*pandora.iterable(name)]
-        lua = '''
+        lua = """
     local db_num = KEYS[1]
     local count = KEYS[2]
     local default_type = KEYS[3]
@@ -561,13 +582,20 @@ return  redis.call("DEL", unpack(ARGV))
         end 
     end
     return s
-'''
+"""
         ret = self.lua.run(lua=lua, keys=keys, args=args)
         if ret:
             return ret[0] if len(ret) == 1 else ret
         return None
 
-    def remove(self, name: Union[str, List[str]], *values, db_num=None, backup: str = "", genre: Literal['set', 'zset', 'list'] = "set"):
+    def remove(
+        self,
+        name: Union[str, List[str]],
+        *values,
+        db_num=None,
+        backup: str = "",
+        genre: Literal["set", "zset", "list"] = "set",
+    ):
         """
         从 `name` 中删除 `values`
 
@@ -583,7 +611,7 @@ return  redis.call("DEL", unpack(ARGV))
         db_num = self.database if db_num is None else db_num
         keys = [db_num, genre, backup, *pandora.iterable(name)]
         args = _to_str(*values)
-        lua = '''
+        lua = """
     local db_num = KEYS[1]
     local default_type = KEYS[2]
     local backup_key = KEYS[3]
@@ -595,10 +623,16 @@ return  redis.call("DEL", unpack(ARGV))
     end
     return s
 
-'''
+"""
         return self.lua.run(lua=lua, keys=keys, args=args)
 
-    def replace(self, name: Union[str, List[str]], *values, db_num=None, genre: Literal['set', 'zset', 'list'] = "set"):
+    def replace(
+        self,
+        name: Union[str, List[str]],
+        *values,
+        db_num=None,
+        genre: Literal["set", "zset", "list"] = "set",
+    ):
         """
         从 `name` 中 pop 出 `count` 个值出来
 
@@ -612,7 +646,7 @@ return  redis.call("DEL", unpack(ARGV))
         db_num = self.database if db_num is None else db_num
         keys = [db_num, genre, *pandora.iterable(name)]
         args = [j for i in values for j in _to_str(*i)]
-        lua = '''
+        lua = """
     local db_num = KEYS[1]
     local default_type = KEYS[2]
     changeDataBase(db_num)
@@ -624,10 +658,12 @@ return  redis.call("DEL", unpack(ARGV))
     end
     return ret
 
-'''
+"""
         return self.lua.run(lua=lua, keys=keys, args=args)
 
-    def merge(self, dest, *sources, db_num=None, genre: Literal['set', 'zset', 'list'] = "set"):
+    def merge(
+        self, dest, *sources, db_num=None, genre: Literal["set", "zset", "list"] = "set"
+    ):
         """
         合并队列
 
@@ -640,14 +676,14 @@ return  redis.call("DEL", unpack(ARGV))
         db_num = self.database if db_num is None else db_num
         keys = [db_num, genre, dest]
         args = sources
-        lua = '''
+        lua = """
     local db_num = KEYS[1]
     local default_type = KEYS[2]
     local dest = KEYS[3]
     local froms = ARGV
     changeDataBase(db_num)
     return mergeKeys(dest, froms, default_type)
-'''
+"""
         return self.lua.run(lua=lua, keys=keys, args=args)
 
     def command(self, cmd, *args, db_num=None):
@@ -671,7 +707,7 @@ return  redis.call("DEL", unpack(ARGV))
         return self.lua.run(lua=lua, keys=keys, args=args)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     rds = Redis()
     for i in range(100):
         rds.add("test2", {"name": f"name-{i:02}"}, genre="zset")

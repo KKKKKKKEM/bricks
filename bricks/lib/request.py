@@ -9,7 +9,7 @@ import shlex
 import urllib.parse
 from collections import OrderedDict
 from http.cookies import SimpleCookie
-from typing import Union, Optional, Dict, List, Callable
+from typing import Callable, Dict, List, Optional, Union
 
 from bricks.core import signals
 from bricks.lib.headers import Header

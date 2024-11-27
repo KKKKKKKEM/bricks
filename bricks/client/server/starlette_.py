@@ -5,7 +5,7 @@ import dataclasses
 import functools
 import re
 from re import Pattern
-from typing import Dict, Callable, Literal, Optional, Union, List
+from typing import Callable, Dict, List, Literal, Optional, Union
 
 from loguru import logger
 
@@ -23,7 +23,11 @@ from starlette.applications import Starlette  # noqa E402
 from starlette.endpoints import HTTPEndpoint  # noqa E402
 from starlette.routing import Route, WebSocketRoute  # noqa E402
 from starlette.websockets import WebSocketDisconnect  # noqa E402
-from starlette.middleware.base import ( BaseHTTPMiddleware,RequestResponseEndpoint,DispatchFunction)  # noqa E402
+from starlette.middleware.base import (
+    BaseHTTPMiddleware,
+    RequestResponseEndpoint,
+    DispatchFunction,
+)  # noqa E402
 from starlette.types import ASGIApp  # noqa E402
 
 

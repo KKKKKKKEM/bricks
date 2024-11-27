@@ -8,15 +8,14 @@ import inspect
 import json
 import threading
 import time
-from concurrent.futures import Future
-from concurrent.futures import ThreadPoolExecutor
-from typing import Union, Literal, Callable, Dict, List
+from concurrent.futures import Future, ThreadPoolExecutor
+from typing import Callable, Dict, List, Literal, Union
 
 from loguru import logger
 
 from bricks import Response
 from bricks.core import signals
-from bricks.spider.addon import Rpc, Listener
+from bricks.spider.addon import Listener, Rpc
 from bricks.spider.air import Context
 from bricks.utils import pandora
 

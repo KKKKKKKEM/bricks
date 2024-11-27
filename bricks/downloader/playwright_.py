@@ -2,7 +2,7 @@ import asyncio
 import inspect
 import os.path
 import subprocess
-from typing import Literal, Union, List, Awaitable, Callable
+from typing import Awaitable, Callable, List, Literal, Union
 from urllib import parse
 from urllib.parse import urlparse
 
@@ -20,12 +20,11 @@ from playwright._impl._driver import compute_driver_executable, get_driver_env  
 
 
 class BrowserContext(async_api.PlaywrightContextManager):
-
     def __init__(
-            self,
-            driver: Literal["chromium", "firefox", "webkit"] = "chromium",
-            options: dict = None,
-            reuse: bool = True,
+        self,
+        driver: Literal["chromium", "firefox", "webkit"] = "chromium",
+        options: dict = None,
+        reuse: bool = True,
     ):
         self.browser: async_api.Browser = ...
         self.driver = driver
@@ -62,14 +61,14 @@ class Downloader(AbstractDownloader):
     """
 
     def __init__(
-            self,
-            driver: Literal["chromium", "firefox", "webkit"] = "chromium",
-            debug: bool = False,
-            scripts: list = None,
-            mode: Literal["automation", "api"] = "automation",
-            headless: bool = True,
-            reuse: bool = True,
-            options: dict=None,
+        self,
+        driver: Literal["chromium", "firefox", "webkit"] = "chromium",
+        debug: bool = False,
+        scripts: list = None,
+        mode: Literal["automation", "api"] = "automation",
+        headless: bool = True,
+        reuse: bool = True,
+        options: dict = None,
     ):
         """
 
@@ -81,8 +80,11 @@ class Downloader(AbstractDownloader):
         self.headless = headless
         self.reuse = reuse
         self.scripts = scripts or []
-        self.browser_context: BrowserContext = BrowserContext(driver=driver, reuse=self.reuse)
+        self.browser_context: BrowserContext = BrowserContext(
+            driver=driver, reuse=self.reuse
+        )
         self.options = options or {}
+
     def install(self):
         """
         安装 playwright 环境
@@ -93,33 +95,42 @@ class Downloader(AbstractDownloader):
             return
 
         driver_executable = compute_driver_executable()
-        subprocess.run(
-            [str(driver_executable), "install"], env=get_driver_env()
-        )
+        subprocess.run([str(driver_executable), "install"], env=get_driver_env())
 
     async def fetch(self, request: Union[Request, dict]) -> Response:
-
         res = Response.make_response(request=request)
 
         # 获取驱动
-        driver: Literal["chromium", "firefox", "webkit"] = request.get_options('driver') or self.driver
+        driver: Literal["chromium", "firefox", "webkit"] = (
+            request.get_options("driver") or self.driver
+        )
 
         # 获取浏览器 launch 配置
-        browser_options: dict = request.get_options('browser', {})
-        context_options: dict = request.get_options('context', {})
+        browser_options: dict = request.get_options("browser", {})
+        context_options: dict = request.get_options("context", {})
         browser_options.setdefault("headless", self.headless)
 
-        interceptors: dict = request.get_options('interceptors', {})
+        interceptors: dict = request.get_options("interceptors", {})
 
         # 可用拦截器
-        request_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get('request') or []
-        response_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get('response') or []
-        browser_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get('browser') or []
-        context_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get('context') or []
-        before_goto_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get(
-            'before_goto') or []
-        after_goto_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = interceptors.get(
-            'after_goto') or []
+        request_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = (
+            interceptors.get("request") or []
+        )
+        response_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = (
+            interceptors.get("response") or []
+        )
+        browser_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = (
+            interceptors.get("browser") or []
+        )
+        context_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = (
+            interceptors.get("context") or []
+        )
+        before_goto_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = (
+            interceptors.get("before_goto") or []
+        )
+        after_goto_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = (
+            interceptors.get("after_goto") or []
+        )
 
         if self.mode == "automation":
             timeout = 60 * 1000 if request.timeout is ... else request.timeout * 1000
@@ -130,7 +141,6 @@ class Downloader(AbstractDownloader):
                 "url": request.real_url,
                 "wait_until": request.get_options("wait_until") or "networkidle",
                 "referer": request.headers.get("referer") or None,
-
             }
 
         else:
@@ -143,10 +153,9 @@ class Downloader(AbstractDownloader):
                 "timeout": timeout,
                 "method": request.method.upper(),
                 "ignore_https_errors": True,
-                "data": self.parse_data(request)['data'],
+                "data": self.parse_data(request)["data"],
                 "headers": request.headers,
                 "max_redirects": 999 if request.allow_redirects else 0,
-
             }
 
         proxies = self.parse_proxies_for_playwright(request.proxies)
@@ -156,7 +165,9 @@ class Downloader(AbstractDownloader):
             self.browser_context.options = browser_options
             self.browser_context.driver = driver
         else:
-            self.browser_context = BrowserContext(driver=driver, options=browser_options, reuse=self.reuse)
+            self.browser_context = BrowserContext(
+                driver=driver, options=browser_options, reuse=self.reuse
+            )
 
         async with self.browser_context as browser:
             for interceptor in browser_interceptors:
@@ -164,33 +175,33 @@ class Downloader(AbstractDownloader):
                 await pandora.invoke(
                     interceptor,
                     args=[browser],
-                    annotations={
-                        type(browser): browser,
-                        Request: request
-                    },
+                    annotations={type(browser): browser, Request: request},
                     namespace={
                         "browser": browser,
                         "request": request,
-                    }
+                    },
                 )
 
             if request.use_session:
                 context = request.get_options("$session")
                 if not context:
-                    context = await self.get_session(**{
-                        "browser": browser,
+                    context = await self.get_session(
+                        **{
+                            "browser": browser,
+                            **context_options,
+                            "proxy": proxies,
+                            "user_agent": request.headers.get("user-agent"),
+                        }
+                    )
+
+            else:
+                context = await browser.new_context(
+                    **{
                         **context_options,
                         "proxy": proxies,
                         "user_agent": request.headers.get("user-agent"),
-                    })
-
-            else:
-
-                context = await browser.new_context(**{
-                    **context_options,
-                    "proxy": proxies,
-                    "user_agent": request.headers.get("user-agent"),
-                })
+                    }
+                )
                 await context.clear_cookies()
 
             try:
@@ -202,13 +213,13 @@ class Downloader(AbstractDownloader):
                         annotations={
                             type(context): context,
                             type(browser): browser,
-                            Request: request
+                            Request: request,
                         },
                         namespace={
                             "context": context,
                             "browser": browser,
                             "request": request,
-                        }
+                        },
                     )
 
                 scripts = request.get_options("scripts", [])
@@ -218,23 +229,33 @@ class Downloader(AbstractDownloader):
                 # 设置 context 的 Cookie
                 if request.cookies:
                     domain = urlparse(request.real_url).hostname
-                    cookies = [SetCookieParam(name=k, value=v, domain=domain) for k, v in request.cookies.items()]
+                    cookies = [
+                        SetCookieParam(name=k, value=v, domain=domain)
+                        for k, v in request.cookies.items()
+                    ]
                     await context.add_cookies(cookies)
 
                 for interceptor in response_interceptors:
                     assert inspect.isasyncgenfunction(interceptor)
-                    context.on('response', interceptor)
+                    context.on("response", interceptor)
                 else:
-                    context.on('response', self.on_response(page_url=request.real_url, raw_response=res))
+                    context.on(
+                        "response",
+                        self.on_response(page_url=request.real_url, raw_response=res),
+                    )
 
                 page = await context.new_page()
                 async with page:
-
                     for event, interceptor in request_interceptors:
                         assert inspect.isasyncgenfunction(interceptor)
                         await page.route(event, interceptor)
                     else:
-                        await page.route('**', self.on_request(page_url=request.real_url, raw_request=request))
+                        await page.route(
+                            "**",
+                            self.on_request(
+                                page_url=request.real_url, raw_request=request
+                            ),
+                        )
 
                     for interceptor in before_goto_interceptors:
                         assert inspect.isasyncgenfunction(interceptor)
@@ -245,14 +266,14 @@ class Downloader(AbstractDownloader):
                                 type(page): page,
                                 type(context): context,
                                 type(browser): browser,
-                                Request: request
+                                Request: request,
                             },
                             namespace={
                                 "page": page,
                                 "context": context,
                                 "browser": browser,
                                 "request": request,
-                            }
+                            },
                         )
 
                     if self.mode == "automation":
@@ -279,7 +300,7 @@ class Downloader(AbstractDownloader):
                                 type(browser): browser,
                                 type(response): response,
                                 Request: request,
-                                Response: res
+                                Response: res,
                             },
                             namespace={
                                 "page": page,
@@ -287,7 +308,7 @@ class Downloader(AbstractDownloader):
                                 "browser": browser,
                                 "request": request,
                                 "response": res,
-                            }
+                            },
                         )
 
                     return res
@@ -302,7 +323,11 @@ class Downloader(AbstractDownloader):
                 return
             else:
                 content = await response.body()
-                req_body = parse.unquote_plus(response.request.post_data) if response.request.post_data else None
+                req_body = (
+                    parse.unquote_plus(response.request.post_data)
+                    if response.request.post_data
+                    else None
+                )
                 raw_response.history.append(
                     Response(
                         content=content,
@@ -322,10 +347,11 @@ class Downloader(AbstractDownloader):
 
     @staticmethod
     def on_request(page_url, raw_request: Request):
-
         async def inner(route: async_api.Route, request: async_api.Request):
             if page_url == request.url or page_url + "/" == request.url:
-                await route.continue_(headers={**request.headers, **raw_request.headers})
+                await route.continue_(
+                    headers={**request.headers, **raw_request.headers}
+                )
             else:
                 await route.continue_()
 
@@ -336,27 +362,35 @@ class Downloader(AbstractDownloader):
         if not _proxy:
             return None
 
-        if not _proxy.startswith('http'):
-            _proxy = 'http://' + _proxy
+        if not _proxy.startswith("http"):
+            _proxy = "http://" + _proxy
 
         o = urlparse(_proxy)
 
         if not o.username:
-            return {'server': o.netloc}
+            return {"server": o.netloc}
         else:
-            return {"username": o.username, "password": o.password, "server": f'{o.hostname}:{o.port}'}
+            return {
+                "username": o.username,
+                "password": o.password,
+                "server": f"{o.hostname}:{o.port}",
+            }
 
-    async def injection_scripts(self, conn: Union[async_api.BrowserContext, async_api.Page], scripts: list = None):
+    async def injection_scripts(
+        self,
+        conn: Union[async_api.BrowserContext, async_api.Page],
+        scripts: list = None,
+    ):
         scripts = scripts or self.scripts
         for script in scripts:
             if os.path.exists(script):
-                _script = {'path': script}
+                _script = {"path": script}
             else:
-                _script = {'script': script}
+                _script = {"script": script}
             await conn.add_init_script(**_script)
 
     async def make_session(self, **kwargs):
-        browser = kwargs.pop('browser')
+        browser = kwargs.pop("browser")
         return await browser.new_context(**kwargs)
 
     async def get_session(self, **options):
@@ -374,27 +408,38 @@ class Downloader(AbstractDownloader):
     async def clear_session(self):
         if hasattr(self.local, f"{self.__class__}$session"):
             try:
-                old_session: async_api.BrowserContext = getattr(self.local, f"{self.__class__}$session")
+                old_session: async_api.BrowserContext = getattr(
+                    self.local, f"{self.__class__}$session"
+                )
                 await old_session.close()
             except Exception as e:
-                logger.error(f'[清空 session 失败] 失败原因: {str(e) or str(e.__class__.__name__)}', error=e)
+                logger.error(
+                    f"[清空 session 失败] 失败原因: {str(e) or str(e.__class__.__name__)}",
+                    error=e,
+                )
 
 
-if __name__ == '__main__':
-    downloader = Downloader(mode='api', reuse=False, headless=False)
+if __name__ == "__main__":
+    downloader = Downloader(mode="api", reuse=False, headless=False)
     downloader.debug = True
 
-
     async def main():
-        rsp = await downloader.fetch(Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True))
+        rsp = await downloader.fetch(
+            Request(
+                url="https://httpbin.org/cookies/set?freeform=123", use_session=True
+            )
+        )
         print(rsp.cookies)
-        rsp = await downloader.fetch(Request(url="https://httpbin.org/cookies", use_session=True))
+        rsp = await downloader.fetch(
+            Request(url="https://httpbin.org/cookies", use_session=True)
+        )
         print(rsp.text)
         rsp = await downloader.fetch(Request(url="https://httpbin.org/cookies"))
         print(rsp.text)
 
-        rsp = await downloader.fetch(Request(url="https://httpbin.org/cookies", use_session=True))
+        rsp = await downloader.fetch(
+            Request(url="https://httpbin.org/cookies", use_session=True)
+        )
         print(rsp.text)
-
 
     asyncio.run(main())

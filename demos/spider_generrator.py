@@ -6,7 +6,7 @@
 
 from bricks.utils.convert import curl2spider
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     cmd = """curl 'https://www.baidu.com/home/weather/getweather?citycode=3873&bsToken=65d1dc2bea5bf3da7bcc670692baa1e4&indextype=manht&_req_seqid=0xa39c109600111838&asyn=1&t=1702368225746&sid=39712_39790_39679_39817_39837_39842_39904_39909_39934_39936_39933_39944_39940_39939_39930_39783' \
     -H 'Accept: text/plain, */*; q=0.01' \
     -H 'Accept-Language: zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6,pt;q=0.5' \

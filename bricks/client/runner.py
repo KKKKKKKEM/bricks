@@ -21,13 +21,14 @@ from bricks.utils import pandora
 
 
 class BaseRunner:
-
     def __init__(self):
         self.st_utime = time.time()
         self.et_utime = time.time()
 
     @staticmethod
-    def add_background_task(func, args: list = None, kwargs: dict = None, delay=1, daemon=False):
+    def add_background_task(
+        func, args: list = None, kwargs: dict = None, delay=1, daemon=False
+    ):
         future = Future()
         args = args or []
         kwargs = kwargs or {}
@@ -53,7 +54,9 @@ class BaseRunner:
 
     @classmethod
     def stop(cls, delay=1):
-        fu = cls.add_background_task(lambda: os.kill(os.getpid(), signal.SIGTERM), delay=delay)
+        fu = cls.add_background_task(
+            lambda: os.kill(os.getpid(), signal.SIGTERM), delay=delay
+        )
         return f"即将在 {delay} 秒后停止程序, 后台任务: {fu}"
 
     @classmethod
@@ -110,9 +113,10 @@ class BaseRunner:
             return
 
         from bricks.client.rpc import APP
+
         app = APP(**settings)
-        app.register_adapter('stop', cls.stop)
-        app.register_adapter('reload', cls.reload)
+        app.register_adapter("stop", cls.stop)
+        app.register_adapter("reload", cls.reload)
         app.start()
         return app
 
@@ -120,20 +124,16 @@ class BaseRunner:
         if not settings:
             return
 
-        workdir = settings.get('workdir') or os.getcwd()
-        requirements: str = os.path.join(workdir, settings.get('requirements', "requirements.txt"))
+        workdir = settings.get("workdir") or os.getcwd()
+        requirements: str = os.path.join(
+            workdir, settings.get("requirements", "requirements.txt")
+        )
         python = sys.executable
-        pypi = settings.get('pypi')
-        venv_folder = os.path.join(workdir, settings.get('venv_dir', "venv"))
+        pypi = settings.get("pypi")
+        venv_folder = os.path.join(workdir, settings.get("venv_dir", "venv"))
         sysm = {
-            "nt": {
-                "python": os.sep.join(["Scripts", "python.exe"]),
-                "venv_lib": "Lib"
-            },
-            "unix": {
-                "python": os.sep.join(["bin", "python"]),
-                "venv_lib": "lib"
-            }
+            "nt": {"python": os.sep.join(["Scripts", "python.exe"]), "venv_lib": "Lib"},
+            "unix": {"python": os.sep.join(["bin", "python"]), "venv_lib": "lib"},
         }
         if os.path.exists(requirements):
             # 获取文件的修改时间
@@ -141,45 +141,58 @@ class BaseRunner:
 
             # 判断虚拟环境目录是否存在
             if not os.path.exists(venv_folder):
-                logger.debug(f'准备创建虚拟环境: {venv_folder}')
+                logger.debug(f"准备创建虚拟环境: {venv_folder}")
                 venv.main([venv_folder, "--without-pip", "--system-site-packages"])
-                logger.debug(f'成功创建虚拟环境: {venv_folder}')
+                logger.debug(f"成功创建虚拟环境: {venv_folder}")
                 st_mtime = self.st_utime
 
             # 获取虚拟环境下面的 python 对象
-            python = os.path.join(venv_folder, (sysm.get(os.name) or sysm.get('unix'))["python"])
+            python = os.path.join(
+                venv_folder, (sysm.get(os.name) or sysm.get("unix"))["python"]
+            )
 
             # 依赖文件有修改
-            if self.st_utime <= st_mtime <= self.et_utime or not os.path.exists(venv_folder):
-                venv_lib = os.sep.join([venv_folder, (sysm.get(os.name) or sysm.get('unix'))["venv_lib"]])
+            if self.st_utime <= st_mtime <= self.et_utime or not os.path.exists(
+                venv_folder
+            ):
+                venv_lib = os.sep.join(
+                    [venv_folder, (sysm.get(os.name) or sysm.get("unix"))["venv_lib"]]
+                )
 
                 # 获取虚拟环境安装包目录
-                if os.name == 'nt':
+                if os.name == "nt":
                     packages_path: str = os.sep.join([venv_lib, "site-packages"])
                 else:
-                    packages_path: str = os.sep.join([venv_lib, os.listdir(venv_lib)[0], "site-packages"])
+                    packages_path: str = os.sep.join(
+                        [venv_lib, os.listdir(venv_lib)[0], "site-packages"]
+                    )
 
-                logger.debug(f'依赖文件疑似存在修改, 准备安装/更新依赖: {packages_path}')
+                logger.debug(
+                    f"依赖文件疑似存在修改, 准备安装/更新依赖: {packages_path}"
+                )
 
                 cmds = [
-                    f'{sys.executable} -m pip install -r {requirements} --upgrade --target={packages_path}'
+                    f"{sys.executable} -m pip install -r {requirements} --upgrade --target={packages_path}"
                 ]
 
                 with open(requirements) as f:
                     text = f.read()
                     if "bricks-py" not in text or "bricks_py" not in text:
                         ver = pandora.require("bricks-py")
-                        cmds.insert(0, f"{sys.executable} -m pip install -U bricks-py=={ver} --target={packages_path}")
+                        cmds.insert(
+                            0,
+                            f"{sys.executable} -m pip install -U bricks-py=={ver} --target={packages_path}",
+                        )
 
                 for cmd in cmds:
-                    if pypi: 
+                    if pypi:
                         cmd += f" -i {pypi} --upgrade --trusted-host {parse.urlparse(pypi).hostname}"
                     rret = subprocess.call(cmd.strip().split(" "))
                     if rret != 0:
                         shutil.rmtree(venv_folder, ignore_errors=True)
                         raise RuntimeError("安装依赖错误")
 
-                logger.debug(f'成功安装/更新依赖: {packages_path}')
+                logger.debug(f"成功安装/更新依赖: {packages_path}")
 
         if python != sys.executable:
             os.putenv("bricks-switch-python", "yes")
@@ -190,20 +203,21 @@ class BaseRunner:
             return
 
         def build_for_git():
-            pandora.require('gitpython==3.1.40')
-            from git import Repo, InvalidGitRepositoryError
-            workdir = settings.get('workdir') or os.getcwd()
-            url: str = settings['url']
+            pandora.require("gitpython==3.1.40")
+            from git import InvalidGitRepositoryError, Repo
+
+            workdir = settings.get("workdir") or os.getcwd()
+            url: str = settings["url"]
 
             try:
                 if os.path.exists(workdir):
                     repo = Repo(workdir)
                     u1, u2 = url.lower(), repo.remote().url.lower()
 
-                    if not u1.endswith('.git'):
-                        u1 += '.git'
-                    if not u2.endswith('.git'):
-                        u2 += '.git'
+                    if not u1.endswith(".git"):
+                        u1 += ".git"
+                    if not u2.endswith(".git"):
+                        u2 += ".git"
                     assert u1 == u2
 
                     logger.debug(f"开始更新代码: {workdir}")
@@ -219,11 +233,11 @@ class BaseRunner:
                 # 文件夹不存在 / 文件夹存在但是不是正确的 Repo / Repo 的 URL 更改了
                 shutil.rmtree(workdir, ignore_errors=True)
 
-        form = settings.get('form')
+        form = settings.get("form")
         builders = {
             "git": build_for_git,
         }
-        if os.environ.pop('bricks-switch-python', None) == 'yes':
+        if os.environ.pop("bricks-switch-python", None) == "yes":
             return
 
         builder = builders.get(form)

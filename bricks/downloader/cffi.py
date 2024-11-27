@@ -23,7 +23,9 @@ class Downloader(AbstractDownloader):
 
     """
 
-    def __init__(self, impersonate: Union[requests.BrowserType, str] = None, options: dict=None):
+    def __init__(
+        self, impersonate: Union[requests.BrowserType, str] = None, options: dict = None
+    ):
         if isinstance(impersonate, requests.BrowserType):
             impersonate = impersonate.value
 
@@ -42,17 +44,18 @@ class Downloader(AbstractDownloader):
         res = Response.make_response(request=request)
         options = {
             **self.options,
-            'method': request.method.upper(),
-            'headers': request.headers,
-            'cookies': request.cookies,
-            "data": self.parse_data(request)['data'],
-            'files': request.options.get('files'),
-            'auth': request.options.get('auth'),
-            'timeout': 5 if request.timeout is ... else request.timeout,
-            'allow_redirects': False,
-            'proxies': request.proxies and {"http": request.proxies, "https": request.proxies},  # noqa
-            'verify': request.options.get("verify", False),
-            'impersonate': request.options.get("impersonate") or self.impersonate,
+            "method": request.method.upper(),
+            "headers": request.headers,
+            "cookies": request.cookies,
+            "data": self.parse_data(request)["data"],
+            "files": request.options.get("files"),
+            "auth": request.options.get("auth"),
+            "timeout": 5 if request.timeout is ... else request.timeout,
+            "allow_redirects": False,
+            "proxies": request.proxies
+            and {"http": request.proxies, "https": request.proxies},  # noqa
+            "verify": request.options.get("verify", False),
+            "impersonate": request.options.get("impersonate") or self.impersonate,
             **request.options.get("$options", {}),
         }
 
@@ -67,7 +70,10 @@ class Downloader(AbstractDownloader):
         while True:
             assert _redirect_count < 999, "已经超过最大重定向次数: 999"
             response = session.request(**{**options, "url": next_url})
-            last_url, next_url = next_url, response.headers.get('location') or response.headers.get('Location')
+            last_url, next_url = (
+                next_url,
+                response.headers.get("location") or response.headers.get("Location"),
+            )
             if request.allow_redirects and next_url:
                 next_url = urllib.parse.urljoin(response.url, next_url)
                 _redirect_count += 1
@@ -81,11 +87,13 @@ class Downloader(AbstractDownloader):
                         request=Request(
                             url=last_url,
                             method=request.method,
-                            headers=copy.deepcopy(options.get('headers'))
-                        )
+                            headers=copy.deepcopy(options.get("headers")),
+                        ),
                     )
                 )
-                request.options.get('$referer', False) and options['headers'].update(Referer=response.url)
+                request.options.get("$referer", False) and options["headers"].update(
+                    Referer=response.url
+                )
 
             else:
                 res.content = response.content
@@ -101,9 +109,11 @@ class Downloader(AbstractDownloader):
         return requests.Session()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     downloader = Downloader()
-    rsp = downloader.fetch(Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True))
+    rsp = downloader.fetch(
+        Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True)
+    )
     print(rsp.cookies)
     rsp = downloader.fetch(Request(url="https://httpbin.org/cookies", use_session=True))
     print(rsp.text)

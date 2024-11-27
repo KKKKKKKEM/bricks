@@ -10,7 +10,7 @@ import itertools
 import math
 import re
 import time
-from typing import Any, Optional, Callable, Union, Type, Literal, List
+from typing import Any, Callable, List, Literal, Optional, Type, Union
 
 import jmespath
 import jsonpath

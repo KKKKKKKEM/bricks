@@ -6,7 +6,7 @@ import asyncio
 import threading
 import time
 
-from bricks.core.dispatch import Task, Dispatcher
+from bricks.core.dispatch import Dispatcher, Task
 
 """
 
@@ -18,23 +18,20 @@ from bricks.core.dispatch import Task, Dispatcher
 4. 提交之后返回 future, 想要等待结果只需要 future.result() 即可，你也可以取消任务, 避免异步编程
 
 """
-if __name__ == '__main__':
+if __name__ == "__main__":
     dispatcher = Dispatcher(max_workers=1)
     dispatcher.start()
-
 
     async def demo(j):
         while True:
             await asyncio.sleep(1)
             print(j)
 
-
     def demo2(j, con=None):
         con = con or (lambda: True)
         while con():
-            print(f'{threading.current_thread()} -- {j}')
+            print(f"{threading.current_thread()} -- {j}")
             time.sleep(1)
-
 
     tasks = []
     for i in range(2):

@@ -3,7 +3,7 @@
 # @Author  : Kem
 # @Desc    :
 import typing
-from http.cookiejar import CookieJar, Cookie
+from http.cookiejar import Cookie, CookieJar
 from http.cookies import SimpleCookie
 
 CookieTypes = typing.Union[
@@ -61,11 +61,11 @@ class Cookies(typing.MutableMapping[str, str]):
         self.jar.set_cookie(cookie)
 
     def get(  # type: ignore
-            self,
-            name: str,
-            default: typing.Optional[str] = None,
-            domain: typing.Optional[str] = None,
-            path: typing.Optional[str] = None,
+        self,
+        name: str,
+        default: typing.Optional[str] = None,
+        domain: typing.Optional[str] = None,
+        path: typing.Optional[str] = None,
     ) -> typing.Optional[str]:
         """
         Get a cookie by name. May optionally include domain and path
@@ -79,10 +79,10 @@ class Cookies(typing.MutableMapping[str, str]):
                     if path is None or cookie.path == path:
                         # if cookies on two different domains do not share a same value
                         if (
-                                value is not None
-                                and not matched_domain.endswith(cookie.domain)
-                                and not str(cookie.domain).endswith(matched_domain)
-                                and value != cookie.value
+                            value is not None
+                            and not matched_domain.endswith(cookie.domain)
+                            and not str(cookie.domain).endswith(matched_domain)
+                            and value != cookie.value
                         ):
                             message = (
                                 f"Multiple cookies exist with name={name} on "
@@ -97,10 +97,10 @@ class Cookies(typing.MutableMapping[str, str]):
         return value
 
     def delete(
-            self,
-            name: str,
-            domain: typing.Optional[str] = None,
-            path: typing.Optional[str] = None,
+        self,
+        name: str,
+        domain: typing.Optional[str] = None,
+        path: typing.Optional[str] = None,
     ) -> None:
         """
         Delete a cookie by name. May optionally include domain and path
@@ -113,9 +113,9 @@ class Cookies(typing.MutableMapping[str, str]):
             cookie
             for cookie in self.jar
             if (
-                    cookie.name == name
-                    and (domain is None or cookie.domain == domain)
-                    and (path is None or cookie.path == path)
+                cookie.name == name
+                and (domain is None or cookie.domain == domain)
+                and (path is None or cookie.path == path)
             )
         ]
 
@@ -123,7 +123,7 @@ class Cookies(typing.MutableMapping[str, str]):
             self.jar.clear(cookie.domain, cookie.path, cookie.name)
 
     def clear(
-            self, domain: typing.Optional[str] = None, path: typing.Optional[str] = None
+        self, domain: typing.Optional[str] = None, path: typing.Optional[str] = None
     ) -> None:
         """
         Delete all cookies. Optionally include a domain and path in
@@ -178,11 +178,21 @@ class Cookies(typing.MutableMapping[str, str]):
     @classmethod
     def by_jar(cls, jar):
         cookies = cls()
-        for cookie in (jar or []):
+        for cookie in jar or []:
             if isinstance(cookie, dict):
-                cookies.set(name=cookie["name"], value=cookie["value"], domain=cookie.get('domain'), path=cookie.get('path'))
+                cookies.set(
+                    name=cookie["name"],
+                    value=cookie["value"],
+                    domain=cookie.get("domain"),
+                    path=cookie.get("path"),
+                )
             else:
-                cookies.set(name=cookie.name, value=cookie.value, domain=cookie.domain, path=cookie.path)
+                cookies.set(
+                    name=cookie.name,
+                    value=cookie.value,
+                    domain=cookie.domain,
+                    path=cookie.path,
+                )
         return cookies
 
     def load(self, set_cookie_string: str):
@@ -190,10 +200,15 @@ class Cookies(typing.MutableMapping[str, str]):
         simple_cookie.load(set_cookie_string)
         # 遍历解析后的 SimpleCookie 来创建 Cookie 对象并添加到 CookieJar
         for key, morsel in simple_cookie.items():
-            self.set(name=key, value=morsel.value, domain=morsel["domain"], path=morsel["path"])
+            self.set(
+                name=key,
+                value=morsel.value,
+                domain=morsel["domain"],
+                path=morsel["path"],
+            )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     _cookies = Cookies()
     _cookies.load(
         "__Secure-3PSIDCC=ACA-OxNpMQHV4kdNyNK8OnUTF3laah3P7YWmsN0x4ypKJ2FVI1xL3r37iLUtpGMYvhhxN4K1iw; expires=Tue, 10-Dec-2024 05:36:40 GMT; path=/; domain=.youtube.com; Secure; HttpOnly; priority=high; SameSite=none"

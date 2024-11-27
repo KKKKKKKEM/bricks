@@ -4,7 +4,7 @@
 # @Desc    : 动态 code 生成
 import dataclasses
 import enum
-from typing import List, Tuple, Any, Union
+from typing import Any, List, Tuple, Union
 
 from bricks.utils.pandora import iterable
 

@@ -5,10 +5,11 @@
 import copy
 import inspect
 from dataclasses import dataclass, field
-from typing import Optional, Union, List, Dict, Callable
+from typing import Callable, Dict, List, Optional, Union
 
 from bricks import Request, Response
-from bricks.core import events as _events, signals
+from bricks.core import events as _events
+from bricks.core import signals
 from bricks.lib.headers import Header
 from bricks.lib.items import Items
 from bricks.lib.nodes import RenderNode

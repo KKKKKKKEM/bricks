@@ -2,7 +2,7 @@ import asyncio
 import json
 import re
 import uuid
-from typing import Dict, Callable, Literal
+from typing import Callable, Dict, Literal
 
 from loguru import logger
 

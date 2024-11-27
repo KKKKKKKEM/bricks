@@ -866,7 +866,7 @@ def opera(
             random.randint(9, 12),
             random.randint(160, 400),
             random.randint(10, 12),
-            ),
+        ),
         tmp_pc.format(
             platform=windows_platform_token(),
             saf_version=saf_version,

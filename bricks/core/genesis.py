@@ -4,25 +4,24 @@
 # @Desc    :
 import functools
 import time
-from typing import Union, Literal, Callable, List
+from typing import Callable, List, Literal, Union
 
 from loguru import logger
 
-from bricks.core import signals, dispatch
-from bricks.core.context import Flow, Context, Error
-from bricks.core.events import EventManager, Task, REGISTERED_EVENTS, Register
+from bricks.core import dispatch, signals
+from bricks.core.context import Context, Error, Flow
+from bricks.core.events import REGISTERED_EVENTS, EventManager, Register, Task
 from bricks.state import const
 from bricks.utils import pandora
 from bricks.utils.scheduler import BaseTrigger, Scheduler
 
 
 class MetaClass(type):
-
     def __call__(cls, *args, **kwargs):
         instance = type.__call__(cls, *args, **kwargs)
 
         # 加载拦截器
-        for method in filter(lambda x: str(x).startswith('_when_'), dir(instance)):
+        for method in filter(lambda x: str(x).startswith("_when_"), dir(instance)):
             # 修改被拦截的方法
             raw_method_name = method.replace("_when_", "")
             raw_method = getattr(instance, raw_method_name, None)
@@ -30,19 +29,24 @@ class MetaClass(type):
                 continue
 
             method_wrapper = getattr(instance, method)
-            raw_method and setattr(instance, raw_method_name, method_wrapper(raw_method))
+            raw_method and setattr(
+                instance, raw_method_name, method_wrapper(raw_method)
+            )
 
         else:
             hasattr(instance, "install") and instance.install()
-            key = f'{cls.__module__}.{cls.__name__}'
+            key = f"{cls.__module__}.{cls.__name__}"
             for form, events in REGISTERED_EVENTS.lazy_loading[key].items():
                 for event in events:
-                    instance.use(form, Task(
-                        func=getattr(instance, event.func),
-                        match=event.match,
-                        index=event.index,
-                        disposable=event.disposable,
-                    ))
+                    instance.use(
+                        form,
+                        Task(
+                            func=getattr(instance, event.func),
+                            match=event.match,
+                            index=event.index,
+                            disposable=event.disposable,
+                        ),
+                    )
 
         return instance
 
@@ -87,14 +91,21 @@ class Chaos(metaclass=MetaClass):
             return
 
         self.set("task_name", task_name)
-        method = getattr(self, f'run_{task_name}', None)
+        method = getattr(self, f"run_{task_name}", None)
         if method:
             return method(*args, **kwargs)
         else:
             logger.warning(f"Task {task_name} not found")
             return None
 
-    def launch(self, scheduler: dict, task_name: str = "all", args=None, kwargs=None, callback: Callable = None):
+    def launch(
+        self,
+        scheduler: dict,
+        task_name: str = "all",
+        args=None,
+        kwargs=None,
+        callback: Callable = None,
+    ):
         """
         同 run, 但是是提交给调度器运行的, 可以定时执行
 
@@ -108,9 +119,13 @@ class Chaos(metaclass=MetaClass):
 
         def job():
             self.run(task_name=task_name, args=args, kwargs=kwargs)
-            callback and pandora.invoke(callback, namespace={"spider": self}, annotations={type(self): self})
+            callback and pandora.invoke(
+                callback, namespace={"spider": self}, annotations={type(self): self}
+            )
 
-        form: Union[Literal['cron', 'date', 'interval'], BaseTrigger] = scheduler.pop("form")
+        form: Union[Literal["cron", "date", "interval"], BaseTrigger] = scheduler.pop(
+            "form"
+        )
         exprs: str = scheduler.pop("exprs")
         scheduler_ = Scheduler()
         scheduler_.add(form=form, exprs=exprs, **scheduler).do(job)
@@ -123,7 +138,7 @@ class Chaos(metaclass=MetaClass):
                 self.before_start()
 
             except (signals.Failure, signals.Success):
-                logger.debug(f'[{const.BEFORE_START}] 任务被中断')
+                logger.debug(f"[{const.BEFORE_START}] 任务被中断")
                 return
 
             except signals.Signal as e:
@@ -147,7 +162,6 @@ class Chaos(metaclass=MetaClass):
         pass
 
     def _when_before_start(self, raw_method):
-
         @functools.wraps(raw_method)
         def wrapper(*args, **kwargs):
             context = self.make_context(form=const.BEFORE_START)
@@ -166,7 +180,6 @@ class Chaos(metaclass=MetaClass):
         pass
 
     def _when_before_close(self, raw_method):
-
         @functools.wraps(raw_method)
         def wrapper(*args, **kwargs):
             context = self.make_context(form=const.BEFORE_CLOSE)
@@ -189,7 +202,7 @@ class Pangu(Chaos):
 
         self.dispatcher = dispatch.Dispatcher(
             max_workers=self.get("concurrency", default=1),
-            options=self.get('dispatcher.options', default={})
+            options=self.get("dispatcher.options", default={}),
         )
 
     @property
@@ -202,16 +215,16 @@ class Pangu(Chaos):
 
         while True:
             context: Flow = context.produce()
-            if context is None: 
+            if context is None:
                 return
-            
+
             with context:
                 while context.next and callable(context.next.root):
                     try:
                         prepared = pandora.prepare(
                             func=context.next.root,
                             annotations={type(context): context},
-                            namespace={"context": context}
+                            namespace={"context": context},
                         )
 
                         product = prepared.func(*prepared.args, **prepared.kwargs)
@@ -219,7 +232,7 @@ class Pangu(Chaos):
                             context.callback,
                             args=[product],
                             annotations={type(context): context},
-                            namespace={"context": context}
+                            namespace={"context": context},
                         )
 
                     # 中断信号
@@ -255,7 +268,9 @@ class Pangu(Chaos):
                         raise
 
                     except Exception as e:
-                        EventManager.invoke(Error(context=context, error=e), errors="output")
+                        EventManager.invoke(
+                            Error(context=context, error=e), errors="output"
+                        )
                         context.error(e, shutdown=True)
 
     def submit(self, task: dispatch.Task, timeout=None) -> dispatch.Task:
@@ -320,6 +335,5 @@ class Pangu(Chaos):
         exception: Exception = exception.error
         stack = pandora.get_pretty_stack(exception)
         logger.error(
-            f"[{context.form}] {exception.__class__.__name__}({exception})"
-            f"\n{stack}"
+            f"[{context.form}] {exception.__class__.__name__}({exception})" f"\n{stack}"
         )

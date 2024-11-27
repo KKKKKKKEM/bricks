@@ -17,7 +17,7 @@ import re
 import subprocess
 import sys
 import threading
-from typing import Any, List, Union, Mapping, Callable, Literal, Tuple, Dict
+from typing import Any, Callable, Dict, List, Literal, Mapping, Tuple, Union
 
 import better_exceptions
 from loguru import logger

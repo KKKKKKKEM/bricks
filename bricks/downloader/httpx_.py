@@ -48,36 +48,34 @@ class Downloader(AbstractDownloader):
         res = Response.make_response(request=request)
         options = {
             **self.options,
-            'method': request.method.upper(),
-            'headers': request.headers,
-            'cookies': request.cookies,
-            "data": self.parse_data(request)['data'],
-            'files': request.options.get('files'),
-            'auth': request.options.get('auth'),
-            'timeout': 5 if request.timeout is ... else request.timeout,
-            'follow_redirects': False,
-            'proxy': request.proxies,  # noqa
-            'verify': request.options.get("verify", False),
+            "method": request.method.upper(),
+            "headers": request.headers,
+            "cookies": request.cookies,
+            "data": self.parse_data(request)["data"],
+            "files": request.options.get("files"),
+            "auth": request.options.get("auth"),
+            "timeout": 5 if request.timeout is ... else request.timeout,
+            "follow_redirects": False,
+            "proxy": request.proxies,  # noqa
+            "verify": request.options.get("verify", False),
             **request.options.get("$options", {}),
         }
 
         next_url = request.real_url
         _redirect_count = 0
         httpversion: str = request.get_options("httpversion", "1.1")
-        if httpversion.startswith('1'):
+        if httpversion.startswith("1"):
             http1, http2 = True, False
         else:
             http1, http2 = False, True
 
         if request.use_session:
-
             session = request.get_options("$session") or self.get_session(
                 proxy=options.pop("proxy", None),
                 verify=options.pop("verify", False),
                 timeout=options.pop("timeout", 5),
                 http1=http1,
                 http2=http2,
-
             )
         else:
             session = httpx.Client(
@@ -91,11 +89,13 @@ class Downloader(AbstractDownloader):
             while True:
                 assert _redirect_count < 999, "已经超过最大重定向次数: 999"
                 response = session.request(**{**options, "url": next_url})
-                last_url, next_url = next_url, response.headers.get(
-                    'location') or response.headers.get('Location')
+                last_url, next_url = (
+                    next_url,
+                    response.headers.get("location")
+                    or response.headers.get("Location"),
+                )
                 if request.allow_redirects and next_url:
-                    next_url = urllib.parse.urljoin(
-                        str(response.url), next_url)
+                    next_url = urllib.parse.urljoin(str(response.url), next_url)
                     _redirect_count += 1
                     res.history.append(
                         Response(
@@ -107,12 +107,13 @@ class Downloader(AbstractDownloader):
                             request=Request(
                                 url=last_url,
                                 method=request.method,
-                                headers=copy.deepcopy(options.get('headers'))
-                            )
+                                headers=copy.deepcopy(options.get("headers")),
+                            ),
                         )
                     )
-                    request.options.get('$referer', False) and options['headers'].update(
-                        Referer=str(response.url))
+                    request.options.get("$referer", False) and options[
+                        "headers"
+                    ].update(Referer=str(response.url))
 
                 else:
                     res.content = response.content
@@ -130,11 +131,11 @@ class Downloader(AbstractDownloader):
         return httpx.Client(**options)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     downloader = Downloader()
     rsp = downloader.fetch(
-        Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True))
+        Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True)
+    )
     print(rsp.cookies)
-    rsp = downloader.fetch(
-        Request(url="https://httpbin.org/cookies", use_session=True))
+    rsp = downloader.fetch(Request(url="https://httpbin.org/cookies", use_session=True))
     print(rsp.text)

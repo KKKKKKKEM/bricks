@@ -2,7 +2,7 @@
 # @Time    : 2023-12-10 11:52
 # @Author  : Kem
 # @Desc    :
-from typing import List, Tuple, Any
+from typing import Any, List, Tuple
 
 from loguru import logger
 

@@ -7,7 +7,7 @@ import itertools
 import os
 from collections import UserList
 from types import GeneratorType
-from typing import Optional, Union, Any, Callable
+from typing import Any, Callable, Optional, Union
 
 
 class Items(UserList):

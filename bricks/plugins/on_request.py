@@ -13,7 +13,7 @@ from bricks.core import signals
 from bricks.core.context import Context
 from bricks.lib import proxies
 from bricks.lib.proxies import BaseProxy
-from bricks.utils import pandora, codes
+from bricks.utils import codes, pandora
 from bricks.utils.fake import user_agent
 
 

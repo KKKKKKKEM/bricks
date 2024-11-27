@@ -4,7 +4,7 @@
 # @Desc    : 管理工具
 import base64
 import sys
-from typing import Union, List, Callable
+from typing import Callable, List, Union
 from urllib import parse
 
 from bricks.client import Argv

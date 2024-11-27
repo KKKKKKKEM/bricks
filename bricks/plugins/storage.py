@@ -3,7 +3,7 @@
 # @Author  : Kem
 # @Desc    : 存储插件
 import json
-from typing import List, Union, Optional, Literal
+from typing import List, Literal, Optional, Union
 
 from bricks.db.redis_ import Redis
 from bricks.db.sqlite import Sqlite

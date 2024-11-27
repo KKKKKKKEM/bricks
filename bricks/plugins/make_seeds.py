@@ -7,7 +7,7 @@
 """
 
 import re
-from typing import Optional, Union, List, Literal
+from typing import List, Literal, Optional, Union
 from urllib.parse import urlencode
 
 from bricks.db.redis_ import Redis

@@ -1,7 +1,7 @@
 import copy
 import functools
 import urllib
-from typing import Union, Literal
+from typing import Literal, Union
 from urllib.parse import urlparse
 
 from bricks import Request, Response
@@ -21,14 +21,8 @@ class Downloader(AbstractDownloader):
 
     """
 
-    def __init__(
-            self,
-            mode: Literal["d", "s"] = "s",
-            options: dict = None
-    ):
-        """
-
-        """
+    def __init__(self, mode: Literal["d", "s"] = "s", options: dict = None):
+        """ """
         self.mode = mode
         self.options = options or {}
 
@@ -49,28 +43,30 @@ class Downloader(AbstractDownloader):
         options = {
             **self.options,
             **request.options.get("$options", {}),
-            'headers': dict(request.headers),
-            'cookies': request.cookies,
-            "data": self.parse_data(request)['data'],
-            'files': request.options.get('files'),
-            'auth': request.options.get('auth'),
-            'timeout': 5 if request.timeout is ... else request.timeout,
-            'allow_redirects': False,
-            'proxies': request.proxies and {"http": request.proxies, "https": request.proxies},  # noqa
-            'verify': request.options.get("verify", False),
+            "headers": dict(request.headers),
+            "cookies": request.cookies,
+            "data": self.parse_data(request)["data"],
+            "files": request.options.get("files"),
+            "auth": request.options.get("auth"),
+            "timeout": 5 if request.timeout is ... else request.timeout,
+            "allow_redirects": False,
+            "proxies": request.proxies
+            and {"http": request.proxies, "https": request.proxies},  # noqa
+            "verify": request.options.get("verify", False),
         }
 
         if request.use_session:
             page = request.get_options("$session") or self.get_session(
-                mode=self.mode,
-                session_or_options=session_or_options
+                mode=self.mode, session_or_options=session_or_options
             )
         else:
             page = WebPage(mode=self.mode, session_or_options=session_or_options)
 
         if request.cookies and self.mode == "d":
             domain = urlparse(request.real_url).hostname
-            cookies = [dict(name=k, value=v, domain=domain) for k, v in request.cookies.items()]
+            cookies = [
+                dict(name=k, value=v, domain=domain) for k, v in request.cookies.items()
+            ]
             page.tab.set.cookies(cookies)
 
         if request.method.upper() == "POST":
@@ -94,7 +90,11 @@ class Downloader(AbstractDownloader):
                         cookies=page.cookies(),
                     )
 
-                last_url, next_url = next_url, response.headers.get('location') or response.headers.get('Location')
+                last_url, next_url = (
+                    next_url,
+                    response.headers.get("location")
+                    or response.headers.get("Location"),
+                )
                 if request.allow_redirects and next_url:
                     next_url = urllib.parse.urljoin(response.url, next_url)
                     _redirect_count += 1
@@ -108,11 +108,13 @@ class Downloader(AbstractDownloader):
                             request=Request(
                                 url=last_url,
                                 method=request.method,
-                                headers=copy.deepcopy(options.get('headers'))
-                            )
+                                headers=copy.deepcopy(options.get("headers")),
+                            ),
                         )
                     )
-                    request.options.get('$referer', False) and options['headers'].update(Referer=response.url)
+                    request.options.get("$referer", False) and options[
+                        "headers"
+                    ].update(Referer=response.url)
 
                 else:
                     res.content = response.content
@@ -130,10 +132,16 @@ class Downloader(AbstractDownloader):
         return WebPage(**kwargs)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     downloader = Downloader(mode="d")
     # rsp = downloader.fetch(Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True))
     # print(rsp.cookies)
-    rsp = downloader.fetch(Request(url="https://httpbin.org/cookies", use_session=True, cookies={"freeform": "4564"}))
+    rsp = downloader.fetch(
+        Request(
+            url="https://httpbin.org/cookies",
+            use_session=True,
+            cookies={"freeform": "4564"},
+        )
+    )
     # rsp = downloader.fetch(Request(url="https://httpbin.org/get", use_session=True, cookies={"freeform": "123"}, proxies="http://127.0.0.1:7890"))
     print(rsp.text)

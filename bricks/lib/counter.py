@@ -4,6 +4,7 @@ import threading
 
 class FastWriteCounter:
     """快写计数器, 利用GIL实现累加不加锁, 仅Cpython下有效"""
+
     __slots__ = (
         "_de_counter",
         "_in_counter",
@@ -20,13 +21,13 @@ class FastWriteCounter:
     def increment(self, step: int = 1):
         if self._disable:
             return
-        for _ in range(step): 
+        for _ in range(step):
             next(self._in_counter)
 
     def decrement(self, step: int = 1):
         if self._disable:
             return
-        for _ in range(step): 
+        for _ in range(step):
             next(self._de_counter)
 
     @property

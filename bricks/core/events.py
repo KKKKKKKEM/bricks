@@ -7,7 +7,7 @@ import itertools
 import threading
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Optional, Union, Callable, Any, List, Literal, Dict
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 from loguru import logger
 
@@ -93,19 +93,35 @@ class EventManager:
     counter = defaultdict(itertools.count)
 
     @classmethod
-    def trigger(cls, context: Context, errors: Literal['raise', 'ignore', 'output'] = "raise", annotations: dict = None,
-                namespace: dict = None):
+    def trigger(
+        cls,
+        context: Context,
+        errors: Literal["raise", "ignore", "output"] = "raise",
+        annotations: dict = None,
+        namespace: dict = None,
+    ):
         """
         trigger events: interact with external functions
 
         """
 
         for event in cls.acquire(context):
-            yield cls._call(event, context, errors=errors, annotations=annotations, namespace=namespace)
+            yield cls._call(
+                event,
+                context,
+                errors=errors,
+                annotations=annotations,
+                namespace=namespace,
+            )
 
     @classmethod
-    def invoke(cls, context: Context, errors: Literal['raise', 'ignore', 'output'] = "raise", annotations: dict = None,
-               namespace: dict = None):
+    def invoke(
+        cls,
+        context: Context,
+        errors: Literal["raise", "ignore", "output"] = "raise",
+        annotations: dict = None,
+        namespace: dict = None,
+    ):
         """
         invoke events: invoke all events
 
@@ -115,17 +131,19 @@ class EventManager:
         :param context:
         :return:
         """
-        for _ in cls.trigger(context, errors=errors, annotations=annotations, namespace=namespace):
+        for _ in cls.trigger(
+            context, errors=errors, annotations=annotations, namespace=namespace
+        ):
             pass
 
     @classmethod
     def next(
-            cls,
-            ctx: Flow,
-            form: str,
-            annotations: dict = None,
-            namespace: dict = None,
-            callback: Callable = None
+        cls,
+        ctx: Flow,
+        form: str,
+        annotations: dict = None,
+        namespace: dict = None,
+        callback: Callable = None,
     ):
         def main(context: Flow):
             EventManager.invoke(context, annotations=annotations, namespace=namespace)
@@ -145,7 +163,10 @@ class EventManager:
         else:
             targets = [None, context.target]
 
-        events_group = [REGISTERED_EVENTS.disposable[context.form], REGISTERED_EVENTS.permanent[context.form]]
+        events_group = [
+            REGISTERED_EVENTS.disposable[context.form],
+            REGISTERED_EVENTS.permanent[context.form],
+        ]
         for i, group in enumerate(events_group):
             group: dict
 
@@ -158,17 +179,25 @@ class EventManager:
                 for event in events:
                     match = event.match
                     if (
-                            (match is None)
-                            or (callable(match) and match(context))
-                            or (isinstance(match, str) and eval(match, globals(), {"context": context}))
-
+                        (match is None)
+                        or (callable(match) and match(context))
+                        or (
+                            isinstance(match, str)
+                            and eval(match, globals(), {"context": context})
+                        )
                     ):
                         event.disposable and event.box.remove(event)
                         yield event
 
     @classmethod
-    def _call(cls, event: Task, context: Context, errors: Literal['raise', 'ignore', 'output'] = "raise",
-              annotations: dict = None, namespace: dict = None):
+    def _call(
+        cls,
+        event: Task,
+        context: Context,
+        errors: Literal["raise", "ignore", "output"] = "raise",
+        annotations: dict = None,
+        namespace: dict = None,
+    ):
         try:
             annotations = annotations or {}
             namespace = namespace or {}
@@ -177,7 +206,7 @@ class EventManager:
                 args=event.args,
                 kwargs=event.kwargs,
                 annotations={type(context): context, **annotations},
-                namespace={"context": context, **namespace}
+                namespace={"context": context, **namespace},
             )
         except Exception as e:
             if errors == "raise":
@@ -198,10 +227,10 @@ class EventManager:
 
             if disposable:
                 container = REGISTERED_EVENTS.disposable
-                counter = cls.counter[f'{context.target}.{context.form}.disposable']
+                counter = cls.counter[f"{context.target}.{context.form}.disposable"]
             else:
                 container = REGISTERED_EVENTS.permanent
-                counter = cls.counter[f'{context.target}.{context.form}.permanent']
+                counter = cls.counter[f"{context.target}.{context.form}.permanent"]
 
             event.index = next(counter) if event.index is None else event.index
             event.box = container[context.form][context.target]
@@ -209,13 +238,19 @@ class EventManager:
 
             ret.append(Register(task=event, form=context.form, target=context.target))
 
-        REGISTERED_EVENTS.disposable[context.form][context.target].sort(key=lambda x: x.index)
-        REGISTERED_EVENTS.permanent[context.form][context.target].sort(key=lambda x: x.index)
+        REGISTERED_EVENTS.disposable[context.form][context.target].sort(
+            key=lambda x: x.index
+        )
+        REGISTERED_EVENTS.permanent[context.form][context.target].sort(
+            key=lambda x: x.index
+        )
         REGISTERED_EVENTS.registed[context.target].extend(ret)
         return ret
 
 
-def on(form: str, index: int = None, disposable: Optional[bool] = False, binding: Any = ...):
+def on(
+    form: str, index: int = None, disposable: Optional[bool] = False, binding: Any = ...
+):
     """
     使用装饰器的方式注册事件
     如果有 staticmethod 之类的装饰器, 则需要紧贴着你的函数
@@ -236,16 +271,19 @@ def on(form: str, index: int = None, disposable: Optional[bool] = False, binding
         if binding is ...:
             if "." in func.__qualname__:
                 key = f"{func.__module__}.{func.__qualname__.rsplit('.', 1)[0]}"
-                REGISTERED_EVENTS.lazy_loading[key][form].append(Task(func=func.__name__, index=index, disposable=disposable))
+                REGISTERED_EVENTS.lazy_loading[key][form].append(
+                    Task(func=func.__name__, index=index, disposable=disposable)
+                )
             else:
                 EventManager.register(
                     Context(form=form),
-                    Task(func=func, index=index, disposable=disposable)
+                    Task(func=func, index=index, disposable=disposable),
                 )
         else:
             EventManager.register(
                 Context(form=form, target=binding),
-                Task(func=func, index=index, disposable=disposable))
+                Task(func=func, index=index, disposable=disposable),
+            )
 
         return func
 

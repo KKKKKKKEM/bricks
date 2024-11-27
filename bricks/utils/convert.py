@@ -4,7 +4,7 @@
 # @Desc    :
 import json
 import os.path
-from typing import Union, Callable, Literal
+from typing import Callable, Literal, Union
 
 from loguru import logger
 

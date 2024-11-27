@@ -10,7 +10,7 @@ from collections import defaultdict
 
 from loguru import logger
 
-from bricks.lib.queues import TaskQueue, Item
+from bricks.lib.queues import Item, TaskQueue
 from bricks.lib.queues.smart import SmartQueue
 from bricks.utils import pandora
 

@@ -18,8 +18,8 @@ from bricks.utils import pandora
 
 pandora.require("pycurl")
 
-import pycurl  # noqa: E402
 import certifi  # noqa: E402
+import pycurl  # noqa: E402
 import six  # noqa: E402
 
 
@@ -31,12 +31,12 @@ class Downloader(AbstractDownloader):
     """
 
     def __init__(
-            self,
-            ciphers: list = None,
-            random_ciphers=False,
-            httpversion: str = '1.1',
-            sslversion: str = '1.2',
-            options: dict = None,
+        self,
+        ciphers: list = None,
+        random_ciphers=False,
+        httpversion: str = "1.1",
+        sslversion: str = "1.2",
+        options: dict = None,
     ):
         self._ciphers = ciphers
         self.random_ciphers = random_ciphers
@@ -116,7 +116,6 @@ class Downloader(AbstractDownloader):
         _redirect_count = 0
 
         try:
-
             for option, value in options.items():
                 curl.setopt(option, value)
 
@@ -125,10 +124,13 @@ class Downloader(AbstractDownloader):
                 body, headers = io.BytesIO(), {}
                 curl.setopt(pycurl.URL, next_url)
                 curl.setopt(pycurl.WRITEFUNCTION, body.write)
-                curl.setopt(pycurl.HTTPHEADER, self.build_headers_options(request.headers)[pycurl.HTTPHEADER])
+                curl.setopt(
+                    pycurl.HTTPHEADER,
+                    self.build_headers_options(request.headers)[pycurl.HTTPHEADER],
+                )
                 curl.perform()
 
-                next_url = headers.get('Location') or headers.get('location')
+                next_url = headers.get("Location") or headers.get("location")
 
                 if request.allow_redirects and next_url:
                     next_url = urllib.parse.urljoin(options[pycurl.URL], next_url)
@@ -144,14 +146,13 @@ class Downloader(AbstractDownloader):
                                 method=request.method,
                                 headers=copy.deepcopy(request.headers),
                             ),
-                            cookies=make_cookie()
+                            cookies=make_cookie(),
                         )
                     )
                     _referer and request.headers.update(Referer=options[pycurl.URL])
                     options[pycurl.URL] = next_url
 
                 else:
-
                     res.content = body.getvalue()
                     res.status_code = curl.getinfo(pycurl.HTTP_CODE)
                     res.headers = headers
@@ -165,18 +166,26 @@ class Downloader(AbstractDownloader):
 
     @property
     def set_cipher(self):
-
         if not self._ciphers:
             self._ciphers = [
-                'TLS_AES_128_GCM_SHA256', 'TLS_AES_256_GCM_SHA384', 'TLS_CHACHA20_POLY1305_SHA256',
-                'ECDHE-ECDSA-AES128-GCM-SHA256', 'ECDHE-RSA-AES128-GCM-SHA256', 'ECDHE-ECDSA-AES256-GCM-SHA384',
-                'ECDHE-RSA-AES256-GCM-SHA384', 'ECDHE-ECDSA-CHACHA20-POLY1305', 'ECDHE-RSA-CHACHA20-POLY1305',
-                'ECDHE-RSA-AES128-SHA', 'ECDHE-RSA-AES256-SHA', 'AES128-GCM-SHA256', 'AES256-GCM-SHA384',
-                'AES128-SHA,AES256-SHA'
+                "TLS_AES_128_GCM_SHA256",
+                "TLS_AES_256_GCM_SHA384",
+                "TLS_CHACHA20_POLY1305_SHA256",
+                "ECDHE-ECDSA-AES128-GCM-SHA256",
+                "ECDHE-RSA-AES128-GCM-SHA256",
+                "ECDHE-ECDSA-AES256-GCM-SHA384",
+                "ECDHE-RSA-AES256-GCM-SHA384",
+                "ECDHE-ECDSA-CHACHA20-POLY1305",
+                "ECDHE-RSA-CHACHA20-POLY1305",
+                "ECDHE-RSA-AES128-SHA",
+                "ECDHE-RSA-AES256-SHA",
+                "AES128-GCM-SHA256",
+                "AES256-GCM-SHA384",
+                "AES128-SHA,AES256-SHA",
             ]
 
         self.random_ciphers and random.shuffle(self._ciphers)
-        return ','.join(self._ciphers)
+        return ",".join(self._ciphers)
 
     @staticmethod
     def build_headers_options(req_headers):
@@ -196,7 +205,9 @@ class Downloader(AbstractDownloader):
     def build_cookie_options(request: Request):
         """Returns a dict with the pycurl option for the headers."""
         if request.cookies:
-            cookie_string = '; '.join([f'{key}={value}' for key, value in request.cookies.items()])
+            cookie_string = "; ".join(
+                [f"{key}={value}" for key, value in request.cookies.items()]
+            )
             options = {pycurl.COOKIE, cookie_string}
         else:
             options = {}
@@ -214,19 +225,18 @@ class Downloader(AbstractDownloader):
             return {pycurl.CUSTOMREQUEST: method}
 
     def build_body_options(self, request: Request):
-
         if request.method == "HEAD":
             # Body is not allowed for HEAD
             return {pycurl.NOBODY: True}
 
         elif request.body:
             body = self.parse_data(request)
-            is_encoded_form = body['type'] == "application/x-www-form-urlencoded"
+            is_encoded_form = body["type"] == "application/x-www-form-urlencoded"
 
             if is_encoded_form:
-                return {pycurl.POSTFIELDS: body['data']}
+                return {pycurl.POSTFIELDS: body["data"]}
             else:
-                _body_stream = six.BytesIO(six.ensure_binary(body['data']))
+                _body_stream = six.BytesIO(six.ensure_binary(body["data"]))
 
                 return {
                     pycurl.UPLOAD: True,
@@ -239,9 +249,9 @@ class Downloader(AbstractDownloader):
     @staticmethod
     def build_timeout_options(request: Request):
         """Returns the curl timeout options."""
-        if request.timeout is ...: 
+        if request.timeout is ...:
             request.timeout = 5
-            
+
         if isinstance(request.timeout, (tuple, list)):
             conn_timeout, read_timeout = request.timeout
             total_timeout = conn_timeout + read_timeout
@@ -260,9 +270,7 @@ class Downloader(AbstractDownloader):
         verify = request.options.get("verify", False)
         if verify:
             ca_value = (
-                verify
-                if isinstance(verify, six.string_types)
-                else certifi.where()
+                verify if isinstance(verify, six.string_types) else certifi.where()
             )
 
             # Requests allows the verify parameter to be a file or a directory. This requires
@@ -309,14 +317,16 @@ class Downloader(AbstractDownloader):
             }
             options = {
                 pycurl.PROXYTYPE: s2t.get(components.scheme) or pycurl.PROXYTYPE_HTTP,
-                pycurl.PROXY: f'{components.scheme}://{components.hostname}:{components.port}',
+                pycurl.PROXY: f"{components.scheme}://{components.hostname}:{components.port}",
             }
 
             if components.username and components.password:
-                options.update({
-                    pycurl.PROXYAUTH: pycurl.HTTPAUTH_BASIC,
-                    pycurl.PROXYUSERPWD: f'{components.username}:{components.password}',
-                })
+                options.update(
+                    {
+                        pycurl.PROXYAUTH: pycurl.HTTPAUTH_BASIC,
+                        pycurl.PROXYUSERPWD: f"{components.username}:{components.password}",
+                    }
+                )
 
             return options
         else:
@@ -338,20 +348,26 @@ class Downloader(AbstractDownloader):
             "1.2": pycurl.SSLVERSION_TLSv1_2,
             "1.3": pycurl.SSLVERSION_TLSv1_3,  # noqa
         }
-        c_httpversion = request.options.get('httpversion') or self.httpversion
-        c_sslversion = request.options.get('sslversion') or self.sslversion
-        options.update({
-            pycurl.HTTP_VERSION: httpversion.get(c_httpversion) or pycurl.CURL_HTTP_VERSION_1_1,
-            pycurl.SSLVERSION: sslversion.get(c_sslversion) or pycurl.SSLVERSION_TLSv1_2,
-            pycurl.SSL_ENABLE_NPN: 0,
-        })
+        c_httpversion = request.options.get("httpversion") or self.httpversion
+        c_sslversion = request.options.get("sslversion") or self.sslversion
+        options.update(
+            {
+                pycurl.HTTP_VERSION: httpversion.get(c_httpversion)
+                or pycurl.CURL_HTTP_VERSION_1_1,
+                pycurl.SSLVERSION: sslversion.get(c_sslversion)
+                or pycurl.SSLVERSION_TLSv1_2,
+                pycurl.SSL_ENABLE_NPN: 0,
+            }
+        )
 
         try:
-            options.update({
-                pycurl.SSL_ENABLE_ALPS: 1,  # noqa
-                pycurl.SSL_CERT_COMPRESSION: "brotli",  # noqa
-                pycurl.HTTP2_PSEUDO_HEADERS_ORDER: "masp",  # noqa
-            })
+            options.update(
+                {
+                    pycurl.SSL_ENABLE_ALPS: 1,  # noqa
+                    pycurl.SSL_CERT_COMPRESSION: "brotli",  # noqa
+                    pycurl.HTTP2_PSEUDO_HEADERS_ORDER: "masp",  # noqa
+                }
+            )
         except:  # noqa
             pass
 
@@ -361,9 +377,11 @@ class Downloader(AbstractDownloader):
         return pycurl.Curl()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     downloader = Downloader()
-    rsp = downloader.fetch(Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True))
+    rsp = downloader.fetch(
+        Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True)
+    )
     print(rsp.cookies)
     rsp = downloader.fetch(Request(url="https://httpbin.org/cookies", use_session=True))
     print(rsp.text)

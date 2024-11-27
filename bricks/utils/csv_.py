@@ -14,7 +14,7 @@ import os.path
 import re
 import threading
 from shutil import rmtree
-from typing import Optional, Callable, Literal
+from typing import Callable, Literal, Optional
 
 from loguru import logger
 

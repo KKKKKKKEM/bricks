@@ -7,7 +7,7 @@ import dataclasses
 import json
 import re
 from collections import UserDict
-from typing import Any, Callable, Optional, Literal, Mapping, Union, List, Tuple
+from typing import Any, Callable, List, Literal, Mapping, Optional, Tuple, Union
 
 from bricks.utils import pandora
 

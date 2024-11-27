@@ -5,12 +5,13 @@
 import copy
 import inspect
 from dataclasses import dataclass
-from typing import Optional, Union, List, Dict, Callable
+from typing import Callable, Dict, List, Optional, Union
 
 from loguru import logger
 
 from bricks import Request, Response, state
-from bricks.core import signals, events as _events
+from bricks.core import events as _events
+from bricks.core import signals
 from bricks.lib.headers import Header
 from bricks.lib.items import Items
 from bricks.lib.nodes import RenderNode

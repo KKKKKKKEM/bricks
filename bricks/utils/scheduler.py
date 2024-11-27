@@ -41,11 +41,11 @@ import re
 import threading
 import time
 import urllib.parse
-from typing import List, Union, Callable, Optional, Literal
+from typing import Callable, List, Literal, Optional, Union
 
 from loguru import logger
 
-from bricks.utils import pandora, arrow
+from bricks.utils import arrow, pandora
 
 
 class TSTATE(enum.Enum):

@@ -7,7 +7,6 @@ from bricks.spider.template import Config
 
 
 class Spider(template.Spider):
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
@@ -17,12 +16,7 @@ class Spider(template.Spider):
             init=[
                 template.Init(
                     func=lambda: {"page": 1},
-                    layout=template.Layout(
-                        factory={
-                            "time": lambda: time.time()
-                        }
-                    ),
-
+                    layout=template.Layout(factory={"time": lambda: time.time()}),
                 )
             ],
             events={
@@ -31,37 +25,30 @@ class Spider(template.Spider):
                     template.Task(
                         match="context.signpost == 0",
                         func=scripts.is_success,
-                        kwargs={
-                            "match": [
-                                "context.response.get('code') == 0"
-                            ]
-                        }
+                        kwargs={"match": ["context.response.get('code') == 0"]},
                     ),
                 ],
                 const.BEFORE_PIPELINE: [
                     # context.signpost 为 0 的时候 -> 请求第二个配置
-                    template.Task(func=lambda context: context.next_step(), match="context.signpost == 0"),
+                    template.Task(
+                        func=lambda context: context.next_step(),
+                        match="context.signpost == 0",
+                    ),
                     # context.signpost 为 0 的时候 -> 进行翻页
                     template.Task(
                         match="context.signpost == 0",
                         func=scripts.turn_page,
                         kwargs={
-                            "match": [
-                                "context.response.get('data.hasNextPage') == 1"
-                            ],
-                        }
+                            "match": ["context.response.get('data.hasNextPage') == 1"],
+                        },
                     ),
                 ],
-
             },
             download=[
                 # 第一个下载配置
                 template.Download(
                     url="https://fx1.service.kugou.com/mfanxing-home/h5/cdn/room/index/list_v2",
-                    params={
-                        "page": "{page}",
-                        "cid": 6000
-                    },
+                    params={"page": "{page}", "cid": 6000},
                     headers={
                         "User-Agent": "@chrome",
                         "Content-Type": "application/json;charset=UTF-8",
@@ -94,8 +81,12 @@ class Spider(template.Spider):
                     },
                     layout=template.Layout(
                         rename={"userId": "user_id"},
-                        default={"modify_at": time.time(), "page": "{page}", "seeds_time": "{time}"}
-                    )
+                        default={
+                            "modify_at": time.time(),
+                            "page": "{page}",
+                            "seeds_time": "{time}",
+                        },
+                    ),
                 ),
                 # 第二个解析配置
                 template.Parse(
@@ -108,19 +99,17 @@ class Spider(template.Spider):
                                 "q": "q",
                             }
                         }
-                    }
+                    },
                 ),
             ],
             pipeline=[
                 template.Pipeline(
-                    func=lambda context: print(context.items),
-                    success=True
+                    func=lambda context: print(context.items), success=True
                 )
-            ]
-
+            ],
         )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     spider = Spider()
     spider.run()

@@ -83,16 +83,15 @@ local = collections.defaultdict(threading.local)
 
 
 class Flow(Context):
-
     def __init__(
-            self,
-            form: str,
-            target=None,
-            next: LinkNode = None,  # noqa
-            flows: dict = None,
-            args: list = None,
-            kwargs: dict = None,
-            **options
+        self,
+        form: str,
+        target=None,
+        next: LinkNode = None,  # noqa
+        flows: dict = None,
+        args: list = None,
+        kwargs: dict = None,
+        **options,
     ) -> None:
         self.next: LinkNode = next
         self.callback = None
@@ -109,18 +108,17 @@ class Flow(Context):
 
         super().__setattr__(key, value)
 
-    def produce(self) -> 'Flow':
+    def produce(self) -> "Flow":
         return self.doing.popleft() if self.doing else None
 
     def flow(self, attrs=None, flag=True):
         # 更新属性
         attrs = attrs or {}
-        if not flag: 
+        if not flag:
             attrs.setdefault("next", self.next)
         self.update(attrs)
 
         if "next" not in attrs:
-
             if self.next.root in self.flows:
                 node = self.flows[self.next.root]
 
@@ -172,8 +170,10 @@ class Flow(Context):
         :return:
         """
         from bricks.core import dispatch, genesis
-        assert self.target and isinstance(self.target, genesis.Pangu), \
-            "The 'target' should be an instance of bricks.core.genesis.Pangu or an instance of its subclasses."
+
+        assert (
+            self.target and isinstance(self.target, genesis.Pangu)
+        ), "The 'target' should be an instance of bricks.core.genesis.Pangu or an instance of its subclasses."
         context = self.branch(attrs, rollback, False)
         if action == "submit":
             fun = self.target.submit
@@ -184,7 +184,7 @@ class Flow(Context):
         context.future = future
         return context
 
-    def switch(self, attrs: dict = None, by: Literal['func', 'block'] = "func"):
+    def switch(self, attrs: dict = None, by: Literal["func", "block"] = "func"):
         if by == "block":
             attrs.setdefault("next", self.next)
             self.flow(attrs)
@@ -194,7 +194,7 @@ class Flow(Context):
         attrs = attrs or {}
         attrs.setdefault("next", None)
         self.flow(attrs)
-        if shutdown: 
+        if shutdown:
             raise signals.Switch()
 
     def update(self, attrs: dict = None):
@@ -238,7 +238,7 @@ class Error(Context):
             form=const.ERROR_OCCURRED,
             target=context and context.target,
             context=context,
-            **kwargs
+            **kwargs,
         )
         self.error = error
         self.context = context

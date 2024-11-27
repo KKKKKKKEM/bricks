@@ -11,7 +11,6 @@ from typing import List, Optional
 
 
 class Sqlite:
-
     def __init__(self, database=":memory:", **kwargs):
         sqlite3.register_adapter(bool, int)
         sqlite3.register_adapter(object, pickle.dumps)
@@ -26,7 +25,9 @@ class Sqlite:
 
         self.database = database
         kwargs.setdefault("check_same_thread", False)
-        self.connection = sqlite3.connect(database, detect_types=sqlite3.PARSE_DECLTYPES, **kwargs)
+        self.connection = sqlite3.connect(
+            database, detect_types=sqlite3.PARSE_DECLTYPES, **kwargs
+        )
         self._cursor: sqlite3.Cursor
         self.python_to_sqlite_types = {
             type(None): "NULL",
@@ -52,7 +53,9 @@ class Sqlite:
         self._cursor and self._cursor.close()
         self.connection.commit()
 
-    def find(self, sql: str, batch_size: int = 10000, unpack: bool = False) -> List[dict]:
+    def find(
+        self, sql: str, batch_size: int = 10000, unpack: bool = False
+    ) -> List[dict]:
         with self as cursor:
             cursor: sqlite3.Cursor
             cursor.execute(sql)
@@ -81,17 +84,28 @@ class Sqlite:
         else:
             query = ""
 
-        sql = 'INSERT INTO ' + table + f' ({",".join(keys)}) VALUES ({",".join(["?"] * len(keys))}){query}'
+        sql = (
+            "INSERT INTO "
+            + table
+            + f' ({",".join(keys)}) VALUES ({",".join(["?"] * len(keys))}){query}'
+        )
         with self as cur:
             cur.executemany(sql, [tuple(doc.values()) for doc in docs])
 
     def upsert(self, table: str, *docs: dict):
-        sql = 'INSERT OR REPLACE INTO ' + table + f' ({",".join(docs[0].keys())}) VALUES ({",".join(["?"] * len(docs[0]))})'
+        sql = (
+            "INSERT OR REPLACE INTO "
+            + table
+            + f' ({",".join(docs[0].keys())}) VALUES ({",".join(["?"] * len(docs[0]))})'
+        )
         with self as cur:
             cur.executemany(sql, [tuple(doc.values()) for doc in docs])
 
     def update(self, table: str, query: str, update: dict):
-        sql = f"UPDATE {table}" + f" SET {','.join([f'{k}=?' for k, v in update.items()])} WHERE {query}"
+        sql = (
+            f"UPDATE {table}"
+            + f" SET {','.join([f'{k}=?' for k, v in update.items()])} WHERE {query}"
+        )
         with self as cur:
             cur.execute(sql, tuple(update.values()))
 
@@ -101,16 +115,25 @@ class Sqlite:
             cur.execute(sql)
 
     def drop(self, table: str):
-        sql = f'DROP TABLE IF EXISTS {table};'
+        sql = f"DROP TABLE IF EXISTS {table};"
         with self as cur:
             cur.execute(sql)
             return cur.fetchone()
 
     def create_table(self, name, structure: dict):
-
         with self as cur:
-            sql = f"CREATE TABLE IF NOT EXISTS {name}(" + ",".join(
-                [f'{k} {self.python_to_sqlite_types.get(v, "OBJECT")}' if v else k for k, v in structure.items()]) + ")"
+            sql = (
+                f"CREATE TABLE IF NOT EXISTS {name}("
+                + ",".join(
+                    [
+                        f'{k} {self.python_to_sqlite_types.get(v, "OBJECT")}'
+                        if v
+                        else k
+                        for k, v in structure.items()
+                    ]
+                )
+                + ")"
+            )
             cur.execute(sql)
 
     def execute(self, sql: str):
@@ -120,13 +143,13 @@ class Sqlite:
 
     @classmethod
     def load_csv(
-            cls,
-            database: str,
-            table: str,
-            path: str,
-            structure: dict = None,
-            reload=True,
-            debug=False
+        cls,
+        database: str,
+        table: str,
+        path: str,
+        structure: dict = None,
+        reload=True,
+        debug=False,
     ):
         """
         从 csv 中加载数据
@@ -145,28 +168,24 @@ class Sqlite:
         conn = cls(database=database + ".db")
 
         if reload:
-            conn.execute(f'DROP TABLE IF EXISTS {table};')
+            conn.execute(f"DROP TABLE IF EXISTS {table};")
         if structure:
             conn.create_table(table, structure=structure)
         cmd = f'sqlite3 {database}.db ".mode csv" ".import {path!r} {table!r}"'
 
         options = {}
         if not debug:
-            options.update({
-                "stdout": subprocess.DEVNULL,
-                "stderr": subprocess.DEVNULL,
-            })
+            options.update(
+                {
+                    "stdout": subprocess.DEVNULL,
+                    "stderr": subprocess.DEVNULL,
+                }
+            )
         subprocess.run(cmd, shell=True, text=True, **options)
 
         return conn
 
-    def to_csv(
-            self,
-            sql: str,
-            path: str,
-            debug: bool = False,
-            mode: int = ...
-    ):
+    def to_csv(self, sql: str, path: str, debug: bool = False, mode: int = ...):
         """
         导出为 csv
 
@@ -182,7 +201,7 @@ class Sqlite:
             else:
                 write_header = True
 
-            with open(path, "a+", newline='', encoding='utf-8') as f:
+            with open(path, "a+", newline="", encoding="utf-8") as f:
                 writer = None
                 for data in self.find(sql):
                     if not data:
@@ -196,15 +215,16 @@ class Sqlite:
                     writer.writerows(data)
 
         else:
-
             cmd = f'sqlite3 {self.database} ".headers on" ".mode csv" ".output {path}" "{sql}" ".output stdout"'
 
             options = {}
             if not debug:
-                options.update({
-                    "stdout": subprocess.DEVNULL,
-                    "stderr": subprocess.DEVNULL,
-                })
+                options.update(
+                    {
+                        "stdout": subprocess.DEVNULL,
+                        "stderr": subprocess.DEVNULL,
+                    }
+                )
             subprocess.run(cmd, shell=True, text=True, **options)
 
     def close(self):
@@ -212,16 +232,16 @@ class Sqlite:
         self.connection.close()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
+
     class People:
         def __init__(self, name: str):
             self.name = name
 
         def __str__(self):
-            return f'<People name: {self.name}>'
+            return f"<People name: {self.name}>"
 
         __repr__ = __str__
-
 
     # sqlite = Sqlite()
     # sqlite.register_adapter(People, pickle.dumps)

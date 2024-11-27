@@ -2,7 +2,7 @@ import asyncio
 import collections
 import concurrent.futures
 import time
-from typing import Union, Type
+from typing import Type, Union
 
 from loguru import logger
 
@@ -10,7 +10,7 @@ from bricks.core import dispatch, signals
 from bricks.core.events import REGISTERED_EVENTS
 from bricks.lib.items import Items
 from bricks.lib.queues import Item, LocalQueue, TaskQueue
-from bricks.spider.air import Spider, Context
+from bricks.spider.air import Context, Spider
 
 _futures = collections.defaultdict(concurrent.futures.Future)
 

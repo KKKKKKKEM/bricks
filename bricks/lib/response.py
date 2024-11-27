@@ -4,10 +4,10 @@
 # @Desc    : Response Model
 import re
 import sys
-from typing import Union, Callable, Any, List, Mapping
+from typing import Any, Callable, List, Mapping, Union
 
 from lxml import etree
-from w3lib.encoding import http_content_type_encoding, html_body_declared_encoding
+from w3lib.encoding import html_body_declared_encoding, http_content_type_encoding
 
 from bricks.lib import extractors
 from bricks.lib.cookies import Cookies

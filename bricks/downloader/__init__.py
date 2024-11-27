@@ -41,7 +41,6 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
         return Request(**attrs)
 
     def _when_fetch(self, func):  # noqa
-
         @functools.wraps(func)
         def wrapper(request: Union[Request, dict], *args, **kwargs):
             """
@@ -65,14 +64,16 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
                 raise e
 
             except Exception as e:
-                logger.error(f'[请求失败] 失败原因: {str(e) or str(e.__class__.__name__)}')
+                logger.error(
+                    f"[请求失败] 失败原因: {str(e) or str(e.__class__.__name__)}"
+                )
                 self.debug and logger.exception(e)
                 response: Response = Response.make_response(
                     error=e.__class__.__name__,
                     reason=str(e),
                     url=request.real_url,
                     request=request,
-                    status_code=-1
+                    status_code=-1,
                 )
 
             return response
@@ -96,14 +97,16 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
                 response.cost = time.time() - t
 
             except Exception as e:
-                logger.error(f'[请求失败] 失败原因: {str(e) or str(e.__class__.__name__)}')
+                logger.error(
+                    f"[请求失败] 失败原因: {str(e) or str(e.__class__.__name__)}"
+                )
                 self.debug and logger.exception(e)
                 response: Response = Response.make_response(
                     error=e.__class__.__name__,
                     reason=str(e),
                     url=request.real_url,
                     request=request,
-                    status_code=-1
+                    status_code=-1,
                 )
 
             return response
@@ -113,51 +116,36 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
     @classmethod
     def parse_data(cls, request: Request):
         if not request.body:
-            return {
-                "data": None,
-                "type": "raw"
-            }
+            return {"data": None, "type": "raw"}
         # 获取请求头中的Content-Type
-        content_type = request.headers.get('Content-Type', '').lower()
+        content_type = request.headers.get("Content-Type", "").lower()
 
         # 如果 body 本来就是字符串 / bytes -> 直接使用, 不需要转换
         if isinstance(request.body, (str, bytes)):
-            return {
-                "data": request.body,
-                "type": "raw"
-            }
+            return {"data": request.body, "type": "raw"}
 
         # 没有传 content-type, 并且 body 不为字符串, 默认设置为 application/json
         if not content_type:
-            content_type = 'application/json'
+            content_type = "application/json"
 
         # 根据Content-Type判断并处理请求体
-        if 'application/json' in content_type:
+        if "application/json" in content_type:
             try:
                 # 如果Content-Type为application/json，则尝试解析JSON请求体
                 body = json.dumps(request.body)
-                return {
-                    "data": body,
-                    "type": content_type
-                }
+                return {"data": body, "type": content_type}
 
             except ValueError:
                 raise ValueError(f"Invalid JSON format, raw: {request.body}")
 
-        elif 'application/x-www-form-urlencoded' in content_type:
+        elif "application/x-www-form-urlencoded" in content_type:
             # 如果Content-Type为application/x-www-form-urlencoded，则可以处理表单数据
             body = urllib.parse.urlencode(request.body)
-            return {
-                "data": body,
-                "type": content_type
-            }
+            return {"data": body, "type": content_type}
 
         elif "multipart/form-data" in content_type:
-            body = urllib.parse.urlencode(request.body).encode('utf-8')
-            return {
-                "data": body,
-                "type": content_type
-            }
+            body = urllib.parse.urlencode(request.body).encode("utf-8")
+            return {"data": body, "type": content_type}
 
         else:
             raise ValueError(f"Unsupported Content-Type: {content_type}")
@@ -214,7 +202,9 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
 
         :return:
         """
-        return getattr(self.local, f"{self.__class__}$session", None) or self.make_session(**options)
+        return getattr(
+            self.local, f"{self.__class__}$session", None
+        ) or self.make_session(**options)
 
     def clear_session(self):
         if hasattr(self.local, f"{self.__class__}$session"):
@@ -222,4 +212,7 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
                 old_session = getattr(self.local, f"{self.__class__}$session")
                 old_session.close()
             except Exception as e:
-                logger.error(f'[清空 session 失败] 失败原因: {str(e) or str(e.__class__.__name__)}', error=e)
+                logger.error(
+                    f"[清空 session 失败] 失败原因: {str(e) or str(e.__class__.__name__)}",
+                    error=e,
+                )

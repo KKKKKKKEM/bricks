@@ -3,14 +3,15 @@
 # @Author  : Kem
 # @Desc    :
 from __future__ import absolute_import
-from typing import Iterable, Optional, List
+
+from typing import Iterable, List, Optional
 
 from bricks.utils import pandora
 
 pandora.require("pymongo==4.6.0")
 
 import pymongo  # noqa: E402
-from pymongo import UpdateOne, InsertOne  # noqa: E402
+from pymongo import InsertOne, UpdateOne  # noqa: E402
 
 
 class Mongo(pymongo.MongoClient):
