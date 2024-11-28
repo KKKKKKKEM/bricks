@@ -4,7 +4,7 @@
 # @Desc    :
 import functools
 import time
-from typing import Callable, List, Literal, Union
+from typing import Callable, List, Literal, Type, Union, overload
 
 from loguru import logger
 
@@ -305,11 +305,28 @@ class Pangu(Chaos):
         register = EventManager.register(context, *events)
         return register
 
-    def make_context(self, **kwargs):
+    @overload
+    def make_context(self, **kwargs) -> Context:
+        """
+        创建一个 context 对象，使用自定义的 self.Context
+        """
+        ...
+
+    @overload
+    def make_context(self, clazz: Type[Context], **kwargs) -> Context:
+        """
+        创建一个 context对象，使用自定义的 Context基类
+        """
+        ...
+
+    def make_context(self, *args, **kwargs) -> Context:
+        if len(args) == 1:
+            clazz: Type[Context] = args[0]
+        else:
+            clazz = self.Context
         kwargs.setdefault("flows", self.flows)
         kwargs.setdefault("target", self)
-        _Context = kwargs.pop("_Context", self.Context)
-        context = _Context(**kwargs)
+        context = clazz(**kwargs)
         return context
 
     @property

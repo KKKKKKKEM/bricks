@@ -33,6 +33,10 @@ class Switch(Signal):
 class Exit(Signal): ...
 
 
+# 跳过信号, 跳过接下来的流程
+class Skip(Signal): ...
+
+
 class Wait(Signal):
     def __init__(self, duration=1):
         self.duration = duration
