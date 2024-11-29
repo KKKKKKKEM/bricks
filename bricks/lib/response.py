@@ -40,7 +40,7 @@ class Response:
         content: Any = None,
         status_code: int = 200,
         headers: Union[Header, dict, Mapping] = None,
-        url: str = None,
+        url: str = "",
         encoding: str = None,
         reason: str = "ok",
         cookies: Cookies = None,
@@ -72,7 +72,7 @@ class Response:
 
     def guess_encoding(self):
         if not self.content:
-            return
+            return "utf-8"
 
         # 1. 从header中获取编码
         content_type = self.headers.get("Content-Type")
@@ -153,7 +153,7 @@ class Response:
     def extract(
         self,
         engine: Union[str, Callable],
-        rules: dict,
+        rules: dict = None,
     ):
         """
         提取引擎, 生成器模式, 支持 Rule, 批量匹配
@@ -169,6 +169,7 @@ class Response:
             "JASONPATH": extractors.JsonpathExtractor,
             "REGEX": extractors.RegexExtractor,
         }
+        rules = rules or {}
         if not engine:
             return []
 
@@ -288,15 +289,11 @@ class Response:
 
     def get(self, rule: str, obj=None, strict=True, **kwargs):
         """
-        json匹配
-        json规则示例:
-        字典内直接采用 a.b.c 的方式匹配
-        如果要匹配列表内的每一项, 采用$代替每一项
-        如果要从父级开始匹配, 采用//代替父级节点
+        对 `response.text` 进行 `jmespath` 匹配, 并返回匹配结果。 类似于直接使用 `jmespath` 进行 `jmespath` 匹配。 更多语法请参考: [JMESPath — JMESPath](https://jmespath.org/)
 
-        :param rule: json解析规则
-        :param strict: json解析规则
-        :param obj: 需要匹配的dict/list对象
+        :param rule: `jmespath`规则
+        :param strict: 是否严格匹配，为 `False`时可以匹配 `jsonp`字符串
+        :param obj: 需要匹配的对象，默认为 `self.json()`
         :return:
         """
         obj = obj or self.text
