@@ -62,10 +62,10 @@ def mac():
 
     :return:
     """
-    macstring = "0123456789abcdef" * 12
-    macstringlist = random_.sample(macstring, 12)
+    mac_string = "0123456789abcdef" * 12
+    mac_string_list = random_.sample(mac_string, 12)
     return "{0[0]}{0[1]}:{0[2]}{0[3]}:{0[4]}{0[5]}:{0[6]}{0[7]}:{0[8]}{0[9]}:{0[10]}{0[11]}".format(
-        macstringlist
+        mac_string_list
     )
 
 

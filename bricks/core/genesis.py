@@ -207,7 +207,7 @@ class Pangu(Chaos):
 
     @property
     def plugins(self) -> List[Register]:
-        return REGISTERED_EVENTS.registed[self]
+        return REGISTERED_EVENTS.registered[self]
 
     def on_consume(self, context: Flow):
         context.doing.appendleft(context)
