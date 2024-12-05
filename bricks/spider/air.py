@@ -181,7 +181,7 @@ class InitContext(Flow):
     def retry(self):
         pass
 
-    def error(self, shutdown=False):
+    def error(self, e: Exception, shutdown=False):
         shutdown and self.flow({"next": None})
 
 
@@ -349,7 +349,7 @@ class Spider(Pangu):
         seeds = pandora.iterable(seeds)
 
         seeds = seeds[
-            0 : min(
+            0: min(
                 [
                     settings["count_size"] - settings["count"],
                     settings["total_size"] - settings["total"],

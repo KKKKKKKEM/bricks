@@ -251,7 +251,7 @@ def by_redis(
 
     data = read()
     for i in range(0, len(data), batch_size):
-        _data = data[i : i + batch_size]
+        _data = data[i: i + batch_size]
         _data = [json_or_eval(_, errors="ignore") for _ in _data]
         yield _data
 

@@ -5,35 +5,40 @@
 # @Software: PyCharm
 # @Desc    : 调度器
 
-# trigger 内的参数说明
-## type: 表示触发器的类型, 目前支持 cron / interval / date
-# exprs: 触发器调度规则
-# begin: 什么时候才开始调度, 日期字符串, 格式为 %Y-%m-%d %H:%M:%S
-# until: 调度到什么时候为止, 日期字符串, 格式为 %Y-%m-%d %H:%M:%S
-# raise_on_error: 程序发生异常时是否抛出异常, 默认不抛出
-# name: 调度任务的名称
-# mode: 调度模式, 整型,
-# 模式 0: 忽略任务执行时间, 依据任务运行完成的时间 与 self._last_fire_time 来计算下一次调度时间 (每小时 1 次, 5 点开始爬, 任务跑了1 小时1 分钟, 6 点 01 的时候继续跑)
-# 模式 1: 不忽略任务执行时间, 依据任务运行完成的时间来计算下一次调度时间 (每小时 1 次, 5 点开始爬, 任务跑了1 小时1 分钟, 7 点 的时候继续跑)
-# 模式 2: 不忽略任务执行时间, 依据上一次调度的时间来计算下一次调度时间 (每小时 1 次, 5 点开始爬, 任务跑了1 小时1 分钟, 7 点 的时候继续跑)
+"""
+trigger 内的参数说明
 
-# 使用 cron 表达式 定时调度, seconds minutes hours days months weekday
-# 支持 大部分表达式
-# L 在 days 位置代表月底, 可以用 L - 1 表示月底前一天
-# 1-3 代表 1 到 3
-# 1,2,3,4 代表 1,2,3,4
-# 可以使用 1-3,8-9 混用, 代表 1 到 3 和 8 到 9
-# */N 代表能整除 N 的结果, 如 seconds 为 */1 表示每秒, */2 表示每 2 秒 (0,2,4,6...), 10-50/2 代表 开始为 10,结束为 50, 每 2 秒(10,12,14,...,50)
-# MySpider(trigger={"type": "cron", "exprs": "0 8 8 1,8,15,22,L-3"})
-#
-# # 使用间隔定时调度, 支持单位: seconds,minutes,hours,days,months,years,weeks, quarters
-# # seconds=5 表示每 5 秒一次
-# # 可以多单位同时偏移, seconds=5&hours=2 表示每 2 小时 5 秒 一次
-# MySpider(trigger={"type": "interval", "exprs": "seconds=5"})
-#
-# # 在指定时间点执行
-# # 2022-06-20 18:00:00 表示在 2022-06-20 18:00:00 才执行
-# MySpider(trigger={"type": "date", "exprs": "2022-06-20 18:00:00"})
+type: 表示触发器的类型, 目前支持 cron / interval / date
+exprs: 触发器调度规则
+begin: 什么时候才开始调度, 日期字符串, 格式为 %Y-%m-%d %H:%M:%S
+until: 调度到什么时候为止, 日期字符串, 格式为 %Y-%m-%d %H:%M:%S
+raise_on_error: 程序发生异常时是否抛出异常, 默认不抛出
+name: 调度任务的名称
+mode: 调度模式, 整型,
+
+模式 0: 忽略任务执行时间, 依据任务运行完成的时间 与 self._last_fire_time 来计算下一次调度时间 (每小时 1 次, 5 点开始爬, 任务跑了1 小时1 分钟, 6 点 01 的时候继续跑)
+模式 1: 不忽略任务执行时间, 依据任务运行完成的时间来计算下一次调度时间 (每小时 1 次, 5 点开始爬, 任务跑了1 小时1 分钟, 7 点 的时候继续跑)
+模式 2: 不忽略任务执行时间, 依据上一次调度的时间来计算下一次调度时间 (每小时 1 次, 5 点开始爬, 任务跑了1 小时1 分钟, 7 点 的时候继续跑)
+
+
+使用 cron 表达式 定时调度, seconds minutes hours days months weekday
+支持 大部分表达式
+L 在 days 位置代表月底, 可以用 L - 1 表示月底前一天
+1-3 代表 1 到 3
+1,2,3,4 代表 1,2,3,4
+可以使用 1-3,8-9 混用, 代表 1 到 3 和 8 到 9
+*/N 代表能整除 N 的结果, 如 seconds 为 */1 表示每秒, */2 表示每 2 秒 (0,2,4,6...), 10-50/2 代表 开始为 10,结束为 50, 每 2 秒(10,12,14,...,50)
+MySpider(trigger={"type": "cron", "exprs": "0 8 8 1,8,15,22,L-3"})
+
+使用间隔定时调度, 支持单位: seconds,minutes,hours,days,months,years,weeks, quarters
+seconds=5 表示每 5 秒一次
+可以多单位同时偏移, seconds=5&hours=2 表示每 2 小时 5 秒 一次
+MySpider(trigger={"type": "interval", "exprs": "seconds=5"})
+
+在指定时间点执行
+2022-06-20 18:00:00 表示在 2022-06-20 18:00:00 才执行
+MySpider(trigger={"type": "date", "exprs": "2022-06-20 18:00:00"})
+"""
 
 import enum
 import itertools
@@ -54,16 +59,16 @@ class TSTATE(enum.Enum):
 
 class BaseTrigger:
     def __init__(
-        self,
-        exprs: str,
-        ref: Union[str, Callable] = None,
-        args: Optional[list] = None,
-        kwargs: Optional[dict] = None,
-        begin: Optional[Union[str, int, arrow.Arrow]] = None,
-        until: Optional[Union[str, int, arrow.Arrow]] = None,
-        raise_on_error: bool = False,
-        name: Optional[str] = None,
-        mode: int = 0,
+            self,
+            exprs: str,
+            ref: Union[str, Callable] = None,
+            args: Optional[list] = None,
+            kwargs: Optional[dict] = None,
+            begin: Optional[Union[str, int, arrow.Arrow]] = None,
+            until: Optional[Union[str, int, arrow.Arrow]] = None,
+            raise_on_error: bool = False,
+            name: Optional[str] = None,
+            mode: int = 0,
     ):
         self.exprs = exprs.strip()
         self.ref = pandora.load_objects(ref)
@@ -211,23 +216,23 @@ class CronTrigger(BaseTrigger):
         def _r2range(x: str, _range):
             ret = []
             for rule in re.findall(
-                "[*]/\d+|"  # */N
-                "\d+#\d+|"  # N#A
-                "L[+-]\d+-L[+-]\d+/\d+|"  # L-N - L-N / N
-                "L[+-]\d+-L[+-]\d+|"  # L-N - L-N
-                "L[+-]\d+-L/\d+|"  # L-N - L / N
-                "L[+-]\d+-L|"  # L-N - L
-                "\d+-L[+-]\d+/\d+|"  # N - L-N / N
-                "\d+-L[+-]\d+|"  # N - L-N
-                "L[+-]\d+/\d+|"  # L-N / N
-                "L[+-]\d+|"  # L-N
-                "L|"  # L
-                "\d+-\d+/\d+|"  # N-N/N
-                "\d+/\d+|"  # N/N
-                "\d+-\d+|"  # N-N
-                "\d+",  # N
-                x,
-            ):
+                    "[*]/\d+|"  # */N
+                    "\d+#\d+|"  # N#A
+                    "L[+-]\d+-L[+-]\d+/\d+|"  # L-N - L-N / N
+                    "L[+-]\d+-L[+-]\d+|"  # L-N - L-N
+                    "L[+-]\d+-L/\d+|"  # L-N - L / N
+                    "L[+-]\d+-L|"  # L-N - L
+                    "\d+-L[+-]\d+/\d+|"  # N - L-N / N
+                    "\d+-L[+-]\d+|"  # N - L-N
+                    "L[+-]\d+/\d+|"  # L-N / N
+                    "L[+-]\d+|"  # L-N
+                    "L|"  # L
+                    "\d+-\d+/\d+|"  # N-N/N
+                    "\d+/\d+|"  # N/N
+                    "\d+-\d+|"  # N-N
+                    "\d+",  # N
+                    x,
+            ):  # noqa
                 if "L" in rule or "#" in rule:
                     ret.append(rule)
 
@@ -373,8 +378,8 @@ class CronTrigger(BaseTrigger):
                         )
                     )
                     if target > now and (
-                        target.isoweekday() in weekdays
-                        or f"{target.isoweekday()}#{target.day // 7 + 1}" in weekdays
+                            target.isoweekday() in weekdays
+                            or f"{target.isoweekday()}#{target.day // 7 + 1}" in weekdays
                     ):
                         return target
                 else:
@@ -429,10 +434,10 @@ class Scheduler:
         return trigger
 
     def add(
-        self,
-        form: Union[Literal["cron", "date", "interval"], BaseTrigger],
-        exprs: str,
-        **options,
+            self,
+            form: Union[Literal["cron", "date", "interval"], BaseTrigger],
+            exprs: str,
+            **options,
     ) -> BaseTrigger:
         if isinstance(form, str):
             f = getattr(self, form)
@@ -529,12 +534,12 @@ class Scheduler:
             self.jobs.remove(job)
 
     def submit(
-        self,
-        func: Union[str, Callable],
-        args: list = None,
-        kwargs: dict = None,
-        jobs: Union[BaseTrigger, List[BaseTrigger], dict, List[dict]] = None,
-        start_now: bool = False,
+            self,
+            func: Union[str, Callable],
+            args: list = None,
+            kwargs: dict = None,
+            jobs: Union[BaseTrigger, List[BaseTrigger], dict, List[dict]] = None,
+            start_now: bool = False,
     ):
         args = args or []
         kwargs = kwargs or {}
