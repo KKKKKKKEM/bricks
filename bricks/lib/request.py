@@ -251,7 +251,7 @@ class Request:
                 occurrence = [m.start() for m in re.finditer(":", curl_header)]
                 header_key, header_value = (
                     curl_header[: occurrence[1]],
-                    curl_header[occurrence[1] + 1 :],
+                    curl_header[occurrence[1] + 1:],
                 )
             else:
                 header_key, header_value = (

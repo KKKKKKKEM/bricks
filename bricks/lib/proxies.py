@@ -318,7 +318,7 @@ class ClashProxy(BaseProxy):
             now = resp.get(f"proxies.{self.selector}.now")
             nodes = resp.get(f"proxies.{self.selector}.all")
             if now in nodes:
-                nodes = [*nodes[nodes.index(now) + 1 :], *nodes[: nodes.index(now) + 1]]
+                nodes = [*nodes[nodes.index(now) + 1:], *nodes[: nodes.index(now) + 1]]
             self._nodes = self.iter_node(list(filter(self.match, nodes)))
             return nodes
         else:

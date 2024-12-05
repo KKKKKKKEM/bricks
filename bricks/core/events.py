@@ -23,7 +23,7 @@ class RegisteredEvents:
         self.disposable = defaultdict(functools.partial(defaultdict, list))
         self.lazy_loading = defaultdict(functools.partial(defaultdict, list))
 
-        self.registed: Dict[str, List[Register]] = defaultdict(list)
+        self.registered: Dict[str, List[Register]] = defaultdict(list)
 
         self._lock = threading.Lock()
 
@@ -244,7 +244,7 @@ class EventManager:
         REGISTERED_EVENTS.permanent[context.form][context.target].sort(
             key=lambda x: x.index
         )
-        REGISTERED_EVENTS.registed[context.target].extend(ret)
+        REGISTERED_EVENTS.registered[context.target].extend(ret)
         return ret
 
 
