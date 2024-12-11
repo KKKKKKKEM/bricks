@@ -5,7 +5,9 @@ import uuid
 from typing import Callable, Dict, Literal
 
 from loguru import logger
+import sanic.response
 
+import bricks
 from bricks.client.server import Gateway
 from bricks.core import signals
 from bricks.lib.request import Request
@@ -191,7 +193,7 @@ class APP(Gateway):
             async for msg in ws:
                 future_id = msg["MID"]
                 # ptr = ctypes.cast(future_id, ctypes.py_object)
-                future: [asyncio.Future] = self._futures.pop(future_id, None)
+                future: asyncio.Future = self._futures.pop(future_id, None)
                 future and future.set_result(msg)
 
         except sanic.exceptions.WebsocketClosed:
@@ -235,9 +237,20 @@ class APP(Gateway):
                     },
                 )
 
-                return await app.awaitable_call(
+                ret = await app.awaitable_call(
                     prepared.func, *prepared.args, **prepared.kwargs
                 )
+                if isinstance(ret, (dict, list)):
+                    ret = sanic.response.json(ret)
+
+                elif isinstance(ret, bricks.Response):
+                    ret = sanic.response.text(
+                        ret.text,
+                        content_type=ret.headers.get("Content-Type", "text/plain"),
+                        status=ret.status_code,
+                    )
+
+                return ret
 
             return inner
 

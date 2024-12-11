@@ -9,6 +9,7 @@ from typing import Callable, Dict, List, Literal, Optional, Union
 
 from loguru import logger
 
+import bricks
 from bricks.client.server import Gateway
 from bricks.core import signals
 from bricks.lib.request import Request
@@ -81,6 +82,16 @@ class GlobalMiddleware(BaseHTTPMiddleware):
                 if isinstance(ret, responses.Response):
                     return ret
 
+                if isinstance(ret, (list, dict)):
+                    return responses.JSONResponse(ret)
+                
+                if isinstance(ret, bricks.Response):
+                    return responses.Response(
+                        ret.text,
+                        media_type=ret.headers.get("Content-Type", "text/plain"),
+                        status_code=ret.status_code,
+                    )
+                
             response = await call_next(request)
 
             for middleware in self.gateway.middlewares["response"]:
@@ -110,6 +121,16 @@ class GlobalMiddleware(BaseHTTPMiddleware):
                 if isinstance(ret, responses.Response):
                     return ret
 
+                if isinstance(ret, (list, dict)):
+                    return responses.JSONResponse(ret)
+
+                if isinstance(ret, bricks.Response):
+                    return responses.Response(
+                        ret.text,
+                        media_type=ret.headers.get("Content-Type", "text/plain"),
+                        status_code=ret.status_code,
+                    )
+                
             return response
         except Exception as e:
             return responses.JSONResponse(
@@ -198,13 +219,7 @@ class AddonView(HTTPEndpoint):
 
         elif future_type == "$response":
             if context.response.status_code != -1:
-                return responses.Response(
-                    context.response.text,
-                    media_type=context.response.headers.get(
-                        "Content-Type", "text/plain"
-                    ),
-                    status_code=context.response.status_code,
-                )
+                return
             else:
                 return responses.JSONResponse(
                     {
