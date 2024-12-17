@@ -170,7 +170,7 @@ class AddonView(HTTPEndpoint):
     async def get(self, request: requests.Request):
         try:
             seeds = dict(request.query_params)
-            req = await self.make_req(request)
+            req = await make_req(request)
             ctx = await self.main(seeds, req, is_alive=self.is_alive)
 
             return self.fmt(ctx)
@@ -190,7 +190,7 @@ class AddonView(HTTPEndpoint):
     async def post(self, request: requests.Request):
         try:
             seeds = await request.json()
-            req = await self.make_req(request)
+            req = await make_req(request)
             ctx = await self.main(seeds, req, is_alive=self.is_alive)
             return self.fmt(ctx)
         except (SystemExit, KeyboardInterrupt):
