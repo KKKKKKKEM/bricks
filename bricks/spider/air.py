@@ -3,7 +3,6 @@
 # @Author  : Kem
 # @Desc    :
 import contextlib
-from curses.ascii import controlnames
 import datetime
 import functools
 import inspect
@@ -361,7 +360,7 @@ class Spider(Pangu):
         seeds = pandora.iterable(seeds)
 
         seeds = seeds[
-            0: min(
+            0 : min(
                 [
                     settings["count_size"] - settings["count"],
                     settings["total_size"] - settings["total"],
@@ -1031,7 +1030,7 @@ class Spider(Pangu):
                     },
                 )
                 prepared.func(*prepared.args, **prepared.kwargs)
-            
+
             context.form = state.const.AFTER_PIPELINE
             events.EventManager.invoke(
                 context,
@@ -1050,7 +1049,7 @@ class Spider(Pangu):
                     "items": context.items,
                 },
             )
-            
+
             context.flow(flag=context.next == self.on_pipeline)
 
         return wrapper
