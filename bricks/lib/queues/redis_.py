@@ -170,14 +170,13 @@ class RedisQueue(TaskQueue):
         status = redis.call("HGET", record_key, "status")
     end
 
-    if status != '1' and queue_size > 0 then
+    if status ~= '1' and queue_size > 0 then
         return "已投完且存在种子没有消费完毕"
         
     else
         -- 先拿锁, 拿不到了就返回没有权限
         local ok = redis.call("SETNX", heartbeat_key, date_str)
-        if(ok != 1)
-        then
+        if ok ~= 1 then
            return "获取心跳锁失败"
         end
         -- 拿到了锁

@@ -3,6 +3,7 @@
 # @Author  : Kem
 # @Desc    :
 import contextlib
+from curses.ascii import controlnames
 import datetime
 import functools
 import inspect
@@ -291,6 +292,7 @@ class Spider(Pangu):
         success_size = self.get("init.success.size", math.inf)
         # 初始化队列最大数量 -> 大于这个数量暂停初始化
         queue_size: int = self.get("init.queue.size", 100000)
+        is_continue: bool = self.get("init.continue", False)
 
         settings = {
             "total": total,
@@ -321,7 +323,17 @@ class Spider(Pangu):
         if not inspect.isgenerator(gen):
             gen = [gen]
 
+        need_skip = min(success, total)
         for seeds in gen:
+            if is_continue and need_skip > 0:
+                seeds = pandora.iterable(seeds)
+                raw_size = len(seeds)
+                seeds = seeds[need_skip:]
+                need_skip -= raw_size - len(seeds)
+
+            if not seeds:
+                continue
+
             ctx: InitContext = context.copy()
             ctx.flow({"next": self.produce_seeds, "seeds": seeds})
             self.on_consume(ctx)

@@ -24,10 +24,10 @@ from starlette.applications import Starlette  # noqa E402
 from starlette.endpoints import HTTPEndpoint  # noqa E402
 from starlette.routing import Route, WebSocketRoute  # noqa E402
 from starlette.websockets import WebSocketDisconnect  # noqa E402
-from starlette.middleware.base import (
-    BaseHTTPMiddleware,
-    RequestResponseEndpoint,
-    DispatchFunction,
+from starlette.middleware.base import (  # noqa E402
+    BaseHTTPMiddleware,  # noqa E402
+    RequestResponseEndpoint,  # noqa E402
+    DispatchFunction,  # noqa E402
 )  # noqa E402
 from starlette.types import ASGIApp  # noqa E402
 
@@ -84,14 +84,14 @@ class GlobalMiddleware(BaseHTTPMiddleware):
 
                 if isinstance(ret, (list, dict)):
                     return responses.JSONResponse(ret)
-                
+
                 if isinstance(ret, bricks.Response):
                     return responses.Response(
                         ret.text,
                         media_type=ret.headers.get("Content-Type", "text/plain"),
                         status_code=ret.status_code,
                     )
-                
+
             response = await call_next(request)
 
             for middleware in self.gateway.middlewares["response"]:
@@ -130,7 +130,7 @@ class GlobalMiddleware(BaseHTTPMiddleware):
                         media_type=ret.headers.get("Content-Type", "text/plain"),
                         status_code=ret.status_code,
                     )
-                
+
             return response
         except Exception as e:
             return responses.JSONResponse(
