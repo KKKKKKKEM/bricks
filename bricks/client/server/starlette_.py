@@ -219,7 +219,13 @@ class AddonView(HTTPEndpoint):
 
         elif future_type == "$response":
             if context.response.status_code != -1:
-                return
+                return responses.Response(
+                    context.response.text,
+                    media_type=context.response.headers.get(
+                        "Content-Type", "text/plain"
+                    ),
+                    status_code=context.response.status_code,
+                )
             else:
                 return responses.JSONResponse(
                     {
