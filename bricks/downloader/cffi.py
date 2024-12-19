@@ -5,7 +5,7 @@
 
 import copy
 import urllib.parse
-from typing import Union
+from typing import Optional, Union
 
 from curl_cffi import requests
 
@@ -24,7 +24,9 @@ class Downloader(AbstractDownloader):
     """
 
     def __init__(
-        self, impersonate: Union[requests.BrowserType, str] = None, options: dict = None
+        self,
+        impersonate: Optional[Union[requests.BrowserType, str]] = None,
+        options: Optional[dict] = None,
     ):
         if isinstance(impersonate, requests.BrowserType):
             impersonate = impersonate.value
@@ -32,7 +34,7 @@ class Downloader(AbstractDownloader):
         self.impersonate = impersonate
         self.options = options or {}
 
-    def fetch(self, request: Union[Request, dict]) -> Response:
+    def fetch(self, request: Request) -> Response:
         """
         真使用 requests 发送请求并获取响应
 
@@ -40,7 +42,6 @@ class Downloader(AbstractDownloader):
         :return: `Response`
 
         """
-
         res = Response.make_response(request=request)
         options = {
             **self.options,
@@ -87,17 +88,17 @@ class Downloader(AbstractDownloader):
                         request=Request(
                             url=last_url,
                             method=request.method,
-                            headers=copy.deepcopy(options.get("headers")),
+                            headers=copy.deepcopy(options.get("headers")),  # type: ignore
                         ),
                     )
                 )
                 request.options.get("$referer", False) and options["headers"].update(
                     Referer=response.url
-                )
+                )  # type: ignore
 
             else:
                 res.content = response.content
-                res.headers = response.headers
+                res.headers = response.headers  # type: ignore
                 res.cookies = Cookies.by_jar(response.cookies.jar)
                 res.url = response.url
                 res.status_code = response.status_code

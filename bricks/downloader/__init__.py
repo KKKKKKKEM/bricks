@@ -67,14 +67,9 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
                 logger.error(
                     f"[请求失败] 失败原因: {str(e) or str(e.__class__.__name__)}"
                 )
-                self.debug and logger.exception(e)
-                response: Response = Response.make_response(
-                    error=e.__class__.__name__,
-                    reason=str(e),
-                    url=request.real_url,
-                    request=request,
-                    status_code=-1,
-                )
+                self.debug and logger.exception(e)  # type: ignore
+                response: Response = self.exception(request,e)
+                
 
             return response
 
@@ -100,14 +95,8 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
                 logger.error(
                     f"[请求失败] 失败原因: {str(e) or str(e.__class__.__name__)}"
                 )
-                self.debug and logger.exception(e)
-                response: Response = Response.make_response(
-                    error=e.__class__.__name__,
-                    reason=str(e),
-                    url=request.real_url,
-                    request=request,
-                    status_code=-1,
-                )
+                self.debug and logger.exception(e)  # type: ignore
+                response: Response = self.exception(request, e)
 
             return response
 
@@ -215,4 +204,16 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
                 logger.error(
                     f"[清空 session 失败] 失败原因: {str(e) or str(e.__class__.__name__)}",
                     error=e,
+                )
+
+    def exception(self, request: Request, error: Exception):
+        """
+        错误处理
+        """
+        return Response.make_response(
+                    error=error.__class__.__name__,
+                    reason=str(error),
+                    url=request.real_url,
+                    request=request,
+                    status_code=-1,
                 )

@@ -49,7 +49,7 @@ class Response:
         error: Any = "",
         callback: Callable = None,
     ):
-        self.content: Union[str, bytes] = content
+        self.content: Union[str, bytes] = content # type: ignore
         self.status_code = status_code
         self._headers = Header(headers)
         self.url = url
@@ -61,14 +61,14 @@ class Response:
         self.error = error
         self.callback = callback
         self._cache = {}
-        self.cost = 0
+        self.cost: float = 0
 
     headers: Header = property(
         fget=lambda self: self._headers,
         fset=lambda self, v: setattr(self, "_headers", Header(v)),
         fdel=lambda self: setattr(self, "_headers", Header({})),
         doc="请求头",
-    )
+    ) # type: ignore
 
     def guess_encoding(self):
         if not self.content:

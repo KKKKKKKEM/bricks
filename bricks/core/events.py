@@ -40,10 +40,10 @@ class Task:
     func: Callable
     args: Optional[list] = None
     kwargs: Optional[dict] = None
-    match: Union[Callable, str] = None
+    match: Optional[Union[Callable, str]] = None
     index: Optional[int] = None
     disposable: Optional[bool] = False
-    box: list = None
+    box: list = ...
 
 
 @dataclass
@@ -97,8 +97,8 @@ class EventManager:
         cls,
         context: Context,
         errors: Literal["raise", "ignore", "output"] = "raise",
-        annotations: dict = None,
-        namespace: dict = None,
+        annotations: dict = None,  # type: ignore
+        namespace: dict = None,  # type: ignore
     ):
         """
         trigger events: interact with external functions
@@ -119,8 +119,8 @@ class EventManager:
         cls,
         context: Context,
         errors: Literal["raise", "ignore", "output"] = "raise",
-        annotations: dict = None,
-        namespace: dict = None,
+        annotations: dict = None,  # type: ignore
+        namespace: dict = None,  # type: ignore
     ):
         """
         invoke events: invoke all events
@@ -141,13 +141,13 @@ class EventManager:
         cls,
         ctx: Flow,
         form: str,
-        annotations: dict = None,
-        namespace: dict = None,
-        callback: Callable = None,
+        annotations: dict = None,  # type: ignore
+        namespace: dict = None,  # type: ignore
+        callback: Callable = None,  # type: ignore
     ):
         def main(context: Flow):
             EventManager.invoke(context, annotations=annotations, namespace=namespace)
-            callback and callback(context)
+            callback and callback(context)  # type: ignore
 
         ctx.form = form
         ctx.flow({"next": main})
@@ -186,7 +186,7 @@ class EventManager:
                             and eval(match, globals(), {"context": context})
                         )
                     ):
-                        event.disposable and event.box.remove(event)
+                        event.disposable and event.box.remove(event)  # type: ignore
                         yield event
 
     @classmethod
@@ -195,8 +195,8 @@ class EventManager:
         event: Task,
         context: Context,
         errors: Literal["raise", "ignore", "output"] = "raise",
-        annotations: dict = None,
-        namespace: dict = None,
+        annotations: dict = None,  # type: ignore
+        namespace: dict = None,  # type: ignore
     ):
         try:
             annotations = annotations or {}
@@ -204,7 +204,7 @@ class EventManager:
             return pandora.invoke(
                 event.func,
                 args=event.args,
-                kwargs=event.kwargs,
+                kwargs=event.kwargs,  # type: ignore
                 annotations={type(context): context, **annotations},
                 namespace={"context": context, **namespace},
             )
@@ -244,12 +244,15 @@ class EventManager:
         REGISTERED_EVENTS.permanent[context.form][context.target].sort(
             key=lambda x: x.index
         )
-        REGISTERED_EVENTS.registered[context.target].extend(ret)
+        REGISTERED_EVENTS.registered[context.target].extend(ret)  # type: ignore
         return ret
 
 
 def on(
-    form: str, index: int = None, disposable: Optional[bool] = False, binding: Any = ...
+    form: str,
+    index: int = None,  # type: ignore
+    disposable: Optional[bool] = False,
+    binding: Any = ...,  # type: ignore
 ):
     """
     使用装饰器的方式注册事件

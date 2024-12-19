@@ -64,7 +64,7 @@ class Context:
 
         :return:
         """
-        return cls._stack.top()
+        return cls._stack.top() # type: ignore
 
     def set_context(self):
         self._stack.push(self)
@@ -93,7 +93,7 @@ class Flow(Context):
         kwargs: dict = None,
         **options,
     ) -> None:
-        self.next: LinkNode = next
+        self.next: LinkNode = next # type: ignore
         self.callback = None
         self.args = args or []
         self.kwargs = kwargs or {}
@@ -109,7 +109,7 @@ class Flow(Context):
         super().__setattr__(key, value)
 
     def produce(self) -> "Flow":
-        return self.doing.popleft() if self.doing else None
+        return self.doing.popleft() if self.doing else None # type: ignore
 
     def flow(self, attrs=None, flag=True):
         # 更新属性
@@ -138,7 +138,7 @@ class Flow(Context):
         node = self.next.prev
         while recursion and node and node.root not in self.flows:
             node = node.prev
-        self.next = node
+        self.next = node # type: ignore
         return self
 
     def branch(self, attrs: dict = None, rollback=False, submit=True):
@@ -153,8 +153,8 @@ class Flow(Context):
         attrs = attrs or {}
         context = self.copy()
         context.update(attrs)
-        rollback and context.rollback()
-        submit and self.doing.append(context)
+        rollback and context.rollback() # type: ignore
+        submit and self.doing.append(context) # type: ignore
         return context
 
     def background(self, attrs: dict = None, rollback=False, action="active"):
@@ -186,7 +186,7 @@ class Flow(Context):
 
     def switch(self, attrs: dict = None, by: Literal["func", "block"] = "func"):
         if by == "block":
-            attrs.setdefault("next", self.next)
+            attrs.setdefault("next", self.next) # type: ignore
             self.flow(attrs)
         raise signals.Switch(by)
 
@@ -224,7 +224,7 @@ class Flow(Context):
         if not hasattr(local[self.target], "$doing"):
             setattr(local[self.target], "$doing", deque())
 
-        doing: deque = getattr(local[self.target], "$doing", None)
+        doing: deque = getattr(local[self.target], "$doing", None) # type: ignore
         return doing
 
     @doing.setter

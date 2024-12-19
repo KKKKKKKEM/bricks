@@ -18,6 +18,7 @@ pandora.require(package_spec="sanic==24.6.0")
 import sanic  # noqa E402
 from sanic.views import HTTPMethodView  # noqa E402
 from sanic.response import BaseHTTPResponse  # noqa E402
+from sanic.exceptions import WebsocketClosed  # noqa: E402
 
 
 async def make_req(request: sanic.Request):
@@ -26,7 +27,7 @@ async def make_req(request: sanic.Request):
         url=request.url,
         method=request.method,
         body=request.body.decode("utf-8"),
-        headers=request.headers,
+        headers=dict(request.headers),
         cookies=request.cookies,
         options={"$request": request},
     )
@@ -124,7 +125,10 @@ class APP(Gateway):
         self.connections: Dict[sanic.Websocket, str] = {}
         self.router = sanic.Sanic(name="bricks-api")
         self.router.add_route(
-            self.invoke, uri="/invoke", methods=["POST"], name="发布指令/调用"
+            self.invoke,  # type: ignore
+            uri="/invoke",
+            methods=["POST"],
+            name="发布指令/调用",
         )
         self.router.add_websocket_route(self.websocket_endpoint, uri="/ws/<client_id>")
 
@@ -137,7 +141,7 @@ class APP(Gateway):
             try:
                 req = await make_req(request)
                 prepared = pandora.prepare(
-                    func=adapter,
+                    func=adapter,  # type: ignore
                     namespace={
                         "request": req,
                     },
@@ -172,7 +176,7 @@ class APP(Gateway):
                 )
 
         options.setdefault("name", str(uuid.uuid4()))
-        self.router.add_route(handler, uri=uri, **options)
+        self.router.add_route(handler, uri=uri, **options)  # type: ignore
 
     async def websocket_endpoint(
         self, _: sanic.Request, ws: sanic.Websocket, client_id: str
@@ -191,12 +195,12 @@ class APP(Gateway):
             self.connections[ws] = client_id
             logger.debug(f"[连接成功] {client_id} | {ws}")
             async for msg in ws:
-                future_id = msg["MID"]
+                future_id = msg["MID"]  # type: ignore
                 # ptr = ctypes.cast(future_id, ctypes.py_object)
-                future: asyncio.Future = self._futures.pop(future_id, None)
-                future and future.set_result(msg)
+                future: asyncio.Future = self._futures.pop(future_id, None)  # type: ignore
+                future and future.set_result(msg)  # type: ignore
 
-        except sanic.exceptions.WebsocketClosed:
+        except WebsocketClosed:
             await ws.close()
         except (SystemExit, KeyboardInterrupt):
             raise

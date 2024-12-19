@@ -9,11 +9,11 @@ import json
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Callable, Dict, List, Literal, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 from loguru import logger
 
-from bricks import Response
+from bricks import Response, Request
 from bricks.core import signals
 from bricks.spider.addon import Listener, Rpc
 from bricks.spider.air import Context
@@ -22,7 +22,7 @@ from bricks.utils import pandora
 
 class Callback:
     @staticmethod
-    def build(fns, request=None, **kwargs):
+    def build(fns, request: Request = ..., **kwargs):
         def main(fu: asyncio.Future):
             if not fns or fu.cancelled():
                 return
@@ -54,13 +54,13 @@ class Callback:
         return main
 
     @staticmethod
-    async def call(fns, fu: asyncio.Future, request=None, **kwargs):
+    async def call(fns, fu: asyncio.Future, request: Request = ..., **kwargs):
         if not fns:
             return
 
-        namespace = {"fu": fu, "request": request}
+        namespace: dict[str, Any] = {"fu": fu, "request": request}
 
-        annotations = {
+        annotations: dict[Any, Any] = {
             type(fu): fu,
             type(request): request,
         }
@@ -94,7 +94,7 @@ class Callback:
 class Gateway:
     def __init__(self):
         self.connections = {}
-        self.router = None
+        self.router = ...
         self._futures = collections.defaultdict(asyncio.Future)
 
     @staticmethod
@@ -135,10 +135,10 @@ class Gateway:
     def route(
         self,
         uri: str,
-        timeout: int = None,
-        concurrency: int = None,
-        callback: List[Callable] = None,
-        errback: List[Callable] = None,
+        timeout: int = None,  # type: ignore
+        concurrency: int = None,  # type: ignore
+        callback: List[Callable] = None,  # type: ignore
+        errback: List[Callable] = None,  # type: ignore
         methods: List[str] = ["GET"],
         **options,
     ):
@@ -173,24 +173,25 @@ class Gateway:
         self,
         path: str,
         handler: Callable,
-        timeout: int = None,
-        concurrency: int = None,
-        callback: List[Callable] = None,
-        errback: List[Callable] = None,
+        timeout: int = None,  # type: ignore
+        concurrency: int = None,  # type: ignore
+        callback: List[Callable] = None,  # type: ignore
+        errback: List[Callable] = None,  # type: ignore
         **options,
-    ) -> Callable:
+    ):
         """
         绑定一个路由
         """
 
-        async def normal_view(request=None, is_alive: Callable = None):
+        async def normal_view(request: Request = ..., is_alive: Callable = ...):
             if semaphore and semaphore.locked():
                 raise signals.Wait(1)
 
-            semaphore and await semaphore.acquire()
+            if semaphore:
+                await semaphore.acquire()
 
             async def monitor():
-                if not is_alive:
+                if is_alive is ...:
                     return
 
                 if not request:
@@ -231,7 +232,7 @@ class Gateway:
                 return ctx
 
             finally:
-                semaphore and semaphore.release()
+                semaphore and semaphore.release()  # type: ignore
 
         cb1 = []
         cb2 = []
@@ -254,10 +255,10 @@ class Gateway:
         path: str,
         form: Literal["$response", "$items", "$request"] = "$response",
         max_retry: int = 10,
-        timeout: int = None,
-        concurrency: int = None,
-        callback: List[Callable] = None,
-        errback: List[Callable] = None,
+        timeout: int = None, # type: ignore
+        concurrency: int = None, # type: ignore
+        callback: List[Callable] = None, # type: ignore
+        errback: List[Callable] = None, # type: ignore
         **options,
     ):
         """
@@ -275,17 +276,17 @@ class Gateway:
         """
 
         def is_failure(context: Context):
-            return context and context.seeds.get("$status", 0) != 0
+            return context and context.seeds.get("$status", 0) != 0  # type: ignore
 
         def fix(context: Context):
-            context.seeds.update({"$interfaceFinish": time.time()})
+            context.seeds.update({"$interfaceFinish": time.time()})  # type: ignore
             if is_failure(context):
                 context.response = Response(
                     status_code=403,
                     content=json.dumps(
                         {
                             "code": 403,
-                            "msg": context.seeds.get("$msg"),
+                            "msg": context.seeds.get("$msg"),  # type: ignore
                             "data": {
                                 k.strip("$"): v
                                 for k, v in sorted(context.seeds.items())
@@ -305,14 +306,17 @@ class Gateway:
                     headers={"Content-type": "application/json"},
                 )
 
-        async def submit(seeds: dict, request=None, is_alive: Callable = None):
+        async def submit(
+            seeds: dict, request: Request = ..., is_alive: Callable = ...
+        ):
             if semaphore and semaphore.locked():
                 raise signals.Wait(1)
 
-            semaphore and await semaphore.acquire()
+            if semaphore:
+                await semaphore.acquire()
 
             async def monitor():
-                if not is_alive:
+                if is_alive is ...:
                     return
 
                 if not request:
@@ -340,7 +344,7 @@ class Gateway:
             else:
                 args = [data]
 
-            fu = loop.run_in_executor(pool, obj.execute, *args)
+            fu = loop.run_in_executor(pool, obj.execute, *args)  # type: ignore
             fu.add_done_callback(Callback.build(cb1, request=request, seeds=seeds))
             ctx = None
 
@@ -364,7 +368,7 @@ class Gateway:
                 return ctx
 
             finally:
-                semaphore and semaphore.release()
+                semaphore and semaphore.release()  # type: ignore
 
         cb1 = [fix]
         cb2 = []
@@ -381,10 +385,12 @@ class Gateway:
         else:
             semaphore = None
 
-        not obj.running and obj.run()
+        not obj.running and obj.run()  # type: ignore
         self.create_addon(uri=path, adapter=submit, **options)
 
-    async def _invoke(self, orders: Dict[str, List[dict]], timeout: int = None):
+    async def _invoke(
+        self, orders: Dict[str, List[dict]], timeout: Optional[int] = None
+    ):
         futures = []
         for ws, cid in self.connections.items():
             if cid in orders:
@@ -406,7 +412,7 @@ class Gateway:
     async def invoke(
         self,
         orders: Dict[str, List[dict]],
-        timeout: int = None,
+        timeout: Optional[int] = None,
     ):
         future = asyncio.ensure_future(self._invoke(orders, timeout=timeout))
         if timeout == 0:
@@ -432,3 +438,6 @@ class Gateway:
         return self.router.add_websocket_route(*args, **kwargs)
 
     def add_middleware(self, *args, **kwargs): ...
+
+    def create_view(self, uri: str, adapter: Callable = ..., **options):
+        raise NotImplementedError

@@ -37,7 +37,7 @@ class Middleware:
     adapter: Callable
     pattern: Optional[Pattern] = None
     args: Union[tuple, list] = ()
-    kwargs: dict = None
+    kwargs: Optional[dict] = None
 
 
 class GlobalMiddleware(BaseHTTPMiddleware):
@@ -45,17 +45,17 @@ class GlobalMiddleware(BaseHTTPMiddleware):
         self,
         app: ASGIApp,
         dispatch: DispatchFunction | None = None,
-        gateway: "APP" = None,
+        gateway: "APP" = ...,
     ) -> None:
         super().__init__(app, dispatch)
-        self.gateway = gateway
+        self.gateway: APP = gateway
 
     async def dispatch(
         self, request: requests.Request, call_next: RequestResponseEndpoint
     ):
         try:
             for middleware in self.gateway.middlewares["request"]:
-                req = AddonView.make_req(request)
+                req = make_req(request)
 
                 if middleware.pattern and not middleware.pattern.search(
                     str(request.url)
@@ -161,7 +161,7 @@ async def make_req(request: requests.Request):
 
 class AddonView(HTTPEndpoint):
     def __init__(
-        self, *args, main: Callable = None, future_type: str = "$response", **kwargs
+        self, *args, main: Callable = ..., future_type: str = "$response", **kwargs
     ):
         super().__init__(*args, **kwargs)
         self.main = main
@@ -170,7 +170,7 @@ class AddonView(HTTPEndpoint):
     async def get(self, request: requests.Request):
         try:
             seeds = dict(request.query_params)
-            req = await make_req(request)
+            req = await make_req(request) # type: ignore
             ctx = await self.main(seeds, req, is_alive=self.is_alive)
 
             return self.fmt(ctx)
@@ -210,7 +210,7 @@ class AddonView(HTTPEndpoint):
         if context is None:
             return responses.Response()
 
-        future_type = context.seeds.get("$futureType", self.future_type)
+        future_type = context.seeds.get("$futureType", self.future_type) # type: ignore
         if future_type == "$items":
             if context.items:
                 return responses.JSONResponse(context.items.data)
@@ -275,7 +275,7 @@ class APP(Gateway):
     def create_addon(self, uri: str, adapter: Callable = None, **options):
         options.setdefault("methods", ["GET", "POST"])
         self.router.add_route(
-            route=functools.partial(AddonView, main=adapter), path=uri, **options
+            route=functools.partial(AddonView, main=adapter), path=uri, **options # type: ignore
         )
 
     def create_view(self, uri: str, adapter: Callable = None, **options):
@@ -283,7 +283,7 @@ class APP(Gateway):
             try:
                 req = await make_req(request)
                 prepared = pandora.prepare(
-                    func=adapter,
+                    func=adapter, # type: ignore
                     namespace={
                         "request": req,
                     },
@@ -335,8 +335,9 @@ class APP(Gateway):
             async for msg in ws.iter_json():
                 future_id = msg["MID"]
                 # ptr = ctypes.cast(future_id, ctypes.py_object)
-                future: [asyncio.Future] = self._futures.pop(future_id, None)
-                future and future.set_result(msg)
+                future: Optional[asyncio.Future] = self._futures.pop(future_id, None)
+                if future:
+                    future.set_result(msg)
 
         except WebSocketDisconnect:
             await ws.close()
