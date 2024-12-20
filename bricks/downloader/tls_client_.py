@@ -1,9 +1,10 @@
 from __future__ import absolute_import
 
 import copy
+import re
 import urllib.parse
 import warnings
-from typing import Union
+from typing import Optional, Union
 
 from bricks.downloader import AbstractDownloader
 from bricks.lib.cookies import Cookies
@@ -16,6 +17,8 @@ pandora.require("tls-client")
 
 import tls_client  # noqa: E402
 
+PROXY_ERROR_PARRTEN = re.compile(r"dial tcp .*?: connect: connection refused")
+
 
 class Downloader(AbstractDownloader):
     """
@@ -25,11 +28,13 @@ class Downloader(AbstractDownloader):
 
     """
 
-    def __init__(self, tls_config: dict = None, options: dict = None) -> None:
+    def __init__(
+        self, tls_config: Optional[dict] = None, options: Optional[dict] = None
+    ) -> None:
         self.tls_config = tls_config or {}
         self.options = options or {}
 
-    def fetch(self, request: Union[Request, dict]) -> Response:
+    def fetch(self, request: Request) -> Response:
         """
         真使用 requests 发送请求并获取响应
 
@@ -54,7 +59,7 @@ class Downloader(AbstractDownloader):
 
         next_url = request.real_url
         _redirect_count = 0
-        tls_config: dict = request.options.get("tls_config")
+        tls_config: dict = request.options.get("tls_config") or {}
         if not tls_config:
             tls_config = self.tls_config
 
@@ -72,46 +77,52 @@ class Downloader(AbstractDownloader):
                     or response.headers.get("Location"),
                 )
                 if request.allow_redirects and next_url:
-                    next_url = urllib.parse.urljoin(response.url, next_url)
+                    next_url = urllib.parse.urljoin(str(response.url), next_url)
                     _redirect_count += 1
                     res.history.append(
                         Response(
                             content=response.content,
                             headers=response.headers,
                             cookies=Cookies.by_jar(response.cookies),
-                            url=response.url,
-                            status_code=response.status_code,
+                            url=str(response.url),
+                            status_code=response.status_code,  # type: ignore
                             request=Request(
                                 url=last_url,
                                 method=request.method,
-                                headers=copy.deepcopy(options.get("headers")),
+                                headers=copy.deepcopy(options.get("headers") or {}),
                             ),
                         )
                     )
                     request.options.get("$referer", False) and options[
                         "headers"
-                    ].update(Referer=response.url)
+                    ].update(Referer=response.url) # type: ignore
 
                 else:
-                    res.content = response.content
-                    res.headers = response.headers
+                    res.content = response.content # type: ignore
+                    res.headers = response.headers # type: ignore
                     res.cookies = Cookies.by_jar(response.cookies)
-                    res.url = response.url
-                    res.status_code = response.status_code
+                    res.url = response.url # type: ignore
+                    res.status_code = response.status_code # type: ignore
                     res.request = request
                     return res
         finally:
-            not request.use_session and session.close()
+            not request.use_session and session.close() # type: ignore
 
     def make_session(self, **kwargs):
         return tls_client.Session(**kwargs)
+
+    def exception(self, request: Request, error: Exception):
+        resp = super().exception(request, error)
+        if PROXY_ERROR_PARRTEN.search(str(error)):
+            resp.error = "ProxyError"
+        return resp
 
 
 if __name__ == "__main__":
     downloader = Downloader()
     rsp = downloader.fetch(
-        Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True)
+        Request(
+            url="http://127.0.0.1:5555", proxies="http://127.0.0.1:7899", timeout=20
+        )
     )
-    print(rsp.cookies)
-    rsp = downloader.fetch(Request(url="https://httpbin.org/cookies", use_session=True))
-    print(rsp.text)
+    print(rsp.error, rsp.reason)

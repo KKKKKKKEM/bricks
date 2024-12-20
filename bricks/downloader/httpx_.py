@@ -6,23 +6,26 @@ from __future__ import absolute_import
 
 import copy
 import http.client
+import re
 import urllib.parse
 import warnings
-from typing import Union
+from typing import Optional, Union
 
 from bricks.downloader import AbstractDownloader
 from bricks.lib.cookies import Cookies
+from bricks.lib.headers import Header
 from bricks.lib.request import Request
 from bricks.lib.response import Response
 from bricks.utils import pandora
 
 warnings.filterwarnings("ignore")
 # 设置 requests 最大的响应头的长度 为 1000
-http.client._MAXHEADERS = 1000
+http.client._MAXHEADERS = 1000 # type: ignore
 
 pandora.require("httpx")
 
 import httpx  # noqa: E402
+PROXY_ERROR_PARRTEN = re.compile(r"\[Errno 111\] Connection refused")
 
 
 class Downloader(AbstractDownloader):
@@ -33,10 +36,10 @@ class Downloader(AbstractDownloader):
 
     """
 
-    def __init__(self, options: dict = None):
+    def __init__(self, options: Optional[dict] = None):
         self.options = options or {}
 
-    def fetch(self, request: Union[Request, dict]) -> Response:
+    def fetch(self, request: Request) -> Response:
         """
         真使用 requests 发送请求并获取响应
 
@@ -107,35 +110,41 @@ class Downloader(AbstractDownloader):
                             request=Request(
                                 url=last_url,
                                 method=request.method,
-                                headers=copy.deepcopy(options.get("headers")),
+                                headers=copy.deepcopy(options.get("headers") or {}),
                             ),
                         )
                     )
                     request.options.get("$referer", False) and options[
                         "headers"
-                    ].update(Referer=str(response.url))
+                    ].update(Referer=str(response.url)) # type: ignore
 
                 else:
                     res.content = response.content
-                    res.headers = dict(response.headers)
+                    res.headers = Header(response.headers)
                     res.cookies = Cookies.by_jar(session.cookies.jar)
-                    res.url = response.url
+                    res.url = str(response.url)
                     res.status_code = response.status_code
                     res.request = request
 
                     return res
         finally:
-            not request.use_session and session.close()
+            not request.use_session and session.close() # type: ignore
 
     def make_session(self, **options):
         return httpx.Client(**options)
+
+    def exception(self, request: Request, error: Exception):
+        resp = super().exception(request, error)
+        if PROXY_ERROR_PARRTEN.search(str(error)):
+            resp.error = "ProxyError"
+        return resp
 
 
 if __name__ == "__main__":
     downloader = Downloader()
     rsp = downloader.fetch(
-        Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True)
+        Request(
+            url="http://127.0.0.1:5555", proxies="http://127.0.0.1:7890", timeout=20
+        )
     )
-    print(rsp.cookies)
-    rsp = downloader.fetch(Request(url="https://httpbin.org/cookies", use_session=True))
-    print(rsp.text)
+    print(rsp, rsp.error, rsp.reason)

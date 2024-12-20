@@ -4,6 +4,7 @@
 # @Desc    :
 
 import copy
+import re
 import urllib.parse
 from typing import Optional, Union
 
@@ -13,6 +14,8 @@ from bricks.downloader import AbstractDownloader
 from bricks.lib.cookies import Cookies
 from bricks.lib.request import Request
 from bricks.lib.response import Response
+
+CURL_CODE = re.compile(r"Failed to perform, curl: \((\d+)\)")
 
 
 class Downloader(AbstractDownloader):
@@ -109,12 +112,24 @@ class Downloader(AbstractDownloader):
     def make_session(self) -> requests.Session:
         return requests.Session()
 
+    def exception(self, request: Request, error: Exception):
+        resp = super().exception(request, error)
+        code = CURL_CODE.search(str(error))
+        if code and code.group(1) in (
+            # Could not resolve proxy. The given proxy host could not be resolved.
+            "5"
+            # Failed to connect() to host or proxy.
+            "7"
+            # Proxy handshake error
+            "97"
+        ):
+            resp.error = "ProxyError"
+        return resp
+
 
 if __name__ == "__main__":
     downloader = Downloader()
     rsp = downloader.fetch(
-        Request(url="https://httpbin.org/cookies/set?freeform=123", use_session=True)
+        Request(url="https://youtube.com", proxies="http://127.0.0.1:7899", timeout=20)
     )
-    print(rsp.cookies)
-    rsp = downloader.fetch(Request(url="https://httpbin.org/cookies", use_session=True))
-    print(rsp.text)
+    print(rsp.error, rsp.reason)

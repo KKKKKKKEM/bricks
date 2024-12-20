@@ -52,7 +52,7 @@ class Response:
         self.content: Union[str, bytes] = content # type: ignore
         self.status_code = status_code
         self._headers = Header(headers)
-        self.url = url
+        self.url:str = url
         self.encoding = encoding or self.guess_encoding()
         self.reason = reason
         self.cookies = cookies

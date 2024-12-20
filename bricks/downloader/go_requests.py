@@ -6,12 +6,14 @@
 from __future__ import absolute_import
 
 import copy
+import re
 import urllib.parse
 import warnings
-from typing import Union
+from typing import Optional, Union
 
 from bricks.downloader import AbstractDownloader
 from bricks.lib.cookies import Cookies
+from bricks.lib.headers import Header
 from bricks.lib.request import Request
 from bricks.lib.response import Response
 from bricks.utils import pandora
@@ -22,6 +24,7 @@ pandora.require("requests-go")
 import requests_go  # noqa: E402
 from requests_go.tls_config import TLSConfig, to_tls_config  # noqa: E402
 
+PROXY_ERROR_PARRTEN = re.compile(r"proxyconnect tcp:.*connection refused")
 
 class Downloader(AbstractDownloader):
     """
@@ -32,12 +35,14 @@ class Downloader(AbstractDownloader):
     """
 
     def __init__(
-        self, tls_config: [dict, TLSConfig] = None, options: dict = None
+        self,
+        tls_config: Optional[Union[dict, TLSConfig]] = None,
+        options: Optional[dict] = None,
     ) -> None:
         self.tls_config = tls_config
         self.options = options or {}
 
-    def fetch(self, request: Union[Request, dict]) -> Response:
+    def fetch(self, request: Request) -> Response:
         """
         真使用 requests 发送请求并获取响应
 
@@ -68,7 +73,7 @@ class Downloader(AbstractDownloader):
             tls_config = self.tls_config
         tls_config = self.fmt_tls_config(tls_config)
 
-        tls_config and options.update(tls_config=tls_config)
+        tls_config and options.update(tls_config=tls_config) # type: ignore
         next_url = request.real_url
         _redirect_count = 0
         if request.use_session:
@@ -96,17 +101,17 @@ class Downloader(AbstractDownloader):
                         request=Request(
                             url=last_url,
                             method=request.method,
-                            headers=copy.deepcopy(options.get("headers")),
+                            headers=copy.deepcopy(options.get("headers") or {}),
                         ),
                     )
                 )
                 request.options.get("$referer", False) and options["headers"].update(
                     Referer=response.url
-                )
+                ) # type: ignore
 
             else:
                 res.content = response.content
-                res.headers = response.headers
+                res.headers = Header(response.headers)
                 res.cookies = Cookies.by_jar(response.cookies)
                 res.url = response.url
                 res.status_code = response.status_code
@@ -118,7 +123,9 @@ class Downloader(AbstractDownloader):
         return requests_go.Session()
 
     @classmethod
-    def fmt_tls_config(cls, tls_config: [dict, TLSConfig] = None) -> TLSConfig:
+    def fmt_tls_config(
+        cls, tls_config: Optional[Union[dict, TLSConfig]] = None
+    ) -> TLSConfig:
         """
         将 tls_config 直接转为 TLSConfig, 因为有时候直接传 dict 给 request_go 有问题
         :param tls_config:
@@ -134,8 +141,16 @@ class Downloader(AbstractDownloader):
         ), "tls_config 需要为 dict 或者 TLSConfig"
         return tls_config
 
+    def exception(self, request: Request, error: Exception):
+        resp = super().exception(request, error)
+        if PROXY_ERROR_PARRTEN.search(str(error)):
+            resp.error = "ProxyError"
+        return resp
+
 
 if __name__ == "__main__":
     downloader = Downloader()
-    resp = downloader.fetch({"url": "https://www.baidu.com"})
-    print(resp)
+    rsp = downloader.fetch(
+        Request(url="https://youtube.com", proxies="http://127.0.0.1:7899", timeout=20)
+    )
+    print(rsp.error, rsp.reason)
