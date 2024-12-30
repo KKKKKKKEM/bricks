@@ -2,7 +2,7 @@ import asyncio
 import inspect
 import os.path
 import subprocess
-from typing import Awaitable, Callable, List, Literal, Union
+from typing import Awaitable, Callable, List, Literal, Optional, Union
 from urllib import parse
 from urllib.parse import urlparse
 
@@ -64,11 +64,11 @@ class Downloader(AbstractDownloader):
         self,
         driver: Literal["chromium", "firefox", "webkit"] = "chromium",
         debug: bool = False,
-        scripts: list = None,
+        scripts: Optional[list] = None,
         mode: Literal["automation", "api"] = "automation",
         headless: bool = True,
         reuse: bool = True,
-        options: dict = None,
+        options: Optional[dict] = None,
     ):
         """
 
@@ -97,13 +97,13 @@ class Downloader(AbstractDownloader):
         driver_executable = compute_driver_executable()
         subprocess.run([str(driver_executable), "install"], env=get_driver_env())
 
-    async def fetch(self, request: Union[Request, dict]) -> Response:
+    async def fetch(self, request: Request) -> Response:
         res = Response.make_response(request=request)
 
         # 获取驱动
         driver: Literal["chromium", "firefox", "webkit"] = (
             request.get_options("driver") or self.driver
-        )
+        ) # type: ignore
 
         # 获取浏览器 launch 配置
         browser_options: dict = request.get_options("browser", {})
@@ -158,7 +158,7 @@ class Downloader(AbstractDownloader):
                 "max_redirects": 999 if request.allow_redirects else 0,
             }
 
-        proxies = self.parse_proxies_for_playwright(request.proxies)
+        proxies = self.parse_proxies_for_playwright(request.proxies) # type: ignore
 
         if self.reuse or request.use_session:
             self.browser_context.reuse = True
@@ -246,7 +246,7 @@ class Downloader(AbstractDownloader):
 
                 page = await context.new_page()
                 async with page:
-                    for event, interceptor in request_interceptors:
+                    for event, interceptor in request_interceptors: # type: ignore
                         assert inspect.isasyncgenfunction(interceptor)
                         await page.route(event, interceptor)
                     else:
@@ -379,7 +379,7 @@ class Downloader(AbstractDownloader):
     async def injection_scripts(
         self,
         conn: Union[async_api.BrowserContext, async_api.Page],
-        scripts: list = None,
+        scripts: Optional[list] = None,
     ):
         scripts = scripts or self.scripts
         for script in scripts:
