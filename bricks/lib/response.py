@@ -166,7 +166,7 @@ class Response:
         exs = {
             "JSON": extractors.JsonExtractor,
             "XPATH": extractors.XpathExtractor,
-            "JASONPATH": extractors.JsonpathExtractor,
+            "JSONPATH": extractors.JsonpathExtractor,
             "REGEX": extractors.RegexExtractor,
         }
         rules = rules or {}
