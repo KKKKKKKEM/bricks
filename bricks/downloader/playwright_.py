@@ -95,7 +95,7 @@ class Downloader(AbstractDownloader):
             return
 
         driver_executable = compute_driver_executable()
-        subprocess.run([str(driver_executable), "install"], env=get_driver_env())
+        subprocess.run([*driver_executable, "install"], env=get_driver_env())
 
     async def fetch(self, request: Request) -> Response:
         res = Response.make_response(request=request)
@@ -103,7 +103,7 @@ class Downloader(AbstractDownloader):
         # 获取驱动
         driver: Literal["chromium", "firefox", "webkit"] = (
             request.get_options("driver") or self.driver
-        ) # type: ignore
+        )  # type: ignore
 
         # 获取浏览器 launch 配置
         browser_options: dict = request.get_options("browser", {})
@@ -139,7 +139,7 @@ class Downloader(AbstractDownloader):
                 **request.options.get("$options", {}),
                 "timeout": timeout,
                 "url": request.real_url,
-                "wait_until": request.get_options("wait_until") or "networkidle",
+                "wait_until": request.get_options("wait_until") or None,
                 "referer": request.headers.get("referer") or None,
             }
 
@@ -158,7 +158,7 @@ class Downloader(AbstractDownloader):
                 "max_redirects": 999 if request.allow_redirects else 0,
             }
 
-        proxies = self.parse_proxies_for_playwright(request.proxies) # type: ignore
+        proxies = self.parse_proxies_for_playwright(request.proxies)  # type: ignore
 
         if self.reuse or request.use_session:
             self.browser_context.reuse = True
@@ -246,7 +246,7 @@ class Downloader(AbstractDownloader):
 
                 page = await context.new_page()
                 async with page:
-                    for event, interceptor in request_interceptors: # type: ignore
+                    for event, interceptor in request_interceptors:  # type: ignore
                         assert inspect.isasyncgenfunction(interceptor)
                         await page.route(event, interceptor)
                     else:
@@ -420,7 +420,7 @@ class Downloader(AbstractDownloader):
 
 
 if __name__ == "__main__":
-    downloader = Downloader(mode="api", reuse=False, headless=False)
+    downloader = Downloader(mode="api", headless=True)
     downloader.debug = True
 
     async def main():
