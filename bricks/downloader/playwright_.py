@@ -237,12 +237,13 @@ class Downloader(AbstractDownloader):
 
                 for interceptor in response_interceptors:
                     assert inspect.isasyncgenfunction(interceptor)
-                    context.on("response", interceptor)
+                    context.on("response", interceptor) # type: ignore
                 else:
-                    context.on(
-                        "response",
-                        self.on_response(page_url=request.real_url, raw_response=res),
-                    )
+                    if not request.get_options("$playwright.history.disable", False):
+                        context.on(
+                            "response",
+                            self.on_response(page_url=request.real_url, raw_response=res),
+                        )
 
                 page = await context.new_page()
                 async with page:
@@ -284,9 +285,9 @@ class Downloader(AbstractDownloader):
                         response = await page.request.fetch(**options)
                         res.content = await response.body()
 
-                    res.url = response.url
-                    res.headers = response.headers
-                    res.status_code = response.status
+                    res.url = response.url # type: ignore
+                    res.headers = response.headers # type: ignore
+                    res.status_code = response.status # type: ignore
                     res.cookies = Cookies.by_jar(await context.cookies())
 
                     for interceptor in after_goto_interceptors:
@@ -314,7 +315,7 @@ class Downloader(AbstractDownloader):
                     return res
 
             finally:
-                not request.use_session and await context.close()
+                not request.use_session and await context.close() # type: ignore
 
     @staticmethod
     def on_response(page_url, raw_response: Response):
@@ -322,26 +323,32 @@ class Downloader(AbstractDownloader):
             if page_url == response.url or page_url + "/" == response.url:
                 return
             else:
-                content = await response.body()
-                req_body = (
-                    parse.unquote_plus(response.request.post_data)
-                    if response.request.post_data
-                    else None
-                )
-                raw_response.history.append(
-                    Response(
-                        content=content,
-                        headers=response.headers,
-                        url=response.url,
-                        status_code=response.status,
-                        request=Request(
-                            headers=response.request.headers,
-                            body=req_body,
-                            url=response.request.url,
-                            method=response.request.method,
-                        ),
+                try:
+                    content = await response.body()
+                except Exception as e:
+                    if not "TargetClosedError" in str(e):
+                        logger.warning(f"[playwright] response body 获取失败: {e}")
+                    return
+                else:
+                    req_body = (
+                        parse.unquote_plus(response.request.post_data)
+                        if response.request.post_data
+                        else None
                     )
-                )
+                    raw_response.history.append(
+                        Response(
+                            content=content,
+                            headers=response.headers,
+                            url=response.url,
+                            status_code=response.status,
+                            request=Request(
+                                headers=response.request.headers,
+                                body=req_body,
+                                url=response.request.url,
+                                method=response.request.method,
+                            ),
+                        )
+                    )
 
         return inner
 
