@@ -183,6 +183,7 @@ class AddonView(HTTPEndpoint):
             )
 
         except Exception as e:
+            logger.exception(e)
             return responses.JSONResponse(
                 content={"code": 500, "msg": str(e)}, status_code=500
             )
@@ -202,6 +203,7 @@ class AddonView(HTTPEndpoint):
             )
 
         except Exception as e:
+            logger.exception(e)
             return responses.JSONResponse(
                 content={"code": 500, "msg": str(e)}, status_code=500
             )
@@ -313,6 +315,7 @@ class APP(Gateway):
                 )
 
             except Exception as e:
+                logger.exception(e)
                 return responses.JSONResponse(
                     content={"code": 500, "msg": str(e)}, status_code=500
                 )

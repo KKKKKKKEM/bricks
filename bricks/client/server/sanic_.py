@@ -64,6 +64,7 @@ class AddonView(HTTPMethodView):
             )
 
         except Exception as e:
+            logger.exception(e)
             return sanic.response.json(body={"code": 500, "msg": str(e)}, status=500)
 
     async def post(self, request: sanic.Request):
@@ -81,6 +82,7 @@ class AddonView(HTTPMethodView):
             )
 
         except Exception as e:
+            logger.exception(e)
             return sanic.response.json(body={"code": 500, "msg": str(e)}, status=500)
 
     def fmt(self, context: Context):
@@ -171,6 +173,7 @@ class APP(Gateway):
                 )
 
             except Exception as e:
+                logger.exception(e)
                 return sanic.response.json(
                     body={"code": 500, "msg": str(e)}, status=500
                 )
