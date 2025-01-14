@@ -432,6 +432,15 @@ class RegexExtractor(Extractor):
 
 
 if __name__ == "__main__":
-    data = {"data": [{"id": i, "name": f"name-{i}"} for i in range(10)]}
-
-    print(JsonExtractor.match(data, {"data": {"id": "id"}}))
+    data = {"a": "first", "b": "second"}
+    print(
+        JsonExtractor.match(
+            data,
+            {
+                "items(@)": {
+                    "key": "@[0]",
+                    "value": "@[1]",
+                }
+            },
+        )
+    )
