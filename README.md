@@ -1,3 +1,22 @@
+[license]: /LICENSE
+[license-badge]: https://img.shields.io/github/license/KKKKKKKEM/bricks?style=flat-square&a=1
+[prs]: https://github.com/KKKKKKKEM/bricks
+[prs-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square
+[issues]: https://github.com/KKKKKKKEM/bricks/issues/new
+[issues-badge]: https://img.shields.io/badge/Issues-welcome-brightgreen.svg?style=flat-square
+[release]: https://github.com/KKKKKKKEM/bricks/releases/latest
+[release-badge]: https://img.shields.io/github/v/release/KKKKKKKEM/bricks?style=flat-square
+
+
+<div align="center">
+    
+[![license][license-badge]][license]
+[![prs][prs-badge]][prs]
+[![issues][issues-badge]][issues]
+[![release][release-badge]][release]
+
+</div>
+
 # 简介
 
 `Bricks` 旨在将爬虫开发变得像搭建积木一样简单而有趣。这个框架的核心理念是提供一个直观、高效的方式来构建复杂的网络爬虫，同时保持代码的简洁和可维护性。无论您是刚入门的新手还是经验丰富的专家，`Bricks` 都能让您轻松地搭建起强大的爬虫，满足从简单数据抓取到复杂网络爬取的各种需求。
