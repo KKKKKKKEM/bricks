@@ -29,7 +29,7 @@ async def make_req(request: sanic.Request):
         body=request.body.decode("utf-8"),
         headers=dict(request.headers),
         cookies=request.cookies,
-        options={"$request": request},
+        options={"$request": request, "client_ip": request.ip},
     )
 
 
@@ -136,6 +136,7 @@ class APP(Gateway):
 
     def create_addon(self, uri: str, adapter: Callable = None, **options):
         options.setdefault("name", str(uuid.uuid4()))
+        options.setdefault("methods", ["GET", "POST"])
         self.router.add_route(AddonView.as_view(main=adapter), uri=uri, **options)
 
     def create_view(self, uri: str, adapter: Callable = None, **options):
@@ -182,7 +183,7 @@ class APP(Gateway):
         self.router.add_route(handler, uri=uri, **options)  # type: ignore
 
     async def websocket_endpoint(
-        self, _: sanic.Request, ws: sanic.Websocket, client_id: str
+            self, _: sanic.Request, ws: sanic.Websocket, client_id: str
     ):
         """
         websocket endpoint
@@ -217,12 +218,12 @@ class APP(Gateway):
         self.router.run(host=host, port=port, **options)
 
     def add_middleware(
-        self,
-        form: Literal["request", "response"],
-        adapter: Callable,
-        pattern: str = "",
-        *args,
-        **kwargs,
+            self,
+            form: Literal["request", "response"],
+            adapter: Callable,
+            pattern: str = "",
+            *args,
+            **kwargs,
     ):
         def wrapper(func):
             async def inner(request, *a, **kw):
@@ -230,6 +231,24 @@ class APP(Gateway):
                     return
 
                 req = await make_req(request)
+
+                if "response" in kw:
+                    res: sanic.response.HTTPResponse = kw["response"]
+                elif len(a) == 1 and isinstance(a[0], sanic.response.HTTPResponse):
+                    res = a[0]
+                else:
+                    res = ...
+
+                if res is ...:
+                    response = None
+                else:
+                    response = bricks.Response(
+                        res.body,
+                        status_code=res.status,
+                        headers=dict(res.headers),
+                        url=str(request.url),
+                    )
+
                 prepared = pandora.prepare(
                     func,
                     args=[*args, *a],
@@ -237,10 +256,13 @@ class APP(Gateway):
                     namespace={
                         "request": req,
                         "gateway": app,
+                        "response": response,
                     },
                     annotations={
-                        type(req): req,
+                        bricks.Request: req,
                         type(app): app,
+                        sanic.response.HTTPResponse: res,
+                        bricks.Response: response,
                     },
                 )
 

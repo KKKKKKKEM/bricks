@@ -8,6 +8,7 @@ from re import Pattern
 from typing import Callable, Dict, List, Literal, Optional, Union
 
 from loguru import logger
+from starlette.responses import StreamingResponse, Response
 
 import bricks
 from bricks.client.server import Gateway
@@ -29,7 +30,8 @@ from starlette.middleware.base import (  # noqa E402
     RequestResponseEndpoint,  # noqa E402
     DispatchFunction,  # noqa E402
 )  # noqa E402
-from starlette.types import ASGIApp  # noqa E402
+from starlette.types import ASGIApp, Message  # noqa E402
+from starlette.concurrency import iterate_in_threadpool  # noqa E402
 
 
 @dataclasses.dataclass
@@ -42,23 +44,23 @@ class Middleware:
 
 class GlobalMiddleware(BaseHTTPMiddleware):
     def __init__(
-        self,
-        app: ASGIApp,
-        dispatch: DispatchFunction | None = None,
-        gateway: "APP" = ...,
+            self,
+            app: ASGIApp,
+            dispatch: DispatchFunction | None = None,
+            gateway: "APP" = ...,
     ) -> None:
         super().__init__(app, dispatch)
         self.gateway: APP = gateway
 
     async def dispatch(
-        self, request: requests.Request, call_next: RequestResponseEndpoint
+            self, request: requests.Request, call_next: RequestResponseEndpoint
     ):
         try:
-            for middleware in self.gateway.middlewares["request"]:
-                req = make_req(request)
+            req = await make_req(request)
 
+            for middleware in self.gateway.middlewares["request"]:
                 if middleware.pattern and not middleware.pattern.search(
-                    str(request.url)
+                        str(request.url)
                 ):
                     continue
 
@@ -92,11 +94,22 @@ class GlobalMiddleware(BaseHTTPMiddleware):
                         status_code=ret.status_code,
                     )
 
-            response = await call_next(request)
+            res = await call_next(request)
+
+            # 用于存储响应体的容器
+            response_body = [chunk async for chunk in res.body_iterator]
+            res.body_iterator = iterate_in_threadpool(iter(response_body))
+
+            response = bricks.Response(
+                response_body[0],
+                status_code=res.status_code,
+                headers=dict(res.headers),
+                url=str(request.url),
+            )
 
             for middleware in self.gateway.middlewares["response"]:
                 if middleware.pattern and not middleware.pattern.search(
-                    str(request.url)
+                        str(request.url)
                 ):
                     continue
 
@@ -105,12 +118,13 @@ class GlobalMiddleware(BaseHTTPMiddleware):
                     args=middleware.args,
                     kwargs=middleware.kwargs,
                     namespace={
-                        "request": request,
+                        "req": req,
                         "response": response,
                         "gateway": self.gateway,
                     },
                     annotations={
-                        type(request): request,
+                        type(req): req,
+                        type(res): res,
                         type(response): response,
                         type(self.gateway): self.gateway,
                     },
@@ -131,7 +145,7 @@ class GlobalMiddleware(BaseHTTPMiddleware):
                         status_code=ret.status_code,
                     )
 
-            return response
+            return res
         except Exception as e:
             return responses.JSONResponse(
                 {"status": 403, "msg": str(e)}, status_code=403
@@ -155,13 +169,13 @@ async def make_req(request: requests.Request):
         body=body.decode(),
         headers=dict(request.headers),
         cookies=request.cookies,
-        options={"$request": request},
+        options={"$request": request, "client_ip": request.client.host},
     )
 
 
 class AddonView(HTTPEndpoint):
     def __init__(
-        self, *args, main: Callable = ..., future_type: str = "$response", **kwargs
+            self, *args, main: Callable = ..., future_type: str = "$response", **kwargs
     ):
         super().__init__(*args, **kwargs)
         self.main = main
@@ -170,7 +184,7 @@ class AddonView(HTTPEndpoint):
     async def get(self, request: requests.Request):
         try:
             seeds = dict(request.query_params)
-            req = await make_req(request) # type: ignore
+            req = await make_req(request)  # type: ignore
             ctx = await self.main(seeds, req, is_alive=self.is_alive)
 
             return self.fmt(ctx)
@@ -212,7 +226,7 @@ class AddonView(HTTPEndpoint):
         if context is None:
             return responses.Response()
 
-        future_type = context.seeds.get("$futureType", self.future_type) # type: ignore
+        future_type = context.seeds.get("$futureType", self.future_type)  # type: ignore
         if future_type == "$items":
             if context.items:
                 return responses.JSONResponse(context.items.data)
@@ -277,7 +291,7 @@ class APP(Gateway):
     def create_addon(self, uri: str, adapter: Callable = None, **options):
         options.setdefault("methods", ["GET", "POST"])
         self.router.add_route(
-            route=functools.partial(AddonView, main=adapter), path=uri, **options # type: ignore
+            route=functools.partial(AddonView, main=adapter), path=uri, **options  # type: ignore
         )
 
     def create_view(self, uri: str, adapter: Callable = None, **options):
@@ -285,7 +299,7 @@ class APP(Gateway):
             try:
                 req = await make_req(request)
                 prepared = pandora.prepare(
-                    func=adapter, # type: ignore
+                    func=adapter,  # type: ignore
                     namespace={
                         "request": req,
                     },
@@ -354,12 +368,12 @@ class APP(Gateway):
         uvicorn.run(self.router, host=host, port=port, **options)
 
     def add_middleware(
-        self,
-        form: Literal["request", "response"],
-        adapter: Callable,
-        *args,
-        pattern: str = "",
-        **kwargs,
+            self,
+            form: Literal["request", "response"],
+            adapter: Callable,
+            *args,
+            pattern: str = "",
+            **kwargs,
     ):
         """
         设置拦截器

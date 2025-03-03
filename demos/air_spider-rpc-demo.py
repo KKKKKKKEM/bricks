@@ -4,6 +4,7 @@ from hashlib import sha256
 
 from loguru import logger
 
+import bricks
 from bricks import Request, const
 from bricks.core import events, signals
 from bricks.spider import air
@@ -91,7 +92,7 @@ class MySpider(air.Spider):
                 # 重试信号
                 raise signals.Retry
 
-        context.response.status_code = 429
+        # context.response.status_code = 429
 
         # raise signals.Retry
 
@@ -99,7 +100,9 @@ class MySpider(air.Spider):
 # 写好一个爬虫快速转换为一个外部可调用的接口，可以分为两种模式
 
 # 导入 api 服务类
+# from bricks.client.server.starlette_ import app
 from bricks.client.server.sanic_ import app
+
 
 # 也可以使用 sanic 的app, 效率更高, 逼近 golang, 可是没有 starlette_ 稳定
 # from bricks.client.server.sanic_ import app
@@ -171,10 +174,11 @@ app.bind_addon(
     Rpc.wrap(MySpider),  # 需要绑定的爬虫, 如果要传实例化参数, 则写到wrap 里面
     path="/demo/rpc",  # 请求路径
     concurrency=200,  # 设置接口最大并发 200
-    callback=[callback],  # 成功回调
-    errback=[errback],  # 失败回调 -> 如请求被取消
+    # callback=[callback],  # 成功回调
+    # errback=[errback],  # 失败回调 -> 如请求被取消
     max_retry=1,  # 接口只重试三次
     timeout=5,  # 5s还没跑完, 直接返回超时
+    methods=["POST"],
 )
 
 # 2. 是用 listener 模式 [不推荐, 请使用rpc, listener作为api爬虫]
@@ -216,18 +220,19 @@ app.bind_addon(
 import sanic
 
 
-async def pr(request, response: sanic.response.HTTPResponse):
-    print(request, response)
-
-    if response.status == 404:
-        return sanic.json({"code": -1, "error": "-2", "data": response.body.decode()})
+async def pr(request: bricks.Request, response: bricks.Response):
+    body = json.loads(request.body)
+    token, site_id, good_id = body.get("token"), body.get("site_id"), body.get("good_id")
+    ip = request.get_options("client_ip")
+    print("ip: ",ip)
+    print(response, type(response), response.json())
 
 
 # 请求中间件
 # app.add_middleware("request", verify_signature)
 
 # 响应中间件
-# app.add_middleware("response", pr)
+app.add_middleware("response", pr)
 
 # 注册一个自定义视图可以使用这种方法，有点类似 bind_addon，但是部分参数不支持
 # @app.route("/my_view", methods=["GET"], callback=[callback])
