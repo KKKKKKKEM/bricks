@@ -19,13 +19,13 @@ class RedisQueue(TaskQueue):
     subscribe = True
 
     def __init__(
-        self,
-        host="127.0.0.1",
-        password=None,
-        port=6379,
-        database=0,
-        genre="set",
-        **kwargs,
+            self,
+            host="127.0.0.1",
+            password=None,
+            port=6379,
+            database=0,
+            genre="set",
+            **kwargs,
     ):
         self.redis_db = Redis(
             host=host, password=password, port=port, database=database, **kwargs
@@ -193,6 +193,7 @@ class RedisQueue(TaskQueue):
     local ttl = KEYS[5]
     changeDataBase(db_num)
     redis.call("HSET", record_key, "status", 0)
+    redis.call("HSET", record_key, "stop_heartbeat", 1)
     if ttl ~= 0 then
         redis.call("DEL", history_key)
         local dump = redis.call('DUMP', record_key)
@@ -200,6 +201,19 @@ class RedisQueue(TaskQueue):
     end
     return true
                     """)
+
+            continue_init_heartbeat = self.lua.register("""
+    local record_key = KEYS[1]
+    local heartbeat_key = KEYS[2]
+    local interval = KEYS[3]
+    local stop_heartbeat = redis.call("HGET", record_key, "stop_heartbeat")
+    if stop_heartbeat == "1" then
+        redis.call("HDEL", record_key, "stop_heartbeat")
+        return false
+    end
+    redis.call("SETEX", heartbeat_key, interval, redis.call("TIME")[1])
+    return true
+            """)
 
         self.scripts = Scripts
 
@@ -298,7 +312,7 @@ class RedisQueue(TaskQueue):
         return self.scripts.remove(keys=keys, args=args)
 
     def clear(
-        self, *names, qtypes=("current", "temp", "lock", "record", "failure"), **kwargs
+            self, *names, qtypes=("current", "temp", "lock", "record", "failure"), **kwargs
     ):
         db_num = kwargs.pop("db_num", self.database)
         keys = [db_num]
@@ -463,11 +477,15 @@ class RedisQueue(TaskQueue):
             """
 
             def heartbeat():
+                _keys = [
+                    self.name2key(name, "record"),
+                    heartbeat_key,
+                    interval
+                ]
                 while True:
                     try:
-                        self.redis_db.setex(
-                            heartbeat_key, interval, str(datetime.datetime.now())
-                        )
+                        if not self.scripts.continue_init_heartbeat(keys=_keys):
+                            break
                         time.sleep(interval - 1)
                     except (KeyboardInterrupt, SystemExit):
                         raise
