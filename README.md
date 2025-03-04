@@ -49,7 +49,7 @@ pip install -U bricks-py
 ```
 
 ## 安装测试版
-```python
+```shell
 # beta 版本全部都发布在 test.pypi.org
 pip install -i https://test.pypi.org/simple/ -U bricks-py
 

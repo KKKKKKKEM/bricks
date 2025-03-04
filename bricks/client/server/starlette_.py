@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import asyncio
 import dataclasses
 import functools
@@ -8,7 +6,6 @@ from re import Pattern
 from typing import Callable, Dict, List, Literal, Optional, Union
 
 from loguru import logger
-from starlette.responses import StreamingResponse, Response
 
 import bricks
 from bricks.client.server import Gateway
