@@ -73,7 +73,6 @@ class Downloader(AbstractDownloader):
                 exts_payload=request.get_options("exts_payload"),
                 browser_type=request.get_options("browser_type"),
                 http2=request.get_options("http2", False),
-                shuffle_proto=request.get_options("shuffle_proto", False),
             )
 
         try:
