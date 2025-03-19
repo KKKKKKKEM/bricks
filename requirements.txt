@@ -1,8 +1,8 @@
-loguru==0.7.2
+loguru==0.7.3
 jmespath-community==1.1.3
-lxml==4.9.3
+lxml==5.3.1
 jsonpath==0.82.2
-w3lib==2.1.2
-curl_cffi==0.7.3
-redis==5.0.1
+w3lib==2.3.1
+curl_cffi==0.10.0
+redis==5.2.1
 better_exceptions==0.3.3
