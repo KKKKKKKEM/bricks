@@ -491,7 +491,7 @@ class RedisQueue(TaskQueue):
                         raise
 
                     except Exception as e:
-                        logger.error(f"[get_permission] {e}")
+                        logger.error(f"[heartbeat] {e}")
                         time.sleep(1)
 
             db_num = order.get("db_num", self.database)
@@ -512,33 +512,37 @@ class RedisQueue(TaskQueue):
             ]
 
             while True:
-                msg = self.scripts.get_permission(keys=keys)
-                start_time = time.time()
+                try:
+                    msg = self.scripts.get_permission(keys=keys)
+                    start_time = time.time()
 
-                if msg == "成功获取权限":
-                    # 拿到了权限, 开启心跳任务, 去更新 heartbeat 锁的时间
-                    threading.Thread(target=heartbeat, daemon=True).start()
-                    return {"state": True, "msg": msg}
+                    if msg == "成功获取权限":
+                        # 拿到了权限, 开启心跳任务, 去更新 heartbeat 锁的时间
+                        threading.Thread(target=heartbeat, daemon=True).start()
+                        return {"state": True, "msg": msg}
 
-                elif msg == "已投完且存在种子没有消费完毕":
-                    return {"state": False, "msg": msg}
+                    elif msg == "已投完且存在种子没有消费完毕":
+                        return {"state": False, "msg": msg}
 
-                else:  # 获取心跳锁失败
-                    last = ""
-                    while time.time() - start_time < interval * 3:  # 判断 interval*3 秒
-                        heartbeat_value = self.redis_db.get(heartbeat_key)
-                        # 锁变为空了, 重新开始所有流程
-                        if heartbeat_value == "":
-                            break
+                    else:  # 获取心跳锁失败
+                        last = ""
+                        while time.time() - start_time < interval * 3:  # 判断 interval*3 秒
+                            heartbeat_value = self.redis_db.get(heartbeat_key)
+                            # 锁变为空了, 重新开始所有流程
+                            if heartbeat_value == "":
+                                break
 
-                        # 锁的内容在变化, 有人在操作, 直接返回
-                        if last and last != heartbeat_value:  # 只要在变化, 就不嘻嘻
-                            return {"state": False, "msg": "存在其他活跃的初始化机器"}
+                            # 锁的内容在变化, 有人在操作, 直接返回
+                            if last and last != heartbeat_value:  # 只要在变化, 就不嘻嘻
+                                return {"state": False, "msg": "存在其他活跃的初始化机器"}
 
-                        last = heartbeat_value
-                        time.sleep(1)
+                            last = heartbeat_value
+                            time.sleep(1)
 
-                    # 锁没动过, 也重新开始所有流程
+                        # 锁没动过, 也重新开始所有流程
+                except Exception as permission_e:
+                    logger.error(f"[get_permission] {permission_e}")
+                    time.sleep(30)
 
         def set_record():
             self.redis_db.hset(
