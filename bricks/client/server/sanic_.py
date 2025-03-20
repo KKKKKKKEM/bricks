@@ -5,7 +5,6 @@ import uuid
 from typing import Callable, Dict, Literal
 
 from loguru import logger
-import sanic.response
 
 import bricks
 from bricks.client.server import Gateway
@@ -16,6 +15,7 @@ from bricks.utils import pandora
 
 pandora.require(package_spec="sanic==24.6.0")
 import sanic  # noqa E402
+import sanic.response  # noqa E402
 from sanic.views import HTTPMethodView  # noqa E402
 from sanic.response import BaseHTTPResponse  # noqa E402
 from sanic.exceptions import WebsocketClosed  # noqa: E402
