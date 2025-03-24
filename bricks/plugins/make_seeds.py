@@ -24,12 +24,12 @@ def _make_key(query: dict):
 
 
 def by_csv(
-    path: str,
-    query: str = None,
-    batch_size: int = 10000,
-    skip: Union[str, int] = ...,
-    reader_options: Optional[dict] = None,
-    record: Optional[dict] = None,
+        path: str,
+        query: str = None,
+        batch_size: int = 10000,
+        skip: Union[str, int] = ...,
+        reader_options: Optional[dict] = None,
+        record: Optional[dict] = None,
 ):
     """
     从 `CSV` 中获取种子, `csv` 必须有表头，可以使用 `SQL` 进行数据查询
@@ -94,15 +94,15 @@ def by_csv(
 
 
 def by_mongo(
-    path: str,
-    conn,
-    query: Optional[dict] = None,
-    projection: Optional[dict] = None,
-    database: str = None,
-    batch_size: int = 10000,
-    skip: Union[str, int] = ...,
-    record: Optional[dict] = None,
-    sort: Optional[List[tuple]] = None,
+        path: str,
+        conn,
+        query: Optional[dict] = None,
+        projection: Optional[dict] = None,
+        database: str = None,
+        batch_size: int = 10000,
+        skip: Union[str, int] = ...,
+        record: Optional[dict] = None,
+        sort: Optional[List[tuple]] = None,
 ):
     """
     从 `Mongo` 中加载数据作为种子
@@ -145,12 +145,13 @@ def by_mongo(
         skip = raw_skip
 
     for rows in conn.iter_data(
-        collection=path,
-        query=query,
-        skip=skip,
-        count=batch_size,
-        database=database,
-        sort=sort,
+            collection=path,
+            query=query,
+            skip=skip,
+            count=batch_size,
+            database=database,
+            sort=sort,
+            projection=projection,
     ):
         skip += len(rows)
         record.update({record_key: skip})
@@ -158,11 +159,11 @@ def by_mongo(
 
 
 def by_sqlite(
-    path: str,
-    conn: Sqlite,
-    batch_size: int = 10000,
-    skip: Union[str, int] = ...,
-    record: Optional[dict] = None,
+        path: str,
+        conn: Sqlite,
+        batch_size: int = 10000,
+        skip: Union[str, int] = ...,
+        record: Optional[dict] = None,
 ):
     """
     通过 sqlite 初始化
@@ -217,10 +218,10 @@ def by_sqlite(
 
 
 def by_redis(
-    path: str,
-    conn: Redis,
-    batch_size: int = 10000,
-    key_type: Literal["set", "list", "string"] = "set",
+        path: str,
+        conn: Redis,
+        batch_size: int = 10000,
+        key_type: Literal["set", "list", "string"] = "set",
 ):
     """
     通过 `redis` 初始化种子, 仅支持小批量数据, 不支持断点续投
@@ -235,7 +236,7 @@ def by_redis(
         f"不支持的存储类型-{key_type}"
     )
     assert (
-        conn.type(path) == key_type or key_type == "string"
+            conn.type(path) == key_type or key_type == "string"
     ), f"读取类型错误-{path}:{conn.type(path)}, 读取类型-{key_type}"
 
     def read():
