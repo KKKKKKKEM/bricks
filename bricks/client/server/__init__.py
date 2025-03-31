@@ -20,77 +20,6 @@ from bricks.spider.air import Context
 from bricks.utils import pandora
 
 
-class Callback:
-    @staticmethod
-    def build(fns, request: Request = ..., **kwargs):
-        def main(fu: asyncio.Future):
-            if not fns or fu.cancelled():
-                return
-
-            namespace = {"fu": fu, "request": request}
-
-            annotations = {
-                type(fu): fu,
-                type(request): request,
-            }
-            raw_req = request.get_options("$request")
-
-            retval = fu.result()
-
-            namespace.update({"context": retval})
-            namespace.update({"retval": retval})
-            annotations.update({type(raw_req): raw_req, type(retval): retval})
-
-            for fn in pandora.iterable(fns):
-                if callable(fn) and not inspect.iscoroutinefunction(fn):
-                    prepared = pandora.prepare(
-                        fn, kwargs=kwargs, namespace=namespace, annotations=annotations
-                    )
-                    try:
-                        prepared.func(*prepared.args, **prepared.kwargs)
-                    except signals.Break:
-                        return
-
-        return main
-
-    @staticmethod
-    async def call(fns, fu: asyncio.Future, request: Request = ..., **kwargs):
-        if not fns:
-            return
-
-        namespace: dict[str, Any] = {"fu": fu, "request": request}
-
-        annotations: dict[Any, Any] = {
-            type(fu): fu,
-            type(request): request,
-        }
-        raw_req = request.get_options("$request")
-
-        if not fu.cancelled():
-            ctx = fu.result()
-
-        else:
-            ctx = None
-
-        namespace.update({"context": ctx})
-        annotations.update({type(raw_req): raw_req, type(ctx): ctx})
-
-        for fn in pandora.iterable(fns):
-            if callable(fn):
-                prepared = pandora.prepare(
-                    fn, kwargs=kwargs, namespace=namespace, annotations=annotations
-                )
-                try:
-                    if inspect.iscoroutinefunction(fn):
-                        await prepared.func(*prepared.args, **prepared.kwargs)
-                    else:
-                        await Gateway.awaitable_call(
-                            prepared.func, *prepared.args, **prepared.kwargs
-                        )
-                except signals.Break:
-                    return
-
-
 class Gateway:
     def __init__(self):
         self.connections = {}
@@ -133,14 +62,14 @@ class Gateway:
         ...
 
     def route(
-        self,
-        uri: str,
-        timeout: int = None,  # type: ignore
-        concurrency: int = None,  # type: ignore
-        callback: List[Callable] = None,  # type: ignore
-        errback: List[Callable] = None,  # type: ignore
-        methods: List[str] = ["GET"],
-        **options,
+            self,
+            uri: str,
+            timeout: int = None,  # type: ignore
+            concurrency: int = None,  # type: ignore
+            callback: List[Callable] = None,  # type: ignore
+            errback: List[Callable] = None,  # type: ignore
+            methods: List[str] = ("GET",),
+            **options,
     ):
         """
         绑定一个路由
@@ -170,14 +99,14 @@ class Gateway:
         return inner
 
     def bind_view(
-        self,
-        path: str,
-        handler: Callable,
-        timeout: int = None,  # type: ignore
-        concurrency: int = None,  # type: ignore
-        callback: List[Callable] = None,  # type: ignore
-        errback: List[Callable] = None,  # type: ignore
-        **options,
+            self,
+            path: str,
+            handler: Callable,
+            timeout: int = None,  # type: ignore
+            concurrency: int = None,  # type: ignore
+            callback: List[Callable] = None,  # type: ignore
+            errback: List[Callable] = None,  # type: ignore
+            **options,
     ):
         """
         绑定一个路由
@@ -214,13 +143,12 @@ class Gateway:
             fu = asyncio.ensure_future(
                 self.awaitable_call(prepared.func, *prepared.args, **prepared.kwargs)
             )
-            fu.add_done_callback(Callback.build(cb1, request=request))
 
             try:
-                ctx = await asyncio.wait_for(fu, timeout=timeout)
+                result = await asyncio.wait_for(fu, timeout=timeout)
 
             except asyncio.exceptions.CancelledError:
-                await Callback.call(errback, fu, request=request)
+                await self.run_callbacks(errback, fu, request=request)
 
             except Exception as e:
                 if isinstance(e, asyncio.TimeoutError):
@@ -228,19 +156,11 @@ class Gateway:
                 else:
                     raise e
             else:
-                await Callback.call(cb2, fu, request=request)
-                return ctx
+                await self.run_callbacks(callback, fu, request=request)
+                return result
 
             finally:
                 semaphore and semaphore.release()  # type: ignore
-
-        cb1 = []
-        cb2 = []
-        for cb in pandora.iterable(callback):
-            if inspect.iscoroutinefunction(cb):
-                cb2.append(cb)
-            else:
-                cb1.append(cb)
 
         if concurrency and concurrency > 0:
             semaphore = asyncio.Semaphore(concurrency)
@@ -250,16 +170,16 @@ class Gateway:
         self.create_view(uri=path, adapter=normal_view, **options)
 
     def bind_addon(
-        self,
-        obj: Union[Rpc, Listener],
-        path: str,
-        form: Literal["$response", "$items", "$request"] = "$response",
-        max_retry: int = 10,
-        timeout: int = None, # type: ignore
-        concurrency: int = None, # type: ignore
-        callback: List[Callable] = None, # type: ignore
-        errback: List[Callable] = None, # type: ignore
-        **options,
+            self,
+            obj: Union[Rpc, Listener],
+            path: str,
+            form: Literal["$response", "$items", "$request"] = "$response",
+            max_retry: int = 10,
+            timeout: int = None,  # type: ignore
+            concurrency: int = None,  # type: ignore
+            callback: List[Callable] = None,  # type: ignore
+            errback: List[Callable] = None,  # type: ignore
+            **options,
     ):
         """
         绑定 listener / rpc
@@ -275,60 +195,12 @@ class Gateway:
         :return:
         """
 
-        def is_failure(context: Context):
-            return context and context.seeds.get("$status", 0) != 0  # type: ignore
-
-        def fix(context: Context):
-            context.seeds.update({"$interfaceFinish": time.time()})  # type: ignore
-            if is_failure(context):
-                context.response = Response(
-                    status_code=403,
-                    content=json.dumps(
-                        {
-                            "code": 403,
-                            "msg": context.seeds.get("$msg"),  # type: ignore
-                            "data": {
-                                k.strip("$"): v
-                                for k, v in sorted(context.seeds.items())
-                                if k not in ["$status", "$msg"]
-                            },
-                        }
-                    ),
-                    headers={"Content-type": "application/json"},
-                )
-
-                raise signals.Break
-
-            if form == "$response" and getattr(context, "response", None) is None:
-                context.response = Response(
-                    status_code=204,
-                    content="",
-                    headers={"Content-type": "application/json"},
-                )
-
-        async def submit(
-            seeds: dict, request: Request = ..., is_alive: Callable = ...
-        ):
+        async def submit(seeds: dict, request: Request = ...):
             if semaphore and semaphore.locked():
                 raise signals.Wait(1)
 
             if semaphore:
                 await semaphore.acquire()
-
-            async def monitor():
-                if is_alive is ...:
-                    return
-
-                if not request:
-                    return
-                raw_req = request.get_options("$request")
-                while not fu.done():
-                    alive = await is_alive(raw_req)
-                    if not alive:
-                        logger.warning(f"{data} 被取消")
-                        fu.cancel()
-                    else:
-                        await asyncio.sleep(0.01)
 
             loop = asyncio.get_event_loop()
             seeds = seeds or {}
@@ -336,47 +208,23 @@ class Gateway:
                 **seeds,
                 "$futureType": form,
                 "$futureMaxRetry": max_retry,
-                "$interfaceStart": time.time(),
             }
-            asyncio.ensure_future(monitor())
-            if "timeout" in inspect.signature(obj.execute).parameters:
-                args = [data, timeout]
-            else:
-                args = [data]
-
-            fu = loop.run_in_executor(pool, obj.execute, *args)  # type: ignore
-            fu.add_done_callback(Callback.build(cb1, request=request, seeds=seeds))
+            args = [data]
             ctx = None
-
             try:
-                ctx = await asyncio.wait_for(fu, timeout=timeout)
-                assert not is_failure(ctx), "超出最大重试次数"
-            except AssertionError:
-                await Callback.call(errback, fu, request=request, seeds=seeds)
-                return ctx
+                future = await asyncio.wait_for(loop.run_in_executor(pool, obj.execute, *args), timeout=timeout)
+                ctx = await asyncio.wrap_future(future)
 
-            except asyncio.exceptions.CancelledError:
-                await Callback.call(errback, fu, request=request, seeds=seeds)
+            except Exception:
+                await self.run_callbacks(errback, ctx, request=request, seeds=seeds)
+                raise
 
-            except Exception as e:
-                if isinstance(e, asyncio.TimeoutError):
-                    raise asyncio.TimeoutError(f"任务超过最大超时时间 {timeout} s")
-                else:
-                    raise e
             else:
-                await Callback.call(cb2, fu, request=request, seeds=seeds)
+                await self.run_callbacks(callback, ctx, request=request, seeds=seeds)
                 return ctx
 
             finally:
                 semaphore and semaphore.release()  # type: ignore
-
-        cb1 = [fix]
-        cb2 = []
-        for cb in pandora.iterable(callback):
-            if inspect.iscoroutinefunction(cb):
-                cb2.append(cb)
-            else:
-                cb1.append(cb)
 
         pool = ThreadPoolExecutor(max_workers=concurrency)
         if concurrency and concurrency > 0:
@@ -389,7 +237,7 @@ class Gateway:
         self.create_addon(uri=path, adapter=submit, **options)
 
     async def _invoke(
-        self, orders: Dict[str, List[dict]], timeout: Optional[int] = None
+            self, orders: Dict[str, List[dict]], timeout: Optional[int] = None
     ):
         futures = []
         for ws, cid in self.connections.items():
@@ -410,9 +258,9 @@ class Gateway:
             return ret
 
     async def invoke(
-        self,
-        orders: Dict[str, List[dict]],
-        timeout: Optional[int] = None,
+            self,
+            orders: Dict[str, List[dict]],
+            timeout: Optional[int] = None,
     ):
         future = asyncio.ensure_future(self._invoke(orders, timeout=timeout))
         if timeout == 0:
@@ -427,9 +275,11 @@ class Gateway:
 
         return ret
 
-    def run(self, *args, **kwargs): ...
+    def run(self, *args, **kwargs):
+        ...
 
-    async def websocket_endpoint(self, *args, **kwargs): ...
+    async def websocket_endpoint(self, *args, **kwargs):
+        ...
 
     def add_route(self, *args, **kwargs):
         return self.router.add_route(*args, **kwargs)
@@ -437,7 +287,77 @@ class Gateway:
     def add_websocket_route(self, *args, **kwargs):
         return self.router.add_websocket_route(*args, **kwargs)
 
-    def add_middleware(self, *args, **kwargs): ...
+    def add_middleware(self, *args, **kwargs):
+        ...
 
     def create_view(self, uri: str, adapter: Callable = ..., **options):
         raise NotImplementedError
+
+    @classmethod
+    async def run_callbacks(cls, fns, fu: asyncio.Future, request: Request = ..., **kwargs):
+        if not fns:
+            return
+
+        namespace: dict[str, Any] = {"fu": fu, "request": request}
+
+        annotations: dict[Any, Any] = {
+            type(fu): fu,
+            type(request): request,
+        }
+        raw_req = request.get_options("$request")
+
+        if not fu.cancelled():
+            ctx = fu.result()
+
+        else:
+            ctx = None
+
+        namespace.update({"context": ctx})
+        annotations.update({type(raw_req): raw_req, type(ctx): ctx})
+
+        for fn in pandora.iterable(fns):
+            if callable(fn):
+                prepared = pandora.prepare(
+                    fn, kwargs=kwargs, namespace=namespace, annotations=annotations
+                )
+                try:
+                    if inspect.iscoroutinefunction(fn):
+                        await prepared.func(*prepared.args, **prepared.kwargs)
+                    else:
+                        await cls.awaitable_call(
+                            prepared.func, *prepared.args, **prepared.kwargs
+                        )
+                except signals.Break:
+                    return
+
+    @staticmethod
+    def wrap_callbacks(fns, request: Request = ..., **kwargs):
+        def main(fu: asyncio.Future):
+            if not fns or fu.cancelled():
+                return
+
+            namespace = {"fu": fu, "request": request}
+
+            annotations = {
+                type(fu): fu,
+                type(request): request,
+            }
+            raw_req = request.get_options("$request")
+
+            retval = fu.result()
+
+            namespace.update({"context": retval})
+            namespace.update({"retval": retval})
+            annotations.update({type(raw_req): raw_req, type(retval): retval})
+
+            for fn in pandora.iterable(fns):
+                if callable(fn) and not inspect.iscoroutinefunction(fn):
+                    prepared = pandora.prepare(
+                        fn, kwargs=kwargs, namespace=namespace, annotations=annotations
+                    )
+                    try:
+                        prepared.func(*prepared.args, **prepared.kwargs)
+                    except signals.Break:
+                        return
+
+        return main

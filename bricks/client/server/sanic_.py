@@ -33,10 +33,6 @@ async def make_req(request: sanic.Request):
     )
 
 
-async def is_alive(request: sanic.Request):
-    return not request.transport.is_closing()
-
-
 class AddonView(HTTPMethodView):
     def __init__(self, main: Callable, future_type: str = "$response"):
         super().__init__()
@@ -53,7 +49,7 @@ class AddonView(HTTPMethodView):
 
             await request.receive_body()
             req = await make_req(request)
-            ctx = await self.main(body, req, is_alive=is_alive)
+            ctx = await self.main(body, req)
             return self.fmt(ctx)
         except (SystemExit, KeyboardInterrupt):
             raise
@@ -64,14 +60,13 @@ class AddonView(HTTPMethodView):
             )
 
         except Exception as e:
-            logger.exception(e)
-            return sanic.response.json(body={"code": 500, "msg": str(e)}, status=500)
+            return sanic.response.json(body={"code": 500, "msg": str(e)}, status=400)
 
     async def post(self, request: sanic.Request):
         try:
             req = await make_req(request)
             seeds = request.json
-            ctx = await self.main(seeds, req, is_alive=is_alive)
+            ctx = await self.main(seeds, req)
             return self.fmt(ctx)
         except (SystemExit, KeyboardInterrupt):
             raise
@@ -82,8 +77,7 @@ class AddonView(HTTPMethodView):
             )
 
         except Exception as e:
-            logger.exception(e)
-            return sanic.response.json(body={"code": 500, "msg": str(e)}, status=500)
+            return sanic.response.json(body={"code": 500, "msg": str(e)}, status=400)
 
     def fmt(self, context: Context):
         if context is None:
@@ -174,7 +168,6 @@ class APP(Gateway):
                 )
 
             except Exception as e:
-                logger.exception(e)
                 return sanic.response.json(
                     body={"code": 500, "msg": str(e)}, status=500
                 )

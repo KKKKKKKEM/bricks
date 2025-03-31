@@ -182,7 +182,7 @@ class AddonView(HTTPEndpoint):
         try:
             seeds = dict(request.query_params)
             req = await make_req(request)  # type: ignore
-            ctx = await self.main(seeds, req, is_alive=self.is_alive)
+            ctx = await self.main(seeds, req)
 
             return self.fmt(ctx)
         except (SystemExit, KeyboardInterrupt):
@@ -203,7 +203,7 @@ class AddonView(HTTPEndpoint):
         try:
             seeds = await request.json()
             req = await make_req(request)
-            ctx = await self.main(seeds, req, is_alive=self.is_alive)
+            ctx = await self.main(seeds, req)
             return self.fmt(ctx)
         except (SystemExit, KeyboardInterrupt):
             raise
@@ -253,11 +253,6 @@ class AddonView(HTTPEndpoint):
                 return responses.PlainTextResponse(context.request.curl)
             else:
                 return responses.Response()
-
-    @staticmethod
-    async def is_alive(request: requests.Request):
-        close = await request.is_disconnected()
-        return not close
 
 
 class APP(Gateway):

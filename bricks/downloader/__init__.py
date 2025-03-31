@@ -21,7 +21,7 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
     local = threading.local()
     debug = False
 
-    def fetch(self, request: Union[Request, dict]) -> Response:
+    def fetch(self, request: Request) -> Response:
         """
         发送请求以获得一个响应
 
