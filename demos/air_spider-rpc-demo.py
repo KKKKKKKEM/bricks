@@ -92,7 +92,7 @@ class MySpider(air.Spider):
                 # 重试信号
                 raise signals.Retry
 
-        # context.response.status_code = 429
+        context.response.status_code = 429
 
         # raise signals.Retry
 
@@ -101,21 +101,20 @@ class MySpider(air.Spider):
 
 # 导入 api 服务类
 # from bricks.client.server.starlette_ import app
-from bricks.client.server.sanic_ import app
 
 
 # 也可以使用 sanic 的app, 效率更高, 逼近 golang, 可是没有 starlette_ 稳定
-# from bricks.client.server.sanic_ import app
+from bricks.client.server.sanic_ import app
 
 
 # 添加回调
-def callback(fu, request, context, seeds):
+def callback(fu, request, retval, seeds):
     """
     成功回调测试, 参数可以随意增减
 
     :param fu: future, 可以根据 fu.cancelled() 来判断是不是客户端提前断开了连接
     :param request: 格式化的请求, 为 bricks.Request 类型
-    :param context: 成功的话这个就是响应结果, 需要response 就是用content.response
+    :param retval: 成功的话可以拿到返回结果
     :param seeds: 这个是真正的请求的种子
     :return:
     """
@@ -126,18 +125,17 @@ def callback(fu, request, context, seeds):
     请求: {request}
     种子: {seeds}
     请求类型: {type(request)}
-    处理后的种子: {context.seeds}
-    响应: {context.response}
+    retval: {retval}
 """)
 
 
-def errback(fu, request, seeds, context):
+def errback(fu, request, seeds, error):
     """
     错误回调测试
 
     :param fu: future, 可以根据 fu.cancelled() 来判断是不是客户端提前断开了连接
     :param request: 格式化的请求, 为 bricks.Request 类型
-    :param context: 如果是被取消的, 那么context为空, 超过了最大重试次数也会走这里, 但是此时context是存在的
+    :param error: 发生错误的时候可以接收到异常
     :param seeds: 这个是真正的请求的种子
     :return:
     """
@@ -147,24 +145,9 @@ def errback(fu, request, seeds, context):
     连接已断开: {fu.cancelled()}
     请求: {request}
     种子: {seeds}
-    context: {context}
+    error: {error}
     请求类型: {type(request)}
 """)
-
-
-def fix_404(seeds, context: air.Context):
-    token = seeds.get("token")
-    body = context.response.text
-
-    if not context.response.content or context.response.status_code not in [404, 200]:
-        context.response.content = json.dumps({"code": -1, "error": "-2"})
-        context.response.status_code = 403
-        return
-
-    print("token: ", token)
-    count = 1
-    context.response.status_code = 200
-    context.response.content = json.dumps({"count": count, "data": body})
 
 
 # 绑定api
@@ -174,57 +157,19 @@ app.bind_addon(
     Rpc.wrap(MySpider),  # 需要绑定的爬虫, 如果要传实例化参数, 则写到wrap 里面
     path="/demo/rpc",  # 请求路径
     concurrency=200,  # 设置接口最大并发 200
-    # callback=[callback],  # 成功回调
-    # errback=[errback],  # 失败回调 -> 如请求被取消
+    callback=[callback],  # 成功回调
+    errback=[errback],  # 失败回调 -> 如请求被取消
     max_retry=1,  # 接口只重试三次
     timeout=5,  # 5s还没跑完, 直接返回超时
     methods=["POST"],
 )
-
-# 2. 是用 listener 模式 [不推荐, 请使用rpc, listener作为api爬虫]
-# 转为 listener 模型，还可以传入一些参数定制爬虫
-# app.bind_addon(Listener.wrap(MySpider), path="/demo/listener")  # listener模式
-
-# # 假设这是你的共享密钥
-# SECRET_KEY = "your_secret_key"
-
-
-# def generate_signature(data: dict) -> str:
-#     """根据数据生成签名"""
-#     data_str = json.dumps(data, sort_keys=True)
-#     signature = hmac.new(SECRET_KEY.encode(), data_str.encode(), sha256).hexdigest()
-#     return signature
-
-
-# async def verify_signature(request: Request):
-#     from sanic.exceptions import Forbidden
-
-#     # 获取请求体
-#     try:
-#         request_data = request.body
-#     except Exception as e:
-#         raise Forbidden("Invalid request body")
-
-#     print(generate_signature(request_data))
-
-#     # 获取请求头中的签名
-#     provided_signature = request.headers.get('X-Signature')
-#     if not provided_signature:
-#         raise Forbidden("Missing X-Signature header")
-
-#     # 生成签名并比较
-#     expected_signature = generate_signature(request_data)
-#     if not hmac.compare_digest(provided_signature, expected_signature):
-#         raise Forbidden("Signature verification failed")
-
-import sanic
 
 
 async def pr(request: bricks.Request, response: bricks.Response):
     body = json.loads(request.body)
     token, site_id, good_id = body.get("token"), body.get("site_id"), body.get("good_id")
     ip = request.get_options("client_ip")
-    print("ip: ",ip)
+    print("ip: ", ip)
     print(response, type(response), response.json())
 
 
@@ -241,7 +186,6 @@ app.add_middleware("response", pr)
 #     return {"code": 0, "msg": "success"}
 
 # 启动api服务，data 就是你需要爬取的种子
-# 访问： curl --location '127.0.0.1:8888/demo/rpc' --header 'Content-Type: application/json'  --data '{"page":1}'
-# 访问： curl --location '127.0.0.1:8888/demo/listener' --header 'Content-Type: application/json'  --data '{"page":1}'
+# 访问： curl -X POST 'http://127.0.0.1:8888/demo/rpc' -H 'Content-Type: application/json' -d '{"page":1}'
 if __name__ == "__main__":
     app.run()

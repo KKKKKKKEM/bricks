@@ -1097,15 +1097,11 @@ class Spider(Pangu):
             future_max_retry = context.seeds.get("$futureMaxRetry")
             future_retry: int = context.seeds.get("$futureRetry") or 0  # type: ignore
             request = prepared.func(*prepared.args, **prepared.kwargs)
-
-            context.seeds["$futureRetry"] = request.retry
-
             if future_max_retry:
                 request.max_retry = future_max_retry
                 request.put_options("$maxRetry", future_max_retry)
-
-            if future_retry:
                 request.retry = future_retry + 1
+                context.seeds["$futureRetry"] = request.retry
 
             context.form = state.const.AFTER_MAKE_REQUEST
             events.EventManager.invoke(

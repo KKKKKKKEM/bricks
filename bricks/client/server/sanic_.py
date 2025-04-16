@@ -13,7 +13,7 @@ from bricks.lib.request import Request
 from bricks.spider.air import Context
 from bricks.utils import pandora
 
-pandora.require(package_spec="sanic==24.6.0")
+pandora.require(package_spec="sanic==25.3.0")
 import sanic  # noqa E402
 import sanic.response  # noqa E402
 from sanic.views import HTTPMethodView  # noqa E402

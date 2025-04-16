@@ -7,16 +7,12 @@ import collections
 import inspect
 import json
 import threading
-import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any, Callable, Dict, List, Literal, Optional, Union
+from typing import Any, Callable, Dict, List, Literal, Optional
 
-from loguru import logger
-
-from bricks import Response, Request
+from bricks import Request
 from bricks.core import signals
-from bricks.spider.addon import Listener, Rpc
-from bricks.spider.air import Context
+from bricks.spider.addon import Rpc
 from bricks.utils import pandora
 
 
@@ -171,7 +167,7 @@ class Gateway:
 
     def bind_addon(
             self,
-            obj: Union[Rpc, Listener],
+            obj: Rpc,
             path: str,
             form: Literal["$response", "$items", "$request"] = "$response",
             max_retry: int = 10,
@@ -182,7 +178,7 @@ class Gateway:
             **options,
     ):
         """
-        绑定 listener / rpc
+        绑定  rpc
 
         :param errback: 错误回调, 如被取消, 或者出现异常之类的
         :param callback: 成功回调, 支持同步回调和异步回调
@@ -209,18 +205,18 @@ class Gateway:
                 "$futureType": form,
                 "$futureMaxRetry": max_retry,
             }
-            args = [data]
-            ctx = None
-            try:
-                future = await asyncio.wait_for(loop.run_in_executor(pool, obj.execute, *args), timeout=timeout)
-                ctx = await asyncio.wrap_future(future)
 
-            except Exception:
-                await self.run_callbacks(errback, ctx, request=request, seeds=seeds)
+            fu = loop.run_in_executor(pool, obj.execute, data, timeout)
+
+            try:
+                ctx = await asyncio.wait_for(fu, timeout=timeout)
+
+            except Exception as e:
+                await self.run_callbacks(errback, fu, request=request, seeds=seeds, error=e)
                 raise
 
             else:
-                await self.run_callbacks(callback, ctx, request=request, seeds=seeds)
+                await self.run_callbacks(callback, fu, request=request, seeds=seeds, retval=ctx)
                 return ctx
 
             finally:
@@ -305,59 +301,15 @@ class Gateway:
             type(request): request,
         }
         raw_req = request.get_options("$request")
-
-        if not fu.cancelled():
-            ctx = fu.result()
-
-        else:
-            ctx = None
-
-        namespace.update({"context": ctx})
-        annotations.update({type(raw_req): raw_req, type(ctx): ctx})
+        annotations.update({type(raw_req): raw_req})
 
         for fn in pandora.iterable(fns):
             if callable(fn):
-                prepared = pandora.prepare(
-                    fn, kwargs=kwargs, namespace=namespace, annotations=annotations
-                )
+                prepared = pandora.prepare(fn, kwargs=kwargs, namespace=namespace, annotations=annotations)
                 try:
                     if inspect.iscoroutinefunction(fn):
                         await prepared.func(*prepared.args, **prepared.kwargs)
                     else:
-                        await cls.awaitable_call(
-                            prepared.func, *prepared.args, **prepared.kwargs
-                        )
+                        await cls.awaitable_call(prepared.func, *prepared.args, **prepared.kwargs)
                 except signals.Break:
                     return
-
-    @staticmethod
-    def wrap_callbacks(fns, request: Request = ..., **kwargs):
-        def main(fu: asyncio.Future):
-            if not fns or fu.cancelled():
-                return
-
-            namespace = {"fu": fu, "request": request}
-
-            annotations = {
-                type(fu): fu,
-                type(request): request,
-            }
-            raw_req = request.get_options("$request")
-
-            retval = fu.result()
-
-            namespace.update({"context": retval})
-            namespace.update({"retval": retval})
-            annotations.update({type(raw_req): raw_req, type(retval): retval})
-
-            for fn in pandora.iterable(fns):
-                if callable(fn) and not inspect.iscoroutinefunction(fn):
-                    prepared = pandora.prepare(
-                        fn, kwargs=kwargs, namespace=namespace, annotations=annotations
-                    )
-                    try:
-                        prepared.func(*prepared.args, **prepared.kwargs)
-                    except signals.Break:
-                        return
-
-        return main
