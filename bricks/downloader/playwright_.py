@@ -97,7 +97,7 @@ class Downloader(AbstractDownloader):
         driver_executable = compute_driver_executable()
         subprocess.run([*driver_executable, "install"], env=get_driver_env())
 
-    async def fetch(self, request: Request) -> Response:
+    async def fetch(self, request: Union[Request, dict]) -> Response:
         res = Response.make_response(request=request)
 
         # 获取驱动

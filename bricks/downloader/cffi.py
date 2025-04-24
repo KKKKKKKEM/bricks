@@ -37,7 +37,7 @@ class Downloader(AbstractDownloader):
         self.impersonate = impersonate
         self.options = options or {}
 
-    def fetch(self, request: Request) -> Response:
+    def fetch(self, request: Union[Request, dict]) -> Response:
         """
         真使用 requests 发送请求并获取响应
 
@@ -45,6 +45,7 @@ class Downloader(AbstractDownloader):
         :return: `Response`
 
         """
+        request: Request
         res = Response.make_response(request=request)
         options = {
             **self.options,

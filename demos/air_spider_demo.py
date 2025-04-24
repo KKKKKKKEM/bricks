@@ -4,6 +4,7 @@ from bricks import Request, const
 from bricks.core import events, signals
 from bricks.spider import air
 from bricks.spider.air import Context
+from bricks.downloader import go_requests
 
 
 class MySpider(air.Spider):
@@ -99,12 +100,13 @@ class MySpider(air.Spider):
 
 if __name__ == "__main__":
     spider = MySpider(
-        # proxy={
-        #     "ref": "bricks.lib.proxies.ClashProxy",
-        #     # 控制端地址
-        #     "key": "127.0.0.1:9097",
-        #     "threshold": 1
-        # },
+        proxy={
+            'ref': "bricks.lib.proxies.ClashProxy",
+            'key': "http://127.0.0.1:9097",
+            "scheme": "http",
+            # "threshold": 10, # 一个节点请求多少次就更换
+        },
+        downloader=go_requests.Downloader()
         # concurrency=5
     )
     spider.run()

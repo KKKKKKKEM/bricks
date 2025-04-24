@@ -13,7 +13,7 @@ import threading
 import time
 import typing
 import urllib.parse
-from typing import Callable, Literal, Optional, Type
+from typing import Callable, Literal, Optional, Type, Union
 
 from loguru import logger
 
@@ -37,14 +37,14 @@ DOWNLOADER = cffi.Downloader()
 
 class Proxy:
     def __init__(
-        self,
-        proxy: Optional[str] = None,
-        auth: Optional[Callable] = None,
-        recover: Optional[Callable] = ...,
-        clear: Optional[Callable] = ...,
-        threshold: int = math.inf,
-        derive: "BaseProxy" = None,
-        rkey: str = None,
+            self,
+            proxy: Optional[str] = None,
+            auth: Optional[Callable] = None,
+            recover: Optional[Callable] = ...,
+            clear: Optional[Callable] = ...,
+            threshold: int = math.inf,
+            derive: "BaseProxy" = None,
+            rkey: str = None,
     ):
         """
         代理类
@@ -89,13 +89,13 @@ class Proxy:
 @pandora.with_metaclass(singleton=True)
 class BaseProxy:
     def __init__(
-        self,
-        scheme: str = "http",
-        username: str = None,
-        password: str = None,
-        auth: Optional[Callable] = None,
-        recover: Optional[Callable] = ...,
-        threshold: int = math.inf,
+            self,
+            scheme: str = "http",
+            username: str = None,
+            password: str = None,
+            auth: Optional[Callable] = None,
+            recover: Optional[Callable] = ...,
+            threshold: int = math.inf,
     ):
         self.scheme = scheme
         self.username = username
@@ -165,16 +165,16 @@ class BaseProxy:
 
 class ApiProxy(BaseProxy):
     def __init__(
-        self,
-        key,
-        scheme: str = "http",
-        username: Optional[str] = None,
-        password: Optional[str] = None,
-        auth: Optional[Callable] = None,
-        threshold: int = math.inf,
-        options: Optional[dict] = None,
-        handle_response: Optional[Callable] = None,
-        recover: Optional[Callable] = ...,
+            self,
+            key,
+            scheme: str = "http",
+            username: Optional[str] = None,
+            password: Optional[str] = None,
+            auth: Optional[Callable] = None,
+            threshold: int = math.inf,
+            options: Optional[dict] = None,
+            handle_response: Optional[Callable] = None,
+            recover: Optional[Callable] = ...,
     ):
         """
         直接从 API 获取代理的代理类型
@@ -250,16 +250,16 @@ class ClashProxy(BaseProxy):
     """
 
     def __init__(
-        self,
-        key: str,
-        secret: Optional[str] = None,
-        cache_ttl: int = -1,
-        selector: str = "GLOBAL",
-        match: Optional[Callable] = ...,
-        scheme: str = "http",
-        auth: Optional[Callable] = None,
-        threshold: [int, float, Callable] = ...,
-        recover: Optional[Callable] = ...,
+            self,
+            key: str,
+            secret: Optional[str] = None,
+            cache_ttl: int = -1,
+            selector: str = "GLOBAL",
+            match: Optional[Callable] = ...,
+            scheme: str = "http",
+            auth: Optional[Callable] = None,
+            threshold: Union[int, float, Callable] = math.inf,
+            recover: Optional[Callable] = ...,
     ):
         """
         直接从 API 获取代理的代理类型
@@ -278,7 +278,6 @@ class ClashProxy(BaseProxy):
         if not key.startswith("http" + "://"):
             key = "http" + "://" + key
         if match is ...:
-
             def match(x):
                 return str(x) not in ["DIRECT", "REJECT"]
 
@@ -356,6 +355,7 @@ class ClashProxy(BaseProxy):
 
         elif isinstance(self.threshold, float):
             ju = get_time_policy()
+
         elif callable(self.threshold):
             ju = self.threshold
 
@@ -499,9 +499,9 @@ class ClashProxy(BaseProxy):
 
     @staticmethod
     def extract_nodes(
-        path: str,
-        form: typing.Literal["clash-sub", "clash", "v2ray", "v2ray-sub"] = "clash-sub",
-        env: dict = None,
+            path: str,
+            form: typing.Literal["clash-sub", "clash", "v2ray", "v2ray-sub"] = "clash-sub",
+            env: dict = None,
     ):
         try:
             import yaml
@@ -591,10 +591,10 @@ class ClashProxy(BaseProxy):
 
     @classmethod
     def subscribe(
-        cls,
-        *subs: dict,
-        http_port: int = 7890,
-        socks_port: int = 7891,
+            cls,
+            *subs: dict,
+            http_port: int = 7890,
+            socks_port: int = 7891,
     ):
         """
         获取订阅， 生成一个配置文件（字符串形式）
@@ -636,15 +636,15 @@ class ClashProxy(BaseProxy):
 
 class RedisProxy(BaseProxy):
     def __init__(
-        self,
-        key: str,
-        options: dict = None,
-        scheme: str = "http",
-        username: str = None,
-        password: str = None,
-        auth: Optional[Callable] = None,
-        threshold: int = math.inf,
-        recover: Optional[Callable] = ...,
+            self,
+            key: str,
+            options: dict = None,
+            scheme: str = "http",
+            username: str = None,
+            password: str = None,
+            auth: Optional[Callable] = None,
+            threshold: int = math.inf,
+            recover: Optional[Callable] = ...,
     ):
         """
         从 redis 的 key 里面提取代理
@@ -691,14 +691,14 @@ class RedisProxy(BaseProxy):
 
 class CustomProxy(BaseProxy):
     def __init__(
-        self,
-        key: str,
-        scheme: str = "http",
-        username: str = None,
-        password: str = None,
-        auth: Optional[Callable] = None,
-        threshold: int = math.inf,
-        recover: Optional[Callable] = None,
+            self,
+            key: str,
+            scheme: str = "http",
+            username: str = None,
+            password: str = None,
+            auth: Optional[Callable] = None,
+            threshold: int = math.inf,
+            recover: Optional[Callable] = None,
     ):
         self.key = key
         super().__init__(

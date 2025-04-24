@@ -34,7 +34,7 @@ class Downloader(AbstractDownloader):
         self.tls_config = tls_config or {}
         self.options = options or {}
 
-    def fetch(self, request: Request) -> Response:
+    def fetch(self, request: Union[Request, dict]) -> Response:
         """
         真使用 requests 发送请求并获取响应
 

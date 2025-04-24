@@ -39,7 +39,7 @@ class Downloader(AbstractDownloader):
     def __init__(self, options: Optional[dict] = None):
         self.options = options or {}
 
-    def fetch(self, request: Request) -> Response:
+    def fetch(self, request: Union[Request, dict]) -> Response:
         """
         真使用 requests 发送请求并获取响应
 
