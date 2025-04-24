@@ -38,10 +38,6 @@ setup(
     },
     include_package_data=True,
     install_requires=read_requirements('requirements.txt'),  # 指定需要安装的依赖
-    # 其他依赖版本
-    extras_require={
-        "mongo": ["pymongo==4.6.0"]
-    },
     license="MIT",
     keywords=['bricks'],
     # script_name="setup.py",
