@@ -303,6 +303,12 @@ class Spider(Pangu):
         queue_size: int = self.get("init.queue.size", 100000)  # type: ignore
         is_continue: bool = self.get("init.continue", False)  # type: ignore
 
+        # 历史记录的 TTL时间, 默认为 -1, 0->立即删除, -1->不过期, 其他->过期时间
+        history_ttl = self.get("init.history.ttl", -1)  # type: ignore
+
+        # record 的 TTL时间, 默认为 -1, 0->立即删除, -1->不过期, 其他->过期时间
+        record_ttl = self.get("init.record.ttl", -1)  # type: ignore
+
         settings = {
             "total": total,
             "success": success,
@@ -353,6 +359,8 @@ class Spider(Pangu):
             {
                 "action": task_queue.COMMANDS.RELEASE_INIT,
                 "time": int(time.time() * 1000),
+                "history_ttl": history_ttl,
+                "record_ttl": record_ttl,
             },
         )
         return record

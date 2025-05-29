@@ -190,16 +190,31 @@ class RedisQueue(TaskQueue):
     local history_key = KEYS[2]
     local db_num = KEYS[3]
     local machine_id = KEYS[4]
-    local ttl = KEYS[5]
+    local history_ttl = tonumber(KEYS[5])
+    local record_ttl = tonumber(KEYS[6])
+
     changeDataBase(db_num)
     redis.call("HSET", record_key, "status", 0)
     redis.call("HSET", record_key, "stop_heartbeat", 1)
-    if ttl ~= 0 then
-        redis.call("DEL", history_key)
-        local dump = redis.call('DUMP', record_key)
-        redis.call('RESTORE', history_key, ttl, dump)
+    redis.call("DEL", history_key)
+    local dump = redis.call('DUMP', record_key)
+    
+    if history_ttl ~= 0 then
+        if history_ttl < 0 then
+            history_ttl = 0
+        end
+        
+        redis.call('RESTORE', history_key, history_ttl, dump)
+        
+    else
+       redis.call('DEL', history_key)
     end
-    return true
+    
+    if record_ttl >= 0 then
+        redis.call('EXPIRE', record_key, record_ttl)
+    end 
+    
+    return record_ttl
                     """)
 
             continue_init_heartbeat = self.lua.register("""
@@ -596,10 +611,11 @@ class RedisQueue(TaskQueue):
             key = self.name2key(name, "record")
             history = self.name2key(name, "history")
             db_num = order.get("db_num", self.database)
-            ttl = order.get("ttl") or 0
+            history_ttl = order.get("history_ttl") or 0
+            record_ttl = order.get("record_ttl") or 0
 
             ret = self.scripts.release_init(
-                keys=[key, history, db_num, state.MACHINE_ID, ttl]
+                keys=[key, history, db_num, state.MACHINE_ID, history_ttl * 1000, record_ttl]
             )
             return bool(ret)
 
