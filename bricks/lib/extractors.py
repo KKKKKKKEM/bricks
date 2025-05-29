@@ -21,17 +21,17 @@ from bricks.utils import pandora
 
 class Rule:
     def __init__(
-        self,
-        exprs: Optional[Union[str, Callable]] = "",
-        condition: Optional[Callable] = None,
-        pre_script: Optional[Callable] = None,
-        post_script: Optional[Callable] = None,
-        is_array: Optional[bool] = None,
-        acquire: bool = True,
-        options: Optional[dict] = None,
-        const: Optional[Any] = ...,
-        default: Optional[Any] = None,
-        engine: Optional[Union[Type["Extractor"], str]] = None,
+            self,
+            exprs: Optional[Union[str, Callable]] = "",
+            condition: Optional[Callable] = None,
+            pre_script: Optional[Callable] = None,
+            post_script: Optional[Callable] = None,
+            is_array: Optional[bool] = None,
+            acquire: bool = True,
+            options: Optional[dict] = None,
+            const: Optional[Any] = ...,
+            default: Optional[Any] = None,
+            engine: Optional[Union[Type["Extractor"], str]] = None,
     ):
         self.exprs = exprs
         self.condition = condition
@@ -58,7 +58,7 @@ class Rule:
             return
 
         if isinstance(value, Extractor) or (
-            inspect.isclass(value) and issubclass(value, Extractor)
+                inspect.isclass(value) and issubclass(value, Extractor)
         ):
             self.engine = value
 
@@ -123,10 +123,10 @@ class Group:
     """
 
     def __init__(
-        self,
-        exprs: List[Union[Rule, "Group"]],
-        pre_script: Optional[Callable] = None,
-        post_script: Optional[Callable] = None,
+            self,
+            exprs: List[Union[Rule, "Group"]],
+            pre_script: Optional[Callable] = None,
+            post_script: Optional[Callable] = None,
     ):
         self.exprs = pandora.iterable(exprs)
         self.pre_script = pre_script
@@ -179,7 +179,8 @@ class Extractor:
     is_array = False
     empty = (None,)
 
-    class Empty(Exception): ...
+    class Empty(Exception):
+        ...
 
     @classmethod
     def extract(cls, obj: Any, exprs: str, **kwargs):
@@ -205,8 +206,8 @@ class Extractor:
             vessel = tree()
 
             for item in cls._match(
-                obj=[obj],
-                rules=rule,
+                    obj=[obj],
+                    rules=rule,
             ):
                 key, value, rkey1, rkey2, rkey3 = item
                 if value is not None:
@@ -305,11 +306,11 @@ class Extractor:
                         sub_obj = rule.apply(_obj)
 
                         for i in cls._match(
-                            obj=sub_obj,
-                            rules=v,
-                            rkey=get_rkey(rkey, rule.exprs),
-                            pkey=get_rkey(pkey, str(index).zfill(number_of_digits)),
-                            deep=bool(isinstance(sub_obj, list)),
+                                obj=sub_obj,
+                                rules=v,
+                                rkey=get_rkey(rkey, rule.exprs),
+                                pkey=get_rkey(pkey, str(index).zfill(number_of_digits)),
+                                deep=bool(isinstance(sub_obj, list)),
                         ):
                             yield i
 
@@ -325,7 +326,7 @@ class XpathExtractor(Extractor):
 
     @classmethod
     def extract(
-        cls, obj: Union[etree.HTML, str], exprs: str, parser=None, base_url=None
+            cls, obj: Union[etree.HTML, str], exprs: str, parser=None, base_url=None
     ):
         obj = cls.fmt(obj, parser=parser, base_url=base_url)
         ret = obj.xpath(exprs, parser=parser, base_url=base_url)
@@ -352,12 +353,12 @@ class JsonExtractor(Extractor):
 
     @classmethod
     def extract(
-        cls,
-        obj: Union[dict, list, str],
-        exprs: str,
-        jsonp=False,
-        errors="strict",
-        options=None,
+            cls,
+            obj: Union[dict, list, str],
+            exprs: str,
+            jsonp=False,
+            errors="strict",
+            options=None,
     ):
         obj = cls.fmt(obj, jsonp=jsonp, errors=errors)
         ret = jmespath.search(
@@ -381,14 +382,14 @@ class JsonpathExtractor(Extractor):
 
     @classmethod
     def extract(
-        cls,
-        obj: Union[dict, list, str],
-        exprs: str,
-        jsonp=False,
-        errors="strict",
-        result_type="VALUE",
-        debug=0,
-        use_eval=True,
+            cls,
+            obj: Union[dict, list, str],
+            exprs: str,
+            jsonp=False,
+            errors="strict",
+            result_type="VALUE",
+            debug=0,
+            use_eval=True,
     ):
         obj = cls.fmt(obj, jsonp=jsonp, errors=errors)
         ret = jsonpath.jsonpath(

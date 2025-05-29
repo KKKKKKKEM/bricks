@@ -27,9 +27,9 @@ class Downloader(AbstractDownloader):
     """
 
     def __init__(
-        self,
-        impersonate: Optional[Union[requests.BrowserType, str]] = None,
-        options: Optional[dict] = None,
+            self,
+            impersonate: Optional[Union[requests.BrowserType, str]] = None,
+            options: Optional[dict] = None,
     ):
         if isinstance(impersonate, requests.BrowserType):
             impersonate = impersonate.value
@@ -58,7 +58,7 @@ class Downloader(AbstractDownloader):
             "timeout": 5 if request.timeout is ... else request.timeout,
             "allow_redirects": False,
             "proxies": request.proxies
-            and {"http": request.proxies, "https": request.proxies},  # noqa
+                       and {"http": request.proxies, "https": request.proxies},  # noqa
             "verify": request.options.get("verify", False),
             "impersonate": request.options.get("impersonate") or self.impersonate,
             **request.options.get("$options", {}),
@@ -117,12 +117,12 @@ class Downloader(AbstractDownloader):
         resp = super().exception(request, error)
         code = CURL_CODE.search(str(error))
         if code and code.group(1) in (
-            # Could not resolve proxy. The given proxy host could not be resolved.
-            "5"
-            # Failed to connect() to host or proxy.
-            "7"
-            # Proxy handshake error
-            "97"
+                # Could not resolve proxy. The given proxy host could not be resolved.
+                "5"
+                # Failed to connect() to host or proxy.
+                "7"
+                # Proxy handshake error
+                "97"
         ):
             resp.error = "ProxyError"
         return resp

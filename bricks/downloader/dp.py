@@ -51,7 +51,7 @@ class Downloader(AbstractDownloader):
             "timeout": 5 if request.timeout is ... else request.timeout,
             "allow_redirects": False,
             "proxies": request.proxies
-            and {"http": request.proxies, "https": request.proxies},  # noqa
+                       and {"http": request.proxies, "https": request.proxies},  # noqa
             "verify": request.options.get("verify", False),
         }
 

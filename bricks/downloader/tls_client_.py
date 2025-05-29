@@ -29,7 +29,7 @@ class Downloader(AbstractDownloader):
     """
 
     def __init__(
-        self, tls_config: Optional[dict] = None, options: Optional[dict] = None
+            self, tls_config: Optional[dict] = None, options: Optional[dict] = None
     ) -> None:
         self.tls_config = tls_config or {}
         self.options = options or {}
@@ -95,18 +95,18 @@ class Downloader(AbstractDownloader):
                     )
                     request.options.get("$referer", False) and options[
                         "headers"
-                    ].update(Referer=response.url) # type: ignore
+                    ].update(Referer=response.url)  # type: ignore
 
                 else:
-                    res.content = response.content # type: ignore
-                    res.headers = response.headers # type: ignore
+                    res.content = response.content  # type: ignore
+                    res.headers = response.headers  # type: ignore
                     res.cookies = Cookies.by_jar(response.cookies)
-                    res.url = response.url # type: ignore
-                    res.status_code = response.status_code # type: ignore
+                    res.url = response.url  # type: ignore
+                    res.status_code = response.status_code  # type: ignore
                     res.request = request
                     return res
         finally:
-            not request.use_session and session.close() # type: ignore
+            not request.use_session and session.close()  # type: ignore
 
     def make_session(self, **kwargs):
         return tls_client.Session(**kwargs)

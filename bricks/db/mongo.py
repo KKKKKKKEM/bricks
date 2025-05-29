@@ -21,13 +21,13 @@ class Mongo(pymongo.MongoClient):
     """
 
     def __init__(
-        self,
-        host="127.0.0.1",
-        username=None,
-        password=None,
-        port=27017,
-        database="admin",
-        auth_database=None,
+            self,
+            host="127.0.0.1",
+            username=None,
+            password=None,
+            port=27017,
+            database="admin",
+            auth_database=None,
     ):
         """
         实例化 Mongo 工具类
@@ -46,16 +46,16 @@ class Mongo(pymongo.MongoClient):
             uri = "mongodb://" + host + ":" + str(port) + "/"
         else:
             uri = (
-                "mongodb://"
-                + username
-                + ":"
-                + password
-                + "@"
-                + host
-                + ":"
-                + str(port)
-                + "/"
-                + str(auth_database)
+                    "mongodb://"
+                    + username
+                    + ":"
+                    + password
+                    + "@"
+                    + host
+                    + ":"
+                    + str(port)
+                    + "/"
+                    + str(auth_database)
             )
 
         self.database = database
@@ -101,14 +101,14 @@ class Mongo(pymongo.MongoClient):
         return {i["_id"] for i in r if i["_id"] not in exclude}
 
     def batch_data(
-        self,
-        collection: str,
-        query: Optional[dict] = None,
-        database: str = None,
-        sort: Optional[List[tuple]] = None,
-        projection: Optional[dict] = None,
-        skip: int = 0,
-        count: int = 1000,
+            self,
+            collection: str,
+            query: Optional[dict] = None,
+            database: str = None,
+            sort: Optional[List[tuple]] = None,
+            projection: Optional[dict] = None,
+            skip: int = 0,
+            count: int = 1000,
     ) -> Iterable[List[dict]]:
         """
         从 collection_name 获取迭代数据
@@ -155,14 +155,14 @@ class Mongo(pymongo.MongoClient):
                 yield data
 
     def iter_data(
-        self,
-        collection: str,
-        query: Optional[dict] = None,
-        projection: Optional[dict] = None,
-        database: str = None,
-        sort: Optional[List[tuple]] = None,
-        skip: int = 0,
-        count: int = 1000,
+            self,
+            collection: str,
+            query: Optional[dict] = None,
+            projection: Optional[dict] = None,
+            database: str = None,
+            sort: Optional[List[tuple]] = None,
+            skip: int = 0,
+            count: int = 1000,
     ) -> Iterable[List[dict]]:
         """
         从 collection_name 获取迭代数据
@@ -200,12 +200,12 @@ class Mongo(pymongo.MongoClient):
                 skip += len(data)
 
     def write(
-        self,
-        collection,
-        *items: dict,
-        query: Optional[List[str]] = None,
-        database: Optional[str] = None,
-        **kwargs,
+            self,
+            collection,
+            *items: dict,
+            query: Optional[List[str]] = None,
+            database: Optional[str] = None,
+            **kwargs,
     ):
         """
         批量更新或者插入

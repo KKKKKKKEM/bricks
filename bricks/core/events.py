@@ -94,11 +94,11 @@ class EventManager:
 
     @classmethod
     def trigger(
-        cls,
-        context: Context,
-        errors: Literal["raise", "ignore", "output"] = "raise",
-        annotations: dict = None,  # type: ignore
-        namespace: dict = None,  # type: ignore
+            cls,
+            context: Context,
+            errors: Literal["raise", "ignore", "output"] = "raise",
+            annotations: dict = None,  # type: ignore
+            namespace: dict = None,  # type: ignore
     ):
         """
         trigger events: interact with external functions
@@ -116,11 +116,11 @@ class EventManager:
 
     @classmethod
     def invoke(
-        cls,
-        context: Context,
-        errors: Literal["raise", "ignore", "output"] = "raise",
-        annotations: dict = None,  # type: ignore
-        namespace: dict = None,  # type: ignore
+            cls,
+            context: Context,
+            errors: Literal["raise", "ignore", "output"] = "raise",
+            annotations: dict = None,  # type: ignore
+            namespace: dict = None,  # type: ignore
     ):
         """
         invoke events: invoke all events
@@ -132,18 +132,18 @@ class EventManager:
         :return:
         """
         for _ in cls.trigger(
-            context, errors=errors, annotations=annotations, namespace=namespace
+                context, errors=errors, annotations=annotations, namespace=namespace
         ):
             pass
 
     @classmethod
     def next(
-        cls,
-        ctx: Flow,
-        form: str,
-        annotations: dict = None,  # type: ignore
-        namespace: dict = None,  # type: ignore
-        callback: Callable = None,  # type: ignore
+            cls,
+            ctx: Flow,
+            form: str,
+            annotations: dict = None,  # type: ignore
+            namespace: dict = None,  # type: ignore
+            callback: Callable = None,  # type: ignore
     ):
         def main(context: Flow):
             EventManager.invoke(context, annotations=annotations, namespace=namespace)
@@ -179,24 +179,24 @@ class EventManager:
                 for event in events:
                     match = event.match
                     if (
-                        (match is None)
-                        or (callable(match) and match(context))
-                        or (
+                            (match is None)
+                            or (callable(match) and match(context))
+                            or (
                             isinstance(match, str)
                             and eval(match, globals(), {"context": context})
-                        )
+                    )
                     ):
                         event.disposable and event.box.remove(event)  # type: ignore
                         yield event
 
     @classmethod
     def _call(
-        cls,
-        event: Task,
-        context: Context,
-        errors: Literal["raise", "ignore", "output"] = "raise",
-        annotations: dict = None,  # type: ignore
-        namespace: dict = None,  # type: ignore
+            cls,
+            event: Task,
+            context: Context,
+            errors: Literal["raise", "ignore", "output"] = "raise",
+            annotations: dict = None,  # type: ignore
+            namespace: dict = None,  # type: ignore
     ):
         try:
             annotations = annotations or {}
@@ -249,10 +249,10 @@ class EventManager:
 
 
 def on(
-    form: str,
-    index: int = None,  # type: ignore
-    disposable: Optional[bool] = False,
-    binding: Any = ...,  # type: ignore
+        form: str,
+        index: int = None,  # type: ignore
+        disposable: Optional[bool] = False,
+        binding: Any = ...,  # type: ignore
 ):
     """
     使用装饰器的方式注册事件

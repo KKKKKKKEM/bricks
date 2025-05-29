@@ -21,10 +21,10 @@ from playwright._impl._driver import compute_driver_executable, get_driver_env  
 
 class BrowserContext(async_api.PlaywrightContextManager):
     def __init__(
-        self,
-        driver: Literal["chromium", "firefox", "webkit"] = "chromium",
-        options: dict = None,
-        reuse: bool = True,
+            self,
+            driver: Literal["chromium", "firefox", "webkit"] = "chromium",
+            options: dict = None,
+            reuse: bool = True,
     ):
         self.browser: async_api.Browser = ...
         self.driver = driver
@@ -61,14 +61,14 @@ class Downloader(AbstractDownloader):
     """
 
     def __init__(
-        self,
-        driver: Literal["chromium", "firefox", "webkit"] = "chromium",
-        debug: bool = False,
-        scripts: Optional[list] = None,
-        mode: Literal["automation", "api"] = "automation",
-        headless: bool = True,
-        reuse: bool = True,
-        options: Optional[dict] = None,
+            self,
+            driver: Literal["chromium", "firefox", "webkit"] = "chromium",
+            debug: bool = False,
+            scripts: Optional[list] = None,
+            mode: Literal["automation", "api"] = "automation",
+            headless: bool = True,
+            reuse: bool = True,
+            options: Optional[dict] = None,
     ):
         """
 
@@ -102,7 +102,7 @@ class Downloader(AbstractDownloader):
 
         # 获取驱动
         driver: Literal["chromium", "firefox", "webkit"] = (
-            request.get_options("driver") or self.driver
+                request.get_options("driver") or self.driver
         )  # type: ignore
 
         # 获取浏览器 launch 配置
@@ -114,22 +114,22 @@ class Downloader(AbstractDownloader):
 
         # 可用拦截器
         request_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = (
-            interceptors.get("request") or []
+                interceptors.get("request") or []
         )
         response_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = (
-            interceptors.get("response") or []
+                interceptors.get("response") or []
         )
         browser_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = (
-            interceptors.get("browser") or []
+                interceptors.get("browser") or []
         )
         context_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = (
-            interceptors.get("context") or []
+                interceptors.get("context") or []
         )
         before_goto_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = (
-            interceptors.get("before_goto") or []
+                interceptors.get("before_goto") or []
         )
         after_goto_interceptors: List[Callable[..., Union[Awaitable[None], None]]] = (
-            interceptors.get("after_goto") or []
+                interceptors.get("after_goto") or []
         )
 
         if self.mode == "automation":
@@ -237,7 +237,7 @@ class Downloader(AbstractDownloader):
 
                 for interceptor in response_interceptors:
                     assert inspect.isasyncgenfunction(interceptor)
-                    context.on("response", interceptor) # type: ignore
+                    context.on("response", interceptor)  # type: ignore
                 else:
                     if not request.get_options("$playwright.history.disable", False):
                         context.on(
@@ -285,9 +285,9 @@ class Downloader(AbstractDownloader):
                         response = await page.request.fetch(**options)
                         res.content = await response.body()
 
-                    res.url = response.url # type: ignore
-                    res.headers = response.headers # type: ignore
-                    res.status_code = response.status # type: ignore
+                    res.url = response.url  # type: ignore
+                    res.headers = response.headers  # type: ignore
+                    res.status_code = response.status  # type: ignore
                     res.cookies = Cookies.by_jar(await context.cookies())
 
                     for interceptor in after_goto_interceptors:
@@ -315,7 +315,7 @@ class Downloader(AbstractDownloader):
                     return res
 
             finally:
-                not request.use_session and await context.close() # type: ignore
+                not request.use_session and await context.close()  # type: ignore
 
     @staticmethod
     def on_response(page_url, raw_response: Response):
@@ -384,9 +384,9 @@ class Downloader(AbstractDownloader):
             }
 
     async def injection_scripts(
-        self,
-        conn: Union[async_api.BrowserContext, async_api.Page],
-        scripts: Optional[list] = None,
+            self,
+            conn: Union[async_api.BrowserContext, async_api.Page],
+            scripts: Optional[list] = None,
     ):
         scripts = scripts or self.scripts
         for script in scripts:
@@ -430,6 +430,7 @@ if __name__ == "__main__":
     downloader = Downloader(mode="api", headless=True)
     downloader.debug = True
 
+
     async def main():
         rsp = await downloader.fetch(
             Request(
@@ -448,5 +449,6 @@ if __name__ == "__main__":
             Request(url="https://httpbin.org/cookies", use_session=True)
         )
         print(rsp.text)
+
 
     asyncio.run(main())

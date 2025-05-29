@@ -20,13 +20,13 @@ import websockets  # noqa E402
 
 class APP:
     def __init__(
-        self,
-        identifier: str = None,
-        host: str = "0.0.0.0",
-        path: str = "ws",
-        port: int = 8888,
-        scheme: str = "ws",
-        target: Any = None,
+            self,
+            identifier: str = None,
+            host: str = "0.0.0.0",
+            path: str = "ws",
+            port: int = 8888,
+            scheme: str = "ws",
+            target: Any = None,
     ):
         self.identifier = identifier or str(uuid.uuid4())
         self.adapters = {}
@@ -68,7 +68,7 @@ class APP:
 
                                 try:
                                     if action.startswith("$") and hasattr(
-                                        self.target, action[1:]
+                                            self.target, action[1:]
                                     ):
                                         action: Callable = getattr(
                                             self.target, action[1:]

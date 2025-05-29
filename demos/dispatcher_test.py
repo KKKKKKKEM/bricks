@@ -22,16 +22,19 @@ if __name__ == "__main__":
     dispatcher = Dispatcher(max_workers=1)
     dispatcher.start()
 
+
     async def demo(j):
         while True:
             await asyncio.sleep(1)
             print(j)
+
 
     def demo2(j, con=None):
         con = con or (lambda: True)
         while con():
             print(f"{threading.current_thread()} -- {j}")
             time.sleep(1)
+
 
     tasks = []
     for i in range(2):

@@ -41,13 +41,13 @@ def req2resp(request: Request, options: dict = None) -> Response:
 
 
 def resp2items(
-    response: Response,
-    engine: Union[str, Callable],
-    rules: dict,
-    rename: dict = None,
-    default: dict = None,
-    factory: dict = None,
-    show: dict = None,
+        response: Response,
+        engine: Union[str, Callable],
+        rules: dict,
+        rename: dict = None,
+        default: dict = None,
+        factory: dict = None,
+        show: dict = None,
 ) -> Items:
     """
     响应转换为 items
@@ -69,13 +69,13 @@ def resp2items(
 
 
 def source2items(
-    obj: Union[str, bytes, dict, list],
-    engine: Union[str, Callable],
-    rules: dict,
-    rename: dict = None,
-    default: dict = None,
-    factory: dict = None,
-    show: dict = None,
+        obj: Union[str, bytes, dict, list],
+        engine: Union[str, Callable],
+        rules: dict,
+        rename: dict = None,
+        default: dict = None,
+        factory: dict = None,
+        show: dict = None,
 ):
     def ensure_bytes(_obj):
         if isinstance(_obj, str):
@@ -101,10 +101,10 @@ def source2items(
 
 
 def curl2spider(
-    curl: str,
-    path: str,
-    name: str = "MySpider",
-    form: Literal["form", "template"] = "form",
+        curl: str,
+        path: str,
+        name: str = "MySpider",
+        form: Literal["form", "template"] = "form",
 ):
     """
     通过 curl 生成爬虫模板文件

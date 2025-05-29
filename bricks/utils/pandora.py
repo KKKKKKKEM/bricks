@@ -36,7 +36,6 @@ PYPI_MIRROR = {
     "pypi": "https://pypi.org/simple/",
 }
 
-
 better_exceptions.MAX_LENGTH = None
 exec_formatter = better_exceptions.ExceptionFormatter(
     colored=False,
@@ -98,10 +97,10 @@ def load_objects(path_or_reference, reload=False):
 
 
 def require(
-    package_spec: str,
-    action: Literal["raise", "fix"] = "fix",
-    mirror_sources: str = "TUNA",
-    pip_kwargs: Dict[str, str] = None,
+        package_spec: str,
+        action: Literal["raise", "fix"] = "fix",
+        mirror_sources: str = "TUNA",
+        pip_kwargs: Dict[str, str] = None,
 ) -> str:
     """
     依赖 python 包
@@ -133,7 +132,7 @@ def require(
         from bricks.utils.package import parse as version_parse  # noqa
 
         if required_version and not eval(
-            f"version_parse({installed_version!r}) {operator} version_parse({required_version!r})"
+                f"version_parse({installed_version!r}) {operator} version_parse({required_version!r})"
         ):
             raise importlib_metadata.PackageNotFoundError
         else:
@@ -158,12 +157,12 @@ def require(
 
 
 def invoke(
-    func,
-    args=None,
-    kwargs: dict = None,
-    annotations: dict = None,
-    namespace: dict = None,
-    ignore: list = None,
+        func,
+        args=None,
+        kwargs: dict = None,
+        annotations: dict = None,
+        namespace: dict = None,
+        ignore: list = None,
 ):
     """
     调用函数, 自动修正参数
@@ -181,12 +180,12 @@ def invoke(
 
 
 def prepare(
-    func: Callable,
-    args=None,
-    kwargs: dict = None,
-    annotations: dict = None,
-    namespace: dict = None,
-    ignore: list = None,
+        func: Callable,
+        args=None,
+        kwargs: dict = None,
+        annotations: dict = None,
+        namespace: dict = None,
+        ignore: list = None,
 ):
     """
     筛选出函数的相关参数
@@ -243,9 +242,9 @@ def prepare(
 
         # 参数类型存在于 annotations, 并且还可以从 args 里面取值, 并且刚好取到的对应的值也是当前类型 -> 直接从 args 里面取
         elif (
-            param.annotation in annotations
-            and index < len(args)
-            and type(args[index]) is param.annotation
+                param.annotation in annotations
+                and index < len(args)
+                and type(args[index]) is param.annotation
         ):
             value = args[index]
             index += 1
@@ -280,10 +279,10 @@ def prepare(
 
 
 def iterable(
-    _object: Any,
-    enforce=(dict, str, bytes, collections.UserDict, Mapping),
-    exclude=(),
-    convert_null=True,
+        _object: Any,
+        enforce=(dict, str, bytes, collections.UserDict, Mapping),
+        exclude=(),
+        convert_null=True,
 ) -> List[Any]:
     """
     用列表将 `exclude` 类型中的其他类型包装起来
@@ -320,7 +319,7 @@ def first(_object, default=None):
 
 
 def json_or_eval(
-    text, jsonp=False, errors: Literal["strict", "ignore"] = "strict", _step=0, **kwargs
+        text, jsonp=False, errors: Literal["strict", "ignore"] = "strict", _step=0, **kwargs
 ) -> Union[dict, list, str]:
     """
     通过字符串获取 python 对象，支持json类字符串和jsonp字符串
@@ -414,9 +413,9 @@ def clean_rows(*rows: dict, **layout):
     def _show(rule: dict, data: dict):
         for key, flag in rule.items():
             if (
-                callable(flag)
-                and not invoke(flag, args=[data.get(key, None)], kwargs={"row": row})
-                or not flag
+                    callable(flag)
+                    and not invoke(flag, args=[data.get(key, None)], kwargs={"row": row})
+                    or not flag
             ):
                 rule.pop(key, None)
 
@@ -445,12 +444,12 @@ def clean_rows(*rows: dict, **layout):
 
 
 def with_metaclass(
-    singleton: bool = False,
-    thread_safe: bool = True,
-    key_maker: Callable = None,
-    autonomous: (Tuple[Union[str, Callable]], List[Union[str, Callable]]) = (),
-    wrappers: Union[dict, str] = None,
-    modded: dict = None,
+        singleton: bool = False,
+        thread_safe: bool = True,
+        key_maker: Callable = None,
+        autonomous: (Tuple[Union[str, Callable]], List[Union[str, Callable]]) = (),
+        wrappers: Union[dict, str] = None,
+        modded: dict = None,
 ):
     """
     魔改 class

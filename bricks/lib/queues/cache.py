@@ -19,10 +19,10 @@ class Collector:
     """
 
     def __init__(
-        self,
-        callback: Callable,
-        max_count: int = 0,
-        max_bytes: int = 256 * 1024,
+            self,
+            callback: Callable,
+            max_count: int = 0,
+            max_bytes: int = 256 * 1024,
     ) -> None:
         self.callback = callback
         self.max_count = max_count or math.inf
@@ -80,8 +80,8 @@ class Collector:
         with self._queue.not_empty:
             pending = []
             while not (
-                sys.getsizeof(pending) >= self.max_bytes
-                or len(pending) > self.max_count
+                    sys.getsizeof(pending) >= self.max_bytes
+                    or len(pending) > self.max_count
             ):
                 if not self._queue.queue:
                     break

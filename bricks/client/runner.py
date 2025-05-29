@@ -27,7 +27,7 @@ class BaseRunner:
 
     @staticmethod
     def add_background_task(
-        func, args: list = None, kwargs: dict = None, delay=1, daemon=False
+            func, args: list = None, kwargs: dict = None, delay=1, daemon=False
     ):
         future = Future()
         args = args or []
@@ -153,7 +153,7 @@ class BaseRunner:
 
             # 依赖文件有修改
             if self.st_utime <= st_mtime <= self.et_utime or not os.path.exists(
-                venv_folder
+                    venv_folder
             ):
                 venv_lib = os.sep.join(
                     [venv_folder, (sysm.get(os.name) or sysm.get("unix"))["venv_lib"]]

@@ -12,7 +12,7 @@ from bricks.utils import codes
 
 
 def is_success(
-    match: List[str], pre: List[str] = None, post: List[str] = None, flow: dict = None
+        match: List[str], pre: List[str] = None, post: List[str] = None, flow: dict = None
 ):
     """
     判断是否成功
@@ -49,14 +49,14 @@ def is_success(
 
 
 def turn_page(
-    match: List[str],
-    pre: List[str] = None,
-    post: List[str] = None,
-    flow: dict = None,
-    key: str = "page",
-    action: str = "+1",
-    call_later: bool = False,
-    success: bool = False,
+        match: List[str],
+        pre: List[str] = None,
+        post: List[str] = None,
+        flow: dict = None,
+        key: str = "page",
+        action: str = "+1",
+        call_later: bool = False,
+        success: bool = False,
 ):
     """
     翻页

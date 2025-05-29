@@ -71,10 +71,10 @@ class VariableG:
         return f"<VariableG [map:{self._map}]>"
 
     def expire(
-        self,
-        key,
-        count: int = None,
-        until: int = None,
+            self,
+            key,
+            count: int = None,
+            until: int = None,
     ):
         if key in self._map:
             self._map[key].max_count = count

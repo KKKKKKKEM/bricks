@@ -298,11 +298,11 @@ def locale():
     """
     language_code = _choice(list(language_locale_codes.keys()))
     return (
-        language_code
-        + "_"
-        + _choice(
-            language_locale_codes[language_code],
-        )
+            language_code
+            + "_"
+            + _choice(
+        language_locale_codes[language_code],
+    )
     )
 
 
@@ -824,11 +824,11 @@ def internet_explorer():
 
 
 def opera(
-    device="all",
-    version_from=15,
-    version_end=77,
-    chrome_version_from=90,
-    chrome_version_end=120,
+        device="all",
+        version_from=15,
+        version_end=77,
+        chrome_version_from=90,
+        chrome_version_end=120,
 ):
     """
     生成 opera 的 user-agent
@@ -954,10 +954,10 @@ def firefox(device="all", version_from=90, version_end=120):
     saf_version = f"{random.randint(531, 537)}.{random.randint(0, 36)}"
     bld = _re_qm.sub(lambda x: _choice(string.ascii_letters), numerify("##?###"))
     ver = (
-        datetime.today()
-        - timedelta(
-            days=random.randint(0, (datetime.today() - datetime(2018, 1, 1)).days)
-        )
+            datetime.today()
+            - timedelta(
+        days=random.randint(0, (datetime.today() - datetime(2018, 1, 1)).days)
+    )
     ).strftime("%Y%m%d")
 
     version = f"{random.randint(version_from, version_end)}.{random.randint(0, 3)}.{random.randint(0, 3)}"
@@ -1005,8 +1005,8 @@ def edge(device="all", version_from=90, version_end=120):
     version = f"{_v}.0.{int(_v * (49 + random.random()))}.{random.randint(0, 100)}"
 
     return (
-        chrome(device=device, version_from=version_from, version_end=version_end)
-        + f" Edg/{version}"
+            chrome(device=device, version_from=version_from, version_end=version_end)
+            + f" Edg/{version}"
     )
 
 
@@ -1115,12 +1115,12 @@ def mobile(*apps):
     while True:
         ua = get(*apps)
         if any(
-            [
-                ua.lower().__contains__("mobile"),
-                ua.lower().__contains__("android"),
-                ua.lower().__contains__("iphone"),
-                ua.lower().__contains__("ipad"),
-            ]
+                [
+                    ua.lower().__contains__("mobile"),
+                    ua.lower().__contains__("android"),
+                    ua.lower().__contains__("iphone"),
+                    ua.lower().__contains__("ipad"),
+                ]
         ):
             return ua
         else:
@@ -1138,12 +1138,12 @@ def pc(*apps):
     while True:
         ua = get(*apps)
         if not any(
-            [
-                ua.lower().__contains__("mobile"),
-                ua.lower().__contains__("android"),
-                ua.lower().__contains__("iphone"),
-                ua.lower().__contains__("ipad"),
-            ]
+                [
+                    ua.lower().__contains__("mobile"),
+                    ua.lower().__contains__("android"),
+                    ua.lower().__contains__("iphone"),
+                    ua.lower().__contains__("ipad"),
+                ]
         ):
             return ua
         else:

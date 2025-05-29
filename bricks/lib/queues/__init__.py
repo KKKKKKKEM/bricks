@@ -144,7 +144,7 @@ class TaskQueue(metaclass=genesis.MetaClass):
         return self.size(name, **kwargs) <= threshold
 
     def size(
-        self, *names: str, qtypes: tuple = ("current", "temp", "failure"), **kwargs
+            self, *names: str, qtypes: tuple = ("current", "temp", "failure"), **kwargs
     ) -> int:
         """
         获取队列大小
@@ -213,7 +213,7 @@ class TaskQueue(metaclass=genesis.MetaClass):
         return inner
 
     def clear(
-        self, *names, qtypes=("current", "temp", "failure", "lock", "record"), **kwargs
+            self, *names, qtypes=("current", "temp", "failure", "lock", "record"), **kwargs
     ):
         """
         清空任务队列

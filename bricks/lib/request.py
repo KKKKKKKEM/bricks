@@ -35,25 +35,25 @@ class Request:
     )
 
     def __init__(
-        self,
-        url: str,
-        params: Optional[dict] = None,
-        method: str = "GET",
-        body: Optional[Union[str, dict]] = None,
-        headers: Union[Header, dict] = None,
-        cookies: Dict[str, str] = None,
-        options: dict = None,
-        timeout: int = ...,
-        allow_redirects: bool = True,
-        proxies: Optional[str] = None,
-        proxy: Optional[Union[dict, str, List[Union[dict, str]]]] = None,
-        ok: Optional[
-            Union[str, Dict[str, Union[type(signals.Signal), Callable]]]
-        ] = ...,
-        retry: int = 1,
-        max_retry: [int, float] = 5,
-        use_session: bool = False,
-        **opts,
+            self,
+            url: str,
+            params: Optional[dict] = None,
+            method: str = "GET",
+            body: Optional[Union[str, dict]] = None,
+            headers: Union[Header, dict] = None,
+            cookies: Dict[str, str] = None,
+            options: dict = None,
+            timeout: int = ...,
+            allow_redirects: bool = True,
+            proxies: Optional[str] = None,
+            proxy: Optional[Union[dict, str, List[Union[dict, str]]]] = None,
+            ok: Optional[
+                Union[str, Dict[str, Union[type(signals.Signal), Callable]]]
+            ] = ...,
+            retry: int = 1,
+            max_retry: Union[int, float] = 5,
+            use_session: bool = False,
+            **opts,
     ) -> None:
         """
 

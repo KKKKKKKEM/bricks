@@ -31,10 +31,10 @@ class MetaClass(type):
             method_wrapper = getattr(instance, method)
             raw_method and setattr(
                 instance, raw_method_name, method_wrapper(raw_method)
-            ) # type: ignore
+            )  # type: ignore
 
         else:
-            hasattr(instance, "install") and instance.install() # type: ignore
+            hasattr(instance, "install") and instance.install()  # type: ignore
             key = f"{cls.__module__}.{cls.__name__}"
             for form, events in REGISTERED_EVENTS.lazy_loading[key].items():
                 for event in events:
@@ -99,12 +99,12 @@ class Chaos(metaclass=MetaClass):
             return None
 
     def launch(
-        self,
-        scheduler: dict,
-        task_name: str = "all",
-        args=None,
-        kwargs=None,
-        callback: Callable = None,
+            self,
+            scheduler: dict,
+            task_name: str = "all",
+            args=None,
+            kwargs=None,
+            callback: Callable = None,
     ):
         """
         同 run, 但是是提交给调度器运行的, 可以定时执行
@@ -121,7 +121,7 @@ class Chaos(metaclass=MetaClass):
             self.run(task_name=task_name, args=args, kwargs=kwargs)
             callback and pandora.invoke(
                 callback, namespace={"spider": self}, annotations={type(self): self}
-            ) # type: ignore
+            )  # type: ignore
 
         form: Union[Literal["cron", "date", "interval"], BaseTrigger] = scheduler.pop(
             "form"
@@ -201,17 +201,17 @@ class Pangu(Chaos):
             self.set(k, v, nx=True)
 
         self.dispatcher = dispatch.Dispatcher(
-            max_workers=self.get("concurrency", default=1), # type: ignore
+            max_workers=self.get("concurrency", default=1),  # type: ignore
             options=self.get("dispatcher.options", default={}),
         )
 
     @property
     def plugins(self) -> List[Register]:
-        return REGISTERED_EVENTS.registered[self] # type: ignore
+        return REGISTERED_EVENTS.registered[self]  # type: ignore
 
-    def on_consume(self, context: Flow): # type: ignore
+    def on_consume(self, context: Flow):  # type: ignore
         context.doing.appendleft(context)
-        context.next.root == self.on_consume and context.flow() # type: ignore
+        context.next.root == self.on_consume and context.flow()  # type: ignore
 
         while True:
             context: Flow = context.produce()
@@ -233,7 +233,7 @@ class Pangu(Chaos):
                             args=[product],
                             annotations={type(context): context},
                             namespace={"context": context},
-                        ) # type: ignore
+                        )  # type: ignore
 
                     # 中断信号
                     except signals.Break:
@@ -302,7 +302,7 @@ class Pangu(Chaos):
         :return:
         """
         context = self.make_context(form=form)
-        register = EventManager.register(context, *events) # type: ignore
+        register = EventManager.register(context, *events)  # type: ignore
         return register
 
     @overload
@@ -327,7 +327,7 @@ class Pangu(Chaos):
         kwargs.setdefault("flows", self.flows)
         kwargs.setdefault("target", self)
         context = clazz(**kwargs)
-        return context # type: ignore
+        return context  # type: ignore
 
     @property
     def flows(self):
@@ -352,5 +352,5 @@ class Pangu(Chaos):
         exception: Exception = exception.error
         stack = pandora.get_pretty_stack(exception)
         logger.error(
-            f"[{context.form}] {exception.__class__.__name__}({exception})" f"\n{stack}" # type: ignore
+            f"[{context.form}] {exception.__class__.__name__}({exception})" f"\n{stack}"  # type: ignore
         )

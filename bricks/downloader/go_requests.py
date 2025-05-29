@@ -26,6 +26,7 @@ from requests_go.tls_config import TLSConfig, to_tls_config  # noqa: E402
 
 PROXY_ERROR_PARRTEN = re.compile(r"proxyconnect tcp:.*connection refused")
 
+
 class Downloader(AbstractDownloader):
     """
     对 requests-go 进行的一层包装, 支持手动设置 tls
@@ -35,9 +36,9 @@ class Downloader(AbstractDownloader):
     """
 
     def __init__(
-        self,
-        tls_config: Optional[Union[dict, TLSConfig]] = None,
-        options: Optional[dict] = None,
+            self,
+            tls_config: Optional[Union[dict, TLSConfig]] = None,
+            options: Optional[dict] = None,
     ) -> None:
         self.tls_config = tls_config
         self.options = options or {}
@@ -63,7 +64,7 @@ class Downloader(AbstractDownloader):
             "timeout": 5 if request.timeout is ... else request.timeout,
             "allow_redirects": False,
             "proxies": request.proxies
-            and {"http": request.proxies, "https": request.proxies},  # noqa
+                       and {"http": request.proxies, "https": request.proxies},  # noqa
             "verify": request.options.get("verify", False),
             **request.options.get("$options", {}),
         }
@@ -73,7 +74,7 @@ class Downloader(AbstractDownloader):
             tls_config = self.tls_config
         tls_config = self.fmt_tls_config(tls_config)
 
-        tls_config and options.update(tls_config=tls_config) # type: ignore
+        tls_config and options.update(tls_config=tls_config)  # type: ignore
         next_url = request.real_url
         _redirect_count = 0
         if request.use_session:
@@ -107,7 +108,7 @@ class Downloader(AbstractDownloader):
                 )
                 request.options.get("$referer", False) and options["headers"].update(
                     Referer=response.url
-                ) # type: ignore
+                )  # type: ignore
 
             else:
                 res.content = response.content
@@ -124,7 +125,7 @@ class Downloader(AbstractDownloader):
 
     @classmethod
     def fmt_tls_config(
-        cls, tls_config: Optional[Union[dict, TLSConfig]] = None
+            cls, tls_config: Optional[Union[dict, TLSConfig]] = None
     ) -> TLSConfig:
         """
         将 tls_config 直接转为 TLSConfig, 因为有时候直接传 dict 给 request_go 有问题

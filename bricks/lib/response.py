@@ -36,23 +36,23 @@ class Response:
     )
 
     def __init__(
-        self,
-        content: Any = None,
-        status_code: int = 200,
-        headers: Union[Header, dict, Mapping] = None,
-        url: str = "",
-        encoding: str = None,
-        reason: str = "ok",
-        cookies: Cookies = None,
-        history: List["Response"] = None,
-        request: "Request" = ...,
-        error: Any = "",
-        callback: Callable = None,
+            self,
+            content: Any = None,
+            status_code: int = 200,
+            headers: Union[Header, dict, Mapping] = None,
+            url: str = "",
+            encoding: str = None,
+            reason: str = "ok",
+            cookies: Cookies = None,
+            history: List["Response"] = None,
+            request: "Request" = ...,
+            error: Any = "",
+            callback: Callable = None,
     ):
-        self.content: Union[str, bytes] = content # type: ignore
+        self.content: Union[str, bytes] = content  # type: ignore
         self.status_code = status_code
         self._headers = Header(headers)
-        self.url:str = url
+        self.url: str = url
         self.encoding = encoding or self.guess_encoding()
         self.reason = reason
         self.cookies = cookies
@@ -68,7 +68,7 @@ class Response:
         fset=lambda self, v: setattr(self, "_headers", Header(v)),
         fdel=lambda self: setattr(self, "_headers", Header({})),
         doc="请求头",
-    ) # type: ignore
+    )  # type: ignore
 
     def guess_encoding(self):
         if not self.content:
@@ -132,9 +132,9 @@ class Response:
         )
 
     def extract_all(
-        self,
-        engine: Union[str, Callable],
-        rules: Union[dict, list],
+            self,
+            engine: Union[str, Callable],
+            rules: Union[dict, list],
     ):
         """
         根据多个规则循环匹配
@@ -151,9 +151,9 @@ class Response:
             )
 
     def extract(
-        self,
-        engine: Union[str, Callable],
-        rules: dict = None,
+            self,
+            engine: Union[str, Callable],
+            rules: dict = None,
     ):
         """
         提取引擎, 生成器模式, 支持 Rule, 批量匹配
