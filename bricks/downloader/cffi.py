@@ -2,7 +2,7 @@
 # @Time    : 2023-11-15 14:14
 # @Author  : Kem
 # @Desc    :
-
+import contextlib
 import copy
 import re
 import urllib.parse
@@ -69,46 +69,50 @@ class Downloader(AbstractDownloader):
 
         if request.use_session:
             session = request.get_options("$session") or self.get_session()
+            ctx = contextlib.nullcontext()
         else:
-            session = requests
+            session = requests.Session()
+            ctx = session
 
-        while True:
-            assert _redirect_count < 999, "已经超过最大重定向次数: 999"
-            response = session.request(**{**options, "url": next_url})
-            last_url, next_url = (
-                next_url,
-                response.headers.get("location") or response.headers.get("Location"),
-            )
-            if request.allow_redirects and next_url:
-                next_url = urllib.parse.urljoin(response.url, next_url)
-                _redirect_count += 1
-                res.history.append(
-                    Response(
-                        content=response.content,
-                        headers=response.headers,
-                        cookies=Cookies.by_jar(response.cookies.jar),
-                        url=response.url,
-                        status_code=response.status_code,
-                        request=Request(
-                            url=last_url,
-                            method=request.method,
-                            headers=copy.deepcopy(options.get("headers")),  # type: ignore
-                        ),
-                    )
+        with ctx:
+
+            while True:
+                assert _redirect_count < 999, "已经超过最大重定向次数: 999"
+                response = session.request(**{**options, "url": next_url})
+                last_url, next_url = (
+                    next_url,
+                    response.headers.get("location") or response.headers.get("Location"),
                 )
-                request.options.get("$referer", False) and options["headers"].update(
-                    Referer=response.url
-                )  # type: ignore
+                if request.allow_redirects and next_url:
+                    next_url = urllib.parse.urljoin(response.url, next_url)
+                    _redirect_count += 1
+                    res.history.append(
+                        Response(
+                            content=response.content,
+                            headers=response.headers,
+                            cookies=Cookies.by_jar(response.cookies.jar),
+                            url=response.url,
+                            status_code=response.status_code,
+                            request=Request(
+                                url=last_url,
+                                method=request.method,
+                                headers=copy.deepcopy(options.get("headers")),  # type: ignore
+                            ),
+                        )
+                    )
+                    request.options.get("$referer", False) and options["headers"].update(
+                        Referer=response.url
+                    )  # type: ignore
 
-            else:
-                res.content = response.content
-                res.headers = response.headers  # type: ignore
-                res.cookies = Cookies.by_jar(response.cookies.jar)
-                res.url = response.url
-                res.status_code = response.status_code
-                res.request = request
+                else:
+                    res.content = response.content
+                    res.headers = response.headers  # type: ignore
+                    res.cookies = Cookies.by_jar(response.cookies.jar)
+                    res.url = response.url
+                    res.status_code = response.status_code
+                    res.request = request
 
-                return res
+                    return res
 
     def make_session(self) -> requests.Session:
         return requests.Session()
