@@ -39,20 +39,20 @@ class Items(UserList):
         return {j for i in self.data for j in i.keys()}
 
     def to_csv(
-        self,
-        path: str,
-        header: Union[str, list, None] = "inner",
-        mode: str = "w",
-        delimiter: Any = ",",
-        doublequote: bool = True,
-        escapechar: Optional[bool] = None,
-        lineterminator: str = "\r\n",
-        quotechar: str = '"',
-        quoting: int = csv.QUOTE_MINIMAL,
-        skipinitialspace: bool = False,
-        strict: bool = False,
-        writer=None,
-        **kwargs,
+            self,
+            path: str,
+            header: Union[str, list, None] = "inner",
+            mode: str = "w",
+            delimiter: Any = ",",
+            doublequote: bool = True,
+            escapechar: Optional[bool] = None,
+            lineterminator: str = "\r\n",
+            quotechar: str = '"',
+            quoting: int = csv.QUOTE_MINIMAL,
+            skipinitialspace: bool = False,
+            strict: bool = False,
+            writer=None,
+            **kwargs,
     ):
         """
         将 items 写入 csv 文件

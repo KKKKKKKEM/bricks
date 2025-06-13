@@ -13,10 +13,10 @@ from bricks.utils.pandora import iterable
 
 
 def to_sqlite(
-    path: str,
-    conn: Sqlite,
-    items: Union[List[dict], Items],
-    row_keys: Optional[List[str]] = None,
+        path: str,
+        conn: Sqlite,
+        items: Union[List[dict], Items],
+        row_keys: Optional[List[str]] = None,
 ):
     """
     存入数据至 sqlite
@@ -33,12 +33,12 @@ def to_sqlite(
 
 
 def to_mongo(
-    path: str,
-    conn,
-    items: Union[List[dict], Items],
-    row_keys: Optional[List[str]] = None,
-    database: str = None,
-    **kwargs,
+        path: str,
+        conn,
+        items: Union[List[dict], Items],
+        row_keys: Optional[List[str]] = None,
+        database: str = None,
+        **kwargs,
 ):
     """
     存入数据至 mongo
@@ -61,11 +61,11 @@ def to_mongo(
 
 
 def to_csv(
-    path: str,
-    items: Union[List[dict], Items],
-    conn: Optional[Writer] = None,
-    encoding: str = "utf-8-sig",
-    **kwargs,
+        path: str,
+        items: Union[List[dict], Items],
+        conn: Optional[Writer] = None,
+        encoding: str = "utf-8-sig",
+        **kwargs,
 ):
     """
     存入数据至 csv
@@ -87,13 +87,13 @@ def to_csv(
 
 
 def to_redis(
-    path: str,
-    conn: Redis,
-    items: Union[List[dict], Items],
-    key_type: Literal["set", "list", "string"] = "set",
-    row_keys: Optional[list] = None,
-    splice: str = "|",
-    ttl: int = 0,
+        path: str,
+        conn: Redis,
+        items: Union[List[dict], Items],
+        key_type: Literal["set", "list", "string"] = "set",
+        row_keys: Optional[list] = None,
+        splice: str = "|",
+        ttl: int = 0,
 ):
     """
     存入数据至 redis
@@ -115,7 +115,7 @@ def to_redis(
     )
     # 当存储类型不为 string 时, path 不能为空且类型必须与预期一致
     assert (
-        (path and conn.type(path) in [key_type, "none"]) or key_type == "string"
+            (path and conn.type(path) in [key_type, "none"]) or key_type == "string"
     ), f"存储类型错误, 已存在-{path}:{conn.type(path)}, 存储类型-{key_type}"
     # 当存储类型为 string 时, row_keys 不能为空
     assert row_keys or key_type != "string", ValueError(

@@ -290,7 +290,7 @@ class Redis(redis.client.Redis):
     """
 
     def __init__(
-        self, host="127.0.0.1", password=None, port=6379, database=0, **kwargs
+            self, host="127.0.0.1", password=None, port=6379, database=0, **kwargs
     ):
         """
         实例化一个 Redis 对象
@@ -362,7 +362,7 @@ class Redis(redis.client.Redis):
         return self.lua.run(lua=lua, args=args, keys=keys)
 
     def acquire_lock(
-        self, name, timeout=3600 * 24, block=False, prefix="", value=None, db_num=None
+            self, name, timeout=3600 * 24, block=False, prefix="", value=None, db_num=None
     ):
         """
         获取redis全局锁
@@ -506,12 +506,12 @@ return  redis.call("DEL", unpack(ARGV))
         return self.lua.run(lua=lua, keys=keys, args=args)
 
     def add(
-        self,
-        name: Union[str, List[str]],
-        *values,
-        db_num=None,
-        genre: Literal["set", "zset", "list"] = "set",
-        maxsize=0,
+            self,
+            name: Union[str, List[str]],
+            *values,
+            db_num=None,
+            genre: Literal["set", "zset", "list"] = "set",
+            maxsize=0,
     ):
         """
         添加 `values` 至 `name` 中
@@ -546,12 +546,12 @@ return  redis.call("DEL", unpack(ARGV))
         return self.lua.run(lua=lua, keys=keys, args=args)
 
     def pop(
-        self,
-        name: Union[str, List[str]],
-        count=1,
-        db_num=None,
-        backup=None,
-        genre: Literal["set", "zset", "list"] = "set",
+            self,
+            name: Union[str, List[str]],
+            count=1,
+            db_num=None,
+            backup=None,
+            genre: Literal["set", "zset", "list"] = "set",
     ):
         """
         从 `name` 中 pop 出 `count` 个值出来
@@ -589,12 +589,12 @@ return  redis.call("DEL", unpack(ARGV))
         return None
 
     def remove(
-        self,
-        name: Union[str, List[str]],
-        *values,
-        db_num=None,
-        backup: str = "",
-        genre: Literal["set", "zset", "list"] = "set",
+            self,
+            name: Union[str, List[str]],
+            *values,
+            db_num=None,
+            backup: str = "",
+            genre: Literal["set", "zset", "list"] = "set",
     ):
         """
         从 `name` 中删除 `values`
@@ -627,11 +627,11 @@ return  redis.call("DEL", unpack(ARGV))
         return self.lua.run(lua=lua, keys=keys, args=args)
 
     def replace(
-        self,
-        name: Union[str, List[str]],
-        *values,
-        db_num=None,
-        genre: Literal["set", "zset", "list"] = "set",
+            self,
+            name: Union[str, List[str]],
+            *values,
+            db_num=None,
+            genre: Literal["set", "zset", "list"] = "set",
     ):
         """
         从 `name` 中 pop 出 `count` 个值出来
@@ -662,7 +662,7 @@ return  redis.call("DEL", unpack(ARGV))
         return self.lua.run(lua=lua, keys=keys, args=args)
 
     def merge(
-        self, dest, *sources, db_num=None, genre: Literal["set", "zset", "list"] = "set"
+            self, dest, *sources, db_num=None, genre: Literal["set", "zset", "list"] = "set"
     ):
         """
         合并队列

@@ -2,9 +2,9 @@ from loguru import logger
 
 from bricks import Request, const
 from bricks.core import events, signals
+from bricks.lib.queues import RedisQueue
 from bricks.spider import air
 from bricks.spider.air import Context
-from bricks.downloader import go_requests
 
 
 class MySpider(air.Spider):
@@ -106,7 +106,12 @@ if __name__ == "__main__":
             "scheme": "http",
             # "threshold": 10, # 一个节点请求多少次就更换
         },
-        downloader=go_requests.Downloader()
+        # downloader=go_requests.Downloader(),
+        task_queue=RedisQueue(password="0boNLgeuiPIxv7"),
+        # **{
+        #     "init.history.ttl": 3600,
+        #     "init.record.ttl": 0
+        # }
         # concurrency=5
     )
-    spider.run()
+    spider.run(task_name="init")

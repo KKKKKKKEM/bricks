@@ -54,11 +54,11 @@ def _get_writer(p, **options):
 
 class Reader:
     def __init__(
-        self,
-        path: str,
-        structure: dict = None,
-        options: dict = None,
-        encoding: str = "utf-8-sig",
+            self,
+            path: str,
+            structure: dict = None,
+            options: dict = None,
+            encoding: str = "utf-8-sig",
     ):
         """
         强调: csv 文件必须有表头
@@ -123,7 +123,7 @@ class Reader:
                     structure=structure,
                 )
                 for data in conn.find(
-                    TABLE_PATTERN.sub(table, sql), batch_size=batch_size
+                        TABLE_PATTERN.sub(table, sql), batch_size=batch_size
                 ):
                     yield data
                 else:
@@ -135,13 +135,13 @@ class Reader:
 
 class Writer:
     def __init__(
-        self,
-        path: str,
-        header: list,
-        schema: Literal["sqlite:storage", "sqlite:memory", ""] = "",
-        mode: str = "a+",
-        newline="",
-        encoding: str = "utf-8-sig",
+            self,
+            path: str,
+            header: list,
+            schema: Literal["sqlite:storage", "sqlite:memory", ""] = "",
+            mode: str = "a+",
+            newline="",
+            encoding: str = "utf-8-sig",
     ):
         """
         csv writer

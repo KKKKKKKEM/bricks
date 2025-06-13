@@ -20,11 +20,12 @@ from bricks.utils import pandora
 
 warnings.filterwarnings("ignore")
 # 设置 requests 最大的响应头的长度 为 1000
-http.client._MAXHEADERS = 1000 # type: ignore
+http.client._MAXHEADERS = 1000  # type: ignore
 
 pandora.require("httpx")
 
 import httpx  # noqa: E402
+
 PROXY_ERROR_PARRTEN = re.compile(r"\[Errno 111\] Connection refused")
 
 
@@ -116,7 +117,7 @@ class Downloader(AbstractDownloader):
                     )
                     request.options.get("$referer", False) and options[
                         "headers"
-                    ].update(Referer=str(response.url)) # type: ignore
+                    ].update(Referer=str(response.url))  # type: ignore
 
                 else:
                     res.content = response.content
@@ -128,7 +129,7 @@ class Downloader(AbstractDownloader):
 
                     return res
         finally:
-            not request.use_session and session.close() # type: ignore
+            not request.use_session and session.close()  # type: ignore
 
     def make_session(self, **options):
         return httpx.Client(**options)

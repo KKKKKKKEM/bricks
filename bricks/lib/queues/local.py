@@ -26,7 +26,7 @@ class LocalQueue(TaskQueue):
         return "<LocalQueue>"
 
     def size(
-        self, *names: str, qtypes: tuple = ("current", "temp", "failure"), **kwargs
+            self, *names: str, qtypes: tuple = ("current", "temp", "failure"), **kwargs
     ) -> int:
         if not names:
             return 0
@@ -119,7 +119,7 @@ class LocalQueue(TaskQueue):
         return items
 
     def clear(
-        self, *names, qtypes=("current", "temp", "failure", "lock", "record"), **kwargs
+            self, *names, qtypes=("current", "temp", "failure", "lock", "record"), **kwargs
     ):
         for name in names:
             for qtype in qtypes:

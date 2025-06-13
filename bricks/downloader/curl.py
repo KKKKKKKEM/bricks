@@ -31,12 +31,12 @@ class Downloader(AbstractDownloader):
     """
 
     def __init__(
-        self,
-        ciphers: list = None,
-        random_ciphers=False,
-        httpversion: str = "1.1",
-        sslversion: str = "1.2",
-        options: dict = None,
+            self,
+            ciphers: list = None,
+            random_ciphers=False,
+            httpversion: str = "1.1",
+            sslversion: str = "1.2",
+            options: dict = None,
     ):
         self._ciphers = ciphers
         self.random_ciphers = random_ciphers
@@ -353,9 +353,9 @@ class Downloader(AbstractDownloader):
         options.update(
             {
                 pycurl.HTTP_VERSION: httpversion.get(c_httpversion)
-                or pycurl.CURL_HTTP_VERSION_1_1,
+                                     or pycurl.CURL_HTTP_VERSION_1_1,
                 pycurl.SSLVERSION: sslversion.get(c_sslversion)
-                or pycurl.SSLVERSION_TLSv1_2,
+                                   or pycurl.SSLVERSION_TLSv1_2,
                 pycurl.SSL_ENABLE_NPN: 0,
             }
         )

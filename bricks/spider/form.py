@@ -24,7 +24,7 @@ class Context(air.Context):
     target: "Spider"
 
     def __init__(
-        self, target: "Spider", form: str = state.const.ON_CONSUME, **kwargs
+            self, target: "Spider", form: str = state.const.ON_CONSUME, **kwargs
     ) -> None:
         super().__init__(target, form, **kwargs)
 
@@ -35,7 +35,7 @@ class Context(air.Context):
         self.seeds["$signpost"] = bookmark
 
     def submit(
-        self, *obj: Union[Item, dict], call_later=False, attrs: dict = None
+            self, *obj: Union[Item, dict], call_later=False, attrs: dict = None
     ) -> List["Context"]:
         signpost = self.seeds.get("$bookmark", 0)
         attrs = attrs or {}

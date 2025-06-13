@@ -4,6 +4,7 @@
 # @Desc    : requests downloader
 from __future__ import absolute_import
 
+import contextlib
 import copy
 import http.client
 import urllib.parse
@@ -58,7 +59,7 @@ class Downloader(AbstractDownloader):
             "timeout": 5 if request.timeout is ... else request.timeout,
             "allow_redirects": False,
             "proxies": request.proxies
-            and {"http": request.proxies, "https": request.proxies},  # noqa
+                       and {"http": request.proxies, "https": request.proxies},  # noqa
             "verify": request.options.get("verify", False),
         }
 
@@ -66,46 +67,49 @@ class Downloader(AbstractDownloader):
         _redirect_count = 0
         if request.use_session:
             session = request.get_options("$session") or self.get_session()
+            ctx = contextlib.nullcontext()
         else:
-            session = requests
+            session = requests.Session()
+            ctx = session
 
-        while True:
-            assert _redirect_count < 999, "已经超过最大重定向次数: 999"
-            response = session.request(**{**options, "url": next_url})
-            last_url, next_url = (
-                next_url,
-                response.headers.get("location") or response.headers.get("Location"),
-            )
-            if request.allow_redirects and next_url:
-                next_url = urllib.parse.urljoin(response.url, next_url)
-                _redirect_count += 1
-                res.history.append(
-                    Response(
-                        content=response.content,
-                        headers=response.headers,
-                        cookies=Cookies.by_jar(response.cookies),
-                        url=response.url,
-                        status_code=response.status_code,
-                        request=Request(
-                            url=last_url,
-                            method=request.method,
-                            headers=copy.deepcopy(options.get("headers")),
-                        ),
+        with ctx:
+            while True:
+                assert _redirect_count < 999, "已经超过最大重定向次数: 999"
+                response = session.request(**{**options, "url": next_url})
+                last_url, next_url = (
+                    next_url,
+                    response.headers.get("location") or response.headers.get("Location"),
+                )
+                if request.allow_redirects and next_url:
+                    next_url = urllib.parse.urljoin(response.url, next_url)
+                    _redirect_count += 1
+                    res.history.append(
+                        Response(
+                            content=response.content,
+                            headers=response.headers,
+                            cookies=Cookies.by_jar(response.cookies),
+                            url=response.url,
+                            status_code=response.status_code,
+                            request=Request(
+                                url=last_url,
+                                method=request.method,
+                                headers=copy.deepcopy(options.get("headers")),
+                            ),
+                        )
                     )
-                )
-                request.options.get("$referer", False) and options["headers"].update(
-                    Referer=response.url
-                )
+                    request.options.get("$referer", False) and options["headers"].update(
+                        Referer=response.url
+                    )
 
-            else:
-                res.content = response.content
-                res.headers = response.headers
-                res.cookies = Cookies.by_jar(response.cookies)
-                res.url = response.url
-                res.status_code = response.status_code
-                res.request = request
+                else:
+                    res.content = response.content
+                    res.headers = response.headers
+                    res.cookies = Cookies.by_jar(response.cookies)
+                    res.url = response.url
+                    res.status_code = response.status_code
+                    res.request = request
 
-                return res
+                    return res
 
     def make_session(self):
         return requests.Session()

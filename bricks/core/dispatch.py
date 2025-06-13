@@ -57,7 +57,7 @@ class Task(Future):
     """
 
     def __init__(
-        self, func, args=None, kwargs=None, callback=None, worker: "Worker" = None
+            self, func, args=None, kwargs=None, callback=None, worker: "Worker" = None
     ):
         self.func = func
         self.args = args or []
@@ -86,13 +86,13 @@ class Worker(threading.Thread):
     """
 
     def __init__(
-        self,
-        dispatcher: "Dispatcher",
-        name: str,
-        timeout=None,
-        daemon=True,
-        trace=False,
-        **kwargs,
+            self,
+            dispatcher: "Dispatcher",
+            name: str,
+            timeout=None,
+            daemon=True,
+            trace=False,
+            **kwargs,
     ):
         self.dispatcher = dispatcher
         self._shutdown = threading.Event()

@@ -54,7 +54,7 @@ class Sqlite:
         self.connection.commit()
 
     def find(
-        self, sql: str, batch_size: int = 10000, unpack: bool = False
+            self, sql: str, batch_size: int = 10000, unpack: bool = False
     ) -> List[dict]:
         with self as cursor:
             cursor: sqlite3.Cursor
@@ -85,26 +85,26 @@ class Sqlite:
             query = ""
 
         sql = (
-            "INSERT INTO "
-            + table
-            + f' ({",".join(keys)}) VALUES ({",".join(["?"] * len(keys))}){query}'
+                "INSERT INTO "
+                + table
+                + f' ({",".join(keys)}) VALUES ({",".join(["?"] * len(keys))}){query}'
         )
         with self as cur:
             cur.executemany(sql, [tuple(doc.values()) for doc in docs])
 
     def upsert(self, table: str, *docs: dict):
         sql = (
-            "INSERT OR REPLACE INTO "
-            + table
-            + f' ({",".join(docs[0].keys())}) VALUES ({",".join(["?"] * len(docs[0]))})'
+                "INSERT OR REPLACE INTO "
+                + table
+                + f' ({",".join(docs[0].keys())}) VALUES ({",".join(["?"] * len(docs[0]))})'
         )
         with self as cur:
             cur.executemany(sql, [tuple(doc.values()) for doc in docs])
 
     def update(self, table: str, query: str, update: dict):
         sql = (
-            f"UPDATE {table}"
-            + f" SET {','.join([f'{k}=?' for k, v in update.items()])} WHERE {query}"
+                f"UPDATE {table}"
+                + f" SET {','.join([f'{k}=?' for k, v in update.items()])} WHERE {query}"
         )
         with self as cur:
             cur.execute(sql, tuple(update.values()))
@@ -123,16 +123,16 @@ class Sqlite:
     def create_table(self, name, structure: dict):
         with self as cur:
             sql = (
-                f"CREATE TABLE IF NOT EXISTS {name}("
-                + ",".join(
-                    [
-                        f'{k} {self.python_to_sqlite_types.get(v, "OBJECT")}'
-                        if v
-                        else k
-                        for k, v in structure.items()
-                    ]
-                )
-                + ")"
+                    f"CREATE TABLE IF NOT EXISTS {name}("
+                    + ",".join(
+                [
+                    f'{k} {self.python_to_sqlite_types.get(v, "OBJECT")}'
+                    if v
+                    else k
+                    for k, v in structure.items()
+                ]
+            )
+                    + ")"
             )
             cur.execute(sql)
 
@@ -143,13 +143,13 @@ class Sqlite:
 
     @classmethod
     def load_csv(
-        cls,
-        database: str,
-        table: str,
-        path: str,
-        structure: dict = None,
-        reload=True,
-        debug=False,
+            cls,
+            database: str,
+            table: str,
+            path: str,
+            structure: dict = None,
+            reload=True,
+            debug=False,
     ):
         """
         从 csv 中加载数据
@@ -233,7 +233,6 @@ class Sqlite:
 
 
 if __name__ == "__main__":
-
     class People:
         def __init__(self, name: str):
             self.name = name
@@ -242,6 +241,7 @@ if __name__ == "__main__":
             return f"<People name: {self.name}>"
 
         __repr__ = __str__
+
 
     # sqlite = Sqlite()
     # sqlite.register_adapter(People, pickle.dumps)

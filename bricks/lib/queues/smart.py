@@ -32,7 +32,7 @@ class SmartQueue(queue.Queue):
         self.queue: deque
 
     def put(
-        self, *items, block=True, timeout=None, unique=None, limit=0, head=False
+            self, *items, block=True, timeout=None, unique=None, limit=0, head=False
     ) -> int:
         """
         将 `items` 投放至 队列中
