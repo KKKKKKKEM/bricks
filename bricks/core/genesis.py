@@ -149,7 +149,7 @@ class Chaos(metaclass=MetaClass):
             try:
                 self.before_close()
             except signals.Signal as e:
-                logger.warning(f"[{const.BEFORE_START}] 无法处理的信号类型: {e}")
+                logger.warning(f"[{const.BEFORE_CLOSE}] 无法处理的信号类型: {e}")
 
             return ret
 
