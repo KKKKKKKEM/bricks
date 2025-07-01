@@ -417,3 +417,21 @@ class Spider(air.Spider):
 
         for form, events in (self.config.events or {}).items():
             self.use(form, *events)
+
+if __name__ == '__main__':
+    @dataclass
+    class MyNode(RenderNode):
+        value: str = ""
+        value2: str = ""
+        value3: str = ""
+        value4: str = ""
+
+    node = MyNode(
+        value="{name}",
+        # value2="{flag ? 'flag is true' : 'flag is false'}",
+        value3="{age:str}",
+        value4="{flag:by_flag}",
+        adapters={"by_flag": lambda flag, name: f"{name}'s flag is true" if flag else f"{name}'s flag is false"}
+    )
+    node = node.render({"name": "kem", "age": 33.0, "flag": True})
+    print(node)

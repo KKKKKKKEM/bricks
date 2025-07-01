@@ -11,7 +11,8 @@ from typing import Any, Callable, List, Literal, Mapping, Optional, Tuple, Union
 
 from bricks.utils import pandora
 
-FORMAT_REGEX = re.compile(r"{(\w+)(?::(\w+))?}")
+FORMAT_REGEX = re.compile(r"[{](\w+)(?::(\w+))?[}]")
+# TRIPARTITE_EXPRESSIONS_REGEX = re.compile(r'[{]([^{}?]*)\?\s*([^{}:]*)\s*:\s*([^{}]*)[}]')
 
 
 class UnRendered:
@@ -103,7 +104,7 @@ class RenderNode:
         elif isinstance(value, UnRendered):
             return value.value
 
-        elif dataclasses.is_dataclass(value):
+        elif dataclasses.is_dataclass(value) and isinstance(value, RenderNode):
             return value.render(base)
 
         return value
