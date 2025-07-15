@@ -25,6 +25,23 @@ pandora.require("requests-go")
 
 import requests_go  # noqa: E402
 from requests_go.tls_config import TLSConfig, to_tls_config  # noqa: E402
+from requests_go.tls_config import convert_config
+
+
+def decorator(func):
+    @wraps(func)
+    def inner(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except:  # noqa
+            return None
+
+    return inner
+
+
+for k, v in convert_config.__dict__.items():  # noqa
+    if k.startswith('get_') and callable(v):
+        setattr(convert_config, k, decorator(v))
 
 PROXY_ERROR_PARRTEN = re.compile(r"proxyconnect tcp:.*connection refused")
 
@@ -44,7 +61,6 @@ class Downloader(AbstractDownloader):
     ) -> None:
         self.tls_config = tls_config
         self.options = options or {}
-        self.install()
 
     def fetch(self, request: Union[Request, dict]) -> Response:
         """
@@ -153,27 +169,6 @@ class Downloader(AbstractDownloader):
         if PROXY_ERROR_PARRTEN.search(str(error)):
             resp.error = "ProxyError"
         return resp
-
-    @staticmethod
-    def install():
-        from requests_go.tls_config import convert_config
-        if getattr(convert_config, 'changed', False):
-            return
-
-        def decorator(func):
-            @wraps(func)
-            def inner(*args, **kwargs):
-                try:
-                    return func(*args, **kwargs)
-                except:  # noqa
-                    return None
-
-            return inner
-
-        for k, v in convert_config.__dict__.items():  # noqa
-            if k.startswith('get_') and callable(v):
-                setattr(convert_config, k, decorator(v))
-        setattr(convert_config, 'changed', True)
 
 
 if __name__ == "__main__":
