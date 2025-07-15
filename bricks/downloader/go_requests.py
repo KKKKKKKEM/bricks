@@ -10,6 +10,7 @@ import copy
 import re
 import urllib.parse
 import warnings
+from functools import wraps
 from typing import Optional, Union
 
 from bricks.downloader import AbstractDownloader
@@ -24,6 +25,23 @@ pandora.require("requests-go")
 
 import requests_go  # noqa: E402
 from requests_go.tls_config import TLSConfig, to_tls_config  # noqa: E402
+from requests_go.tls_config import convert_config
+
+
+def decorator(func):
+    @wraps(func)
+    def inner(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except:  # noqa
+            return None
+
+    return inner
+
+
+for k, v in convert_config.__dict__.items():  # noqa
+    if k.startswith('get_') and callable(v):
+        setattr(convert_config, k, decorator(v))
 
 PROXY_ERROR_PARRTEN = re.compile(r"proxyconnect tcp:.*connection refused")
 
@@ -156,6 +174,11 @@ class Downloader(AbstractDownloader):
 if __name__ == "__main__":
     downloader = Downloader()
     rsp = downloader.fetch(
-        Request(url="https://youtube.com", proxies="http://127.0.0.1:7899", timeout=20)
+        Request(
+            # url="https://gdupi/api/search/all?sort=rel&pagingIndex=1&pagingSize=40&viewType=list&productSet=total&query=iphone+16+pro&origQuery=iphone+16+pro&adQuery=iphone+16+pro&iq=&eq=&xq=&catId=50000247&minPrice=700000&maxPrice=1400000",
+            url="https://www.baidu.com?s=baidu&w=&q=wocao",
+            timeout=20,
+            # proxies="http://127.0.0.1:7890"
+        )
     )
     print(rsp.error, rsp.reason)
