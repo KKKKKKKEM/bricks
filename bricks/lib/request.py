@@ -108,7 +108,7 @@ class Request:
         # 解析原始URL
         parsed_url = urllib.parse.urlparse(self.url)
         # 提取查询字符串并解析为字典
-        original_params = dict(urllib.parse.parse_qsl(parsed_url.query))
+        original_params = dict(urllib.parse.parse_qsl(parsed_url.query, keep_blank_values=True))
 
         # 更新原始参数字典
         original_params.update(self.params or {})
