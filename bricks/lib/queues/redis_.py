@@ -6,6 +6,7 @@ import datetime
 import json
 import threading
 import time
+from typing import Literal
 
 from loguru import logger
 
@@ -24,7 +25,7 @@ class RedisQueue(TaskQueue):
             password=None,
             port=6379,
             database=0,
-            genre="set",
+            genre: Literal["list", "set", "zset"] = "set",
             **kwargs,
     ):
         self.redis_db = Redis(

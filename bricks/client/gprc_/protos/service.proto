@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package spider;
+
+service Service {
+  rpc execute(Request) returns (Response);
+  rpc submit(Request) returns (Response);
+  rpc health(Request) returns (Response);
+}
+
+message Request {
+  string data = 1;  // JSON 格式的数据
+  map<string, string> metadata = 2;  // 额外的元数据
+}
+
+message Response {
+  bool success = 1;
+  string data = 2;  // JSON 格式的结果数据
+  string error = 3;  // 错误信息
+}
