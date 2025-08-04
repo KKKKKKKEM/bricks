@@ -164,11 +164,12 @@ def demo3():
         if callback_uri:
             if err:
                 logger.debug(f"发生错误 -> {err}")
-                listener.spider.downloader.fetch({"url": callback_uri, "body": {"seeds": ctx.seeds, "error": str(err)}})
+                listener.spider.downloader.fetch(
+                    {"url": callback_uri, "method": "POST", "body": {"seeds": ctx.seeds, "error": str(err)}})
             else:
                 logger.debug(f"跑完了 -> {ctx.response.text}")
                 listener.spider.downloader.fetch(
-                    {"url": callback_uri, "body": {"seeds": ctx.seeds, "data": ctx.response.text}})
+                    {"url": callback_uri, "method": "POST", "body": {"seeds": ctx.seeds, "data": ctx.response.text}})
 
     redis = Redis(password="0boNLgeuiPIxv7")
     # 这里创建一个 Redis 队列
