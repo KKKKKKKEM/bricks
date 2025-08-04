@@ -311,9 +311,7 @@ class Dispatcher:
 
         timeout != -1 and self._running_tasks.acquire(timeout=timeout)
         submit()
-        timeout != -1 and task.add_done_callback(
-            lambda x: self._running_tasks.release()
-        )
+        timeout != -1 and task.add_done_callback(lambda x: self._running_tasks.release())
 
         self.adjust_workers()
         return task

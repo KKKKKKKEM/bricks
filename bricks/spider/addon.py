@@ -1,6 +1,7 @@
 import collections
 import concurrent.futures
-from typing import Type, Union
+import uuid
+from typing import Type, Union, Callable, Optional
 
 from loguru import logger
 
@@ -10,104 +11,95 @@ from bricks.lib.items import Items
 from bricks.lib.queues import Item, LocalQueue, TaskQueue
 from bricks.spider.air import Context, Spider
 
-_futures = collections.defaultdict(concurrent.futures.Future)
-
-
-def report(future_id: str, retval: any, form: str = "result"):
-    """
-    接收结果
-
-    :param form:
-    :param future_id:
-    :param retval:
-    :return:
-    """
-    try:
-        future: concurrent.futures.Future = _futures.pop(future_id, None)
-        if form == "result":
-            future and future.set_result(retval)
-        else:
-            future and future.set_exception(retval)
-    except concurrent.futures.InvalidStateError:
-        pass
-
-    except Exception as e:
-        logger.warning(f"[error] 放弃存储: {future_id}, error: {e}")
-
 
 class Mocker:
-    @staticmethod
-    def failure(ctx: Context, shutdown=False):
-        future_max_retry = ctx.seeds.get("$futureMaxRetry")
-        future_retry = ctx.seeds.get("$futureRetry") or 0
-        future_id = ctx.seeds.get("$futureID")
-        if future_retry >= future_max_retry:
-            report(future_id, RuntimeError(f"超出最大重试次数: {future_max_retry} 次"), form="error")
-            return ctx.success(shutdown)
-        else:
-            return super(ctx.__class__, ctx).retry()
 
-    @staticmethod
-    def error(ctx: Context, e: Exception, shutdown=True):
-        if shutdown:
-            future_id = ctx.seeds.get("$futureID")
-            report(future_id, e, form="error")
-            return ctx.success(shutdown)
-        else:
-            return super(ctx.__class__, ctx).error(e, shutdown)
+    def __init__(self, *on_finish: Callable[[Context, Optional[Exception]], None]):
+        self.on_finish = on_finish
 
-    @staticmethod
-    def success(ctx: Context, shutdown=False):
-        future_id = ctx.seeds.get("$futureID")
-        report(future_id, ctx)
-        return super(ctx.__class__, ctx).success(shutdown)
+    def create_hooks(self):
+        def failure(ctx: Context, shutdown=False):
+            future_max_retry = ctx.seeds.get("$futureMaxRetry")
+            future_retry = ctx.seeds.get("$futureRetry") or 0
+            if future_retry >= future_max_retry:
+                for on_finish in self.on_finish:
+                    on_finish(ctx, RuntimeError(f"超出最大重试次数: {future_max_retry} 次"))
+                return ctx.success(shutdown)
+            else:
+                return super(ctx.__class__, ctx).retry()
 
-    @staticmethod
-    def on_request(self, context: Context):
+        def error(ctx: Context, e: Exception, shutdown=True):
+            if shutdown:
+                for on_finish in self.on_finish:
+                    on_finish(ctx, e)
+                return ctx.success(shutdown)
+            else:
+                return super(ctx.__class__, ctx).error(e, shutdown)
 
-        future_type = context.seeds.get("$futureType", "$response")
-        if future_type == "$request":
-            raise signals.Success
-        return super(self.__class__, self).on_request(context)
+        def success(ctx: Context, shutdown=False):
+            for on_finish in self.on_finish:
+                on_finish(ctx, None)
+            return super(ctx.__class__, ctx).success(shutdown)
 
-    @staticmethod
-    def on_retry(self, context: Context):
-        try:
-            return super(self.__class__, self).on_retry(context)
-        except signals.Success:
-            future_id = context.seeds.get("$futureID")
-            report(future_id, RuntimeError("超出最大重试次数"), form="error")
-            raise
+        def on_request(spider, context: Context):
 
-    @staticmethod
-    def on_response(self, context: Context):
-        future_type = context.seeds.get("$futureType", "$response")
+            future_type = context.seeds.get("$futureType", "$response")
+            if future_type == "$request":
+                raise signals.Success
+            return super(spider.__class__, spider).on_request(context)
 
-        if future_type == "$response":
-            raise signals.Success
+        def on_retry(spider, context: Context):
+            try:
+                return super(spider.__class__, spider).on_retry(context)
+            except signals.Success:
+                for on_finish in self.on_finish:
+                    on_finish(context, RuntimeError("超出最大重试次数"))
+                raise
 
-        items: Items = super(self.__class__, self).on_response(context)
+        def on_response(spider, context: Context):
+            future_type = context.seeds.get("$futureType", "$response")
 
-        if future_type == "$items":
-            raise signals.Success
+            if future_type == "$response":
+                raise signals.Success
 
-        return items
+            items: Items = super(spider.__class__, spider).on_response(context)
+
+            if future_type == "$items":
+                raise signals.Success
+
+            return items
+
+        return {
+            "failure": failure,
+            "error": error,
+            "success": success,
+            "on_request": on_request,
+            "on_response": on_response,
+            "on_retry": on_retry,
+        }
 
 
 class Rpc:
-    def __init__(self, spider: Spider):
-        self.spider: Spider = spider
+    def __init__(self):
+        self.spider: Spider = ...
         self.running: bool = False
+        self._futures = collections.defaultdict(concurrent.futures.Future)
+        self.form = "rpc"
 
     def run(self):
+
         self.spider.dispatcher.start()
         self.running = True
+        if self.form == "listener":
+            logger.debug(
+                f'[开始监听] {self.spider.__class__.__name__}, queueName: {self.spider.queue_name}, queueType: {self.spider.task_queue.__class__.__name__}')
+            self.spider.run_spider()
         return self
 
     def stop(self):
         self.running = False
 
-    def execute(self, seeds: Union[dict, Item], timeout: int = None) -> Context:
+    def execute(self, seeds: Union[dict, Item]) -> Context:
         """
         给 rpc 一个种子, 然后获取种子的消耗结果
         种子内特殊键值对说明:
@@ -118,20 +110,37 @@ class Rpc:
             $items -> 表示只要 items, 也就是消耗到了存储之前就会告知结果
 
 
-        :param timeout:
         :param seeds: 需要消耗的种子
         :return:
         """
-        future = concurrent.futures.Future()
-        future_id = f"future-{id(future)}"
+        future_id = f"future-{uuid.uuid4()}"
+        future = self._futures[future_id]
         seeds.update({"$futureID": future_id})
-        _futures[future_id] = future
         task_queue: TaskQueue = self.spider.get("spider.task_queue") or self.spider.task_queue
         queue_name: str = self.spider.get("spider.queue_name") or self.spider.queue_name
         context: Context = self.spider.make_context(task_queue=task_queue, queue_name=queue_name, seeds=seeds)  # noqa
         context.flow({"next": self.spider.on_consume, "seeds": seeds})
         self.spider.on_consume(context=context)
-        return future.result(timeout)
+        return future.result()
+
+    def submit(self, seeds: Union[dict, Item]):
+        """
+        给 rpc 一个种子, 然后获取种子的消耗结果
+        种子内特殊键值对说明:
+
+        $futureType 表示需要的类型, 可以自己设置, 默认为 $response
+            $request -> 表示只需要 request, 也就是消耗到了请求之前就会告知结果
+            $response -> 表示只要 response, 也就是消耗到了解析之前就会告知结果
+            $items -> 表示只要 items, 也就是消耗到了存储之前就会告知结果
+
+
+        :param seeds: 需要消耗的种子
+        :return:
+        """
+        if self.form != "rpc":
+            self.spider.put_seeds(seeds)
+        else:
+            raise RuntimeError("只能在 listener 模式下使用 submit")
 
     @classmethod
     def wrap(
@@ -140,6 +149,8 @@ class Rpc:
             attrs: dict = None,
             modded: dict = None,
             ctx_modded: dict = None,
+            mocker: Mocker = None,
+            use_local: bool = True
     ):
         """
         将 Spider 转化为 RPC, 等于后台运行爬虫, 支持动态添加种子, 然后获取该种子消耗的结果
@@ -152,6 +163,8 @@ class Rpc:
 
         也就是说: 如果你有翻页事件, 且在 pipeline, 则不会生效 (但是我们一般都不需要这个, 建议自己注释掉)
 
+        :param use_local:
+        :param mocker:
         :param spider: 爬虫类
         :param modded: 魔改 class
         :param attrs: 初始化参数
@@ -159,15 +172,20 @@ class Rpc:
         :return:
         """
         attrs = attrs or {}
+        attrs.update(concurrency=1)
         modded = modded or {}
         ctx_modded = ctx_modded or {}
+        rpc = cls()
 
-        modded.setdefault("on_request", Mocker.on_request)
-        modded.setdefault("on_response", Mocker.on_response)
-        modded.setdefault("on_retry", Mocker.on_retry)
-        ctx_modded.setdefault("failure", Mocker.failure)
-        ctx_modded.setdefault("error", Mocker.error)
-        ctx_modded.setdefault("success", Mocker.success)
+        mocker = mocker or Mocker(rpc.on_finish)
+        hooks = mocker.create_hooks()
+
+        modded.setdefault("on_request", hooks["on_request"])
+        modded.setdefault("on_response", hooks["on_response"])
+        modded.setdefault("on_retry", hooks["on_retry"])
+        ctx_modded.setdefault("failure", hooks["failure"])
+        ctx_modded.setdefault("error", hooks["error"])
+        ctx_modded.setdefault("success", hooks["success"])
 
         local = LocalQueue()
         key = f"{spider.__module__}.{spider.__name__}"
@@ -177,14 +195,56 @@ class Rpc:
         )
 
         spider.Context = type("RPCContext", (spider.Context,), ctx_modded)
-        ins: Spider = spider(**attrs)
-        default_attrs = {
-            "task_queue": local,
-            "spider.task_queue": local,
-            "queue_name": f"{cls.__module__}.{cls.__name__}:rpc",
-            "forever": True,
-        }
+        rpc.spider = spider(**attrs)
+        default_attrs = {"forever": True}
+
+        if use_local:
+            default_attrs.update(**{
+                "task_queue": local,
+                "spider.task_queue": local,
+                "queue_name": f"{cls.__module__}.{cls.__name__}:rpc"
+            })
+
         for k, v in default_attrs.items():
-            ins.set(k, v)
-        ins.disable_statistics()
-        return cls(ins)
+            rpc.spider.set(k, v)
+        rpc.spider.disable_statistics()
+        return rpc
+
+    def on_finish(self, ctx: Context, error: Optional[Exception]):
+        """
+        接收结果
+
+        :param error:
+        :param ctx:
+        :return:
+        """
+        future_id: str = ctx.seeds.get("$futureID")
+        try:
+            future: concurrent.futures.Future = self._futures.pop(future_id, None)
+            if error:
+                future and future.set_exception(error)
+            else:
+                future and future.set_result(ctx)
+        except concurrent.futures.InvalidStateError:
+            pass
+
+        except Exception as e:
+            logger.warning(f"[error] 放弃存储: {future_id}, error: {e}")
+
+    @classmethod
+    def listen(
+            cls,
+            spider: Type[Spider],
+            attrs: dict = None,
+            on_finish: Callable[[Context, Optional[Exception]], None] = None
+    ):
+
+        def private_on_finish(ctx: Context, error: Optional[Exception]):
+            future_id = ctx.seeds.get("$futureID")
+            future_id and ins.on_finish(ctx, error)
+            on_finish and on_finish(ctx, error)
+
+        mocker = Mocker(private_on_finish)
+        ins = cls.wrap(spider=spider, attrs=attrs, mocker=mocker, use_local=False)
+        ins.form = "listener"
+        return ins

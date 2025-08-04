@@ -102,16 +102,16 @@ if __name__ == "__main__":
     spider = MySpider(
         proxy={
             'ref': "bricks.lib.proxies.ClashProxy",
-            'key': "http://127.0.0.1:9097",
-            "scheme": "http",
+            'key': "127.0.0.1:9097",
+            # "scheme": "http",
             # "threshold": 10, # 一个节点请求多少次就更换
         },
         # downloader=go_requests.Downloader(),
-        task_queue=RedisQueue(password="0boNLgeuiPIxv7"),
+        # task_queue=RedisQueue(password="0boNLgeuiPIxv7"),
         # **{
         #     "init.history.ttl": 3600,
         #     "init.record.ttl": 0
         # }
         # concurrency=5
     )
-    spider.run(task_name="init")
+    spider.run()
