@@ -1,11 +1,16 @@
+import asyncio
+
 from loguru import logger
 
 from bricks import Request, const
 from bricks.core import events, signals
+from bricks.rpc.grpc_.service import GrpcClient
 from bricks.spider import air
+from bricks.spider.addon import Rpc
 from bricks.spider.air import Context
 
 
+# 编写一个 spider
 class MySpider(air.Spider):
     def make_seeds(self, context: Context, **kwargs):
         # 因为只需要爬这个种子
@@ -91,7 +96,31 @@ class MySpider(air.Spider):
         # raise signals.Retry
 
 
-if __name__ == "__main__":
-    from bricks.client.gprc_.service import GrpcService
+# 运行 grpc 服务
 
-    GrpcService.serve(MySpider, attrs={"concurrency": 2, "queue_name": "test"})
+def run_server():
+    rpc = Rpc.wrap(MySpider)
+    """
+    serve 的参数配置如下:
+        :param concurrency: 并发
+        :param port: 监听端口, 默认随机
+        :param on_server_started: 当服务启动完后的会回调, 如果是随机端口, 可以使用这个回调来获取端口, 或者链接其他服务
+    
+    """
+    asyncio.run(rpc.serve())
+
+
+def test_client(endpoint: str):
+    """
+
+
+    :param endpoint: 这个是 grpc 监听的 ip和端口
+    :return:
+    """
+    client = GrpcClient(endpoint)
+    print(client.rpc("execute", {"page": 1}))
+
+
+if __name__ == "__main__":
+    # run_server()
+    test_client("localhost:54170")

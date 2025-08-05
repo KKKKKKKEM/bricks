@@ -1,5 +1,6 @@
 import collections
 import concurrent.futures
+import json
 import uuid
 from typing import Type, Union, Callable, Optional
 
@@ -10,7 +11,20 @@ from bricks.core.events import REGISTERED_EVENTS
 from bricks.lib.items import Items
 from bricks.lib.queues import Item, LocalQueue, TaskQueue
 from bricks.spider.air import Context, Spider
+from bricks.rpc.grpc_.service import GrpcService
 
+def ctx2json(ctx: Context):
+
+    seeds = ctx.seeds
+    future_type = seeds.get("$futureType", "$response")
+    if future_type == "$request":
+        return json.dumps({"data": ctx.request.curl, "type": future_type, "seeds": seeds}, default=str)
+    elif future_type == "$response":
+        return json.dumps({"data": ctx.response.text, "type": future_type, "seeds": seeds}, default=str)
+    elif future_type == "$items":
+        return json.dumps({"data": list(ctx.items), "type": future_type, "seeds": seeds}, default=str)
+    else:
+        return json.dumps({"data": "", "type": future_type, "seeds": seeds}, default=str)
 
 class Mocker:
 
@@ -79,7 +93,7 @@ class Mocker:
         }
 
 
-class Rpc:
+class Rpc(GrpcService):
     def __init__(self):
         self.spider: Spider = ...
         self.running: bool = False
@@ -180,12 +194,14 @@ class Rpc:
         mocker = mocker or Mocker(rpc.on_finish)
         hooks = mocker.create_hooks()
 
+
         modded.setdefault("on_request", hooks["on_request"])
         modded.setdefault("on_response", hooks["on_response"])
         modded.setdefault("on_retry", hooks["on_retry"])
         ctx_modded.setdefault("failure", hooks["failure"])
         ctx_modded.setdefault("error", hooks["error"])
         ctx_modded.setdefault("success", hooks["success"])
+        ctx_modded.setdefault("to_json", ctx2json)
 
         local = LocalQueue()
         key = f"{spider.__module__}.{spider.__name__}"

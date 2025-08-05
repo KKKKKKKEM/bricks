@@ -1,0 +1,24 @@
+// generic.proto
+syntax = "proto3";
+
+package generic;
+
+// Request 携带一个 JSON 字符串作为其 data。
+message Request {
+  string method = 1;      // 要在服务器上调用的方法名称
+  string data = 2;     // 实际的请求数据，为 JSON 字符串
+  string request_id = 3;       // 可选：用于追踪/关联
+}
+
+// Response 携带一个 JSON 字符串作为其 data。
+message Response {
+  string data = 1;     // 实际的响应数据，为 JSON 字符串
+  string message = 2;    // 可选：如果发生错误
+  int32 code = 3;        // 可选：自定义错误码
+  string request_id = 4;       // 可选：回传用于追踪
+}
+
+// Generic 定义了一个接受和返回通用 JSON 消息的 RPC 方法。
+service Generic {
+  rpc process (Request) returns (Response) {}
+}
