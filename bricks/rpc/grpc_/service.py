@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from concurrent import futures
 from typing import Callable
@@ -74,10 +75,14 @@ class GrpcService(pb2_grpc.GenericServicer):
             if inspect.iscoroutinefunction(handler_method):
                 result_data = await prepared.func(*prepared.args, **prepared.kwargs)
             else:
-                result_data = prepared.func(*prepared.args, **prepared.kwargs)
+                loop = asyncio.get_running_loop()
+                result_data = await loop.run_in_executor(
+                    getattr(self, "_executor", None),
+                    lambda: prepared.func(*prepared.args, **prepared.kwargs)
+                )
 
             def to_json(obj):
-                if hasattr(obj,"to_json"):
+                if hasattr(obj, "to_json"):
                     return obj.to_json()
                 return str(obj)
 
@@ -115,7 +120,9 @@ class GrpcService(pb2_grpc.GenericServicer):
         :return:
         """
         # 使用 grpc.aio.server 启动异步服务器
-        server = grpc.aio.server(futures.ThreadPoolExecutor(max_workers=concurrency))
+        _executor = futures.ThreadPoolExecutor(max_workers=concurrency)
+        setattr(self, "_executor", _executor)
+        server = grpc.aio.server(_executor)
 
         # 将您的业务服务实例添加到 gRPC 服务器。
         rpc_method_handlers = {

@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 from loguru import logger
 
@@ -98,8 +99,30 @@ class MySpider(air.Spider):
 
 # 运行 grpc 服务
 
-def run_server():
+def run_rpc_server():
+    """
+    启动 rpc 服务, client 调用一次, 跑一次
+
+    :return:
+    """
     rpc = Rpc.wrap(MySpider)
+    """
+    serve 的参数配置如下:
+        :param concurrency: 并发
+        :param port: 监听端口, 默认随机
+        :param on_server_started: 当服务启动完后的会回调, 如果是随机端口, 可以使用这个回调来获取端口, 或者链接其他服务
+    
+    """
+    asyncio.run(rpc.serve())
+
+
+def run_listener_server():
+    """
+    启动 listener 服务, 通过 submit 投放种子, 后台跑
+
+    :return:
+    """
+    rpc = Rpc.listen(MySpider)
     """
     serve 的参数配置如下:
         :param concurrency: 并发
@@ -118,9 +141,13 @@ def test_client(endpoint: str):
     :return:
     """
     client = GrpcClient(endpoint)
-    print(client.rpc("execute", {"page": 1}))
+    for _ in range(100):
+        t = time.time()
+        # threading.Thread(target=client.rpc, args=("execute", {"page": 1})).start()
+        client.rpc("execute", {"page": 1})  # 这个是阻塞的, 可以使用线程提交
+        print(time.time() - t)
 
 
 if __name__ == "__main__":
-    # run_server()
-    test_client("localhost:54170")
+    # run_rpc_server()
+    test_client("localhost:54604")  # 修改返回的端口
