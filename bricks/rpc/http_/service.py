@@ -52,12 +52,12 @@ class Service(BaseRpcService):
                 "request_id": ""
             }, status=500)
 
-    async def serve(self, concurrency: int = 10, port: int = 0, on_server_started: Callable[[int], None] = None):
+    async def serve(self, concurrency: int = 10, ident: int = 0, on_server_started: Callable[[int], None] = None, **kwargs):
         """
         启动 HTTP RPC 服务器
 
         :param concurrency: 并发数
-        :param port: 监听端口，默认随机
+        :param ident: 监听端口，默认随机
         :param on_server_started: 当服务启动完后的回调
         """
         # 设置线程池
@@ -72,7 +72,7 @@ class Service(BaseRpcService):
         await runner.setup()
 
         # 启动服务器
-        site = web.TCPSite(runner, '0.0.0.0', port)
+        site = web.TCPSite(runner, '0.0.0.0', ident)
         await site.start()
 
         # 获取实际端口

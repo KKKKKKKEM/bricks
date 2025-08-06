@@ -3,7 +3,7 @@ import collections
 import concurrent.futures
 import json
 import uuid
-from typing import Type, Union, Callable, Optional, Literal, List
+from typing import Type, Union, Callable, Optional, List
 
 from loguru import logger
 
@@ -11,7 +11,7 @@ from bricks.core import signals, dispatch
 from bricks.core.events import REGISTERED_EVENTS
 from bricks.lib.items import Items
 from bricks.lib.queues import Item, LocalQueue, TaskQueue
-from bricks.rpc.common import serve_async
+from bricks.rpc.common import serve_async, MODE
 from bricks.spider.air import Context, Spider
 
 
@@ -248,20 +248,21 @@ class Rpc:
     def serve(
             self,
             concurrency: int = 10,
-            port: int = 0,
+            ident: any = 0,
             on_server_started: Callable[[int], None] = None,
-            mode: Literal["http", "websocket", "socket", "grpc"] = "http"
+            mode: MODE = "http",
+            **kwargs
     ):
         """
         启动 RPC 服务器
 
         :param mode: rpc 模式: http, websocket, socket, grpc
         :param concurrency: 并发数
-        :param port: 监听端口，默认随机
+        :param ident: 监听端口 / 标识(redis)，默认随机
         :param on_server_started: 当服务启动完后的回调
         """
         self.spider.dispatcher = dispatch.Dispatcher(max_workers=concurrency)
-        coro = serve_async(self, mode=mode, concurrency=concurrency, port=port, on_server_started=on_server_started)
+        coro = serve_async(self, mode=mode, concurrency=concurrency, ident=ident, on_server_started=on_server_started, **kwargs)
         try:
             with self.spider.dispatcher:
                 asyncio.run_coroutine_threadsafe(coro, loop=self.spider.dispatcher.loop)

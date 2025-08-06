@@ -26,5 +26,11 @@ def test_grpc(port: int):
     client = Client(f"localhost:{port}")
     print(client.rpc("execute", {"page": 1}))
 
+def test_redis(ident: str):
+    """测试 Redis 客户端"""
+    from bricks.rpc.redis_.service import Client
+    client = Client(f"redis://:0boNLgeuiPIxv7@127.0.0.1:6379/0?server_id={ident}")
+    print(client.rpc("execute", {"page": 1}))
+
 if __name__ == '__main__':
-    test_grpc(64880)
+    test_redis("1")

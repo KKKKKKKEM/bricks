@@ -186,7 +186,13 @@ class BaseRpcService:
                 request_id=request_id
             )
 
-    async def serve(self, concurrency: int = 10, port: int = 0, on_server_started: Callable[[int], None] = None):
+    async def serve(
+            self,
+            concurrency: int = 10,
+            ident: any = 0,
+            on_server_started: Callable[[any], None] = None,
+            **kwargs
+    ):
         """
         启动服务器的抽象方法，子类需要实现
         """
@@ -221,22 +227,28 @@ class BaseRpcClient:
         )
 
 
+MODE = Literal["http", "websocket", "socket", "grpc", "redis"]
+
+
 def serve(
         obj: Any,
-        mode: Literal["http", "websocket", "socket", "grpc"] = "http",
+        mode: MODE = "http",
         concurrency: int = 10,
-        port: int = 0,
-        on_server_started: Callable[[int], None] = None
+        ident: any = 0,
+        on_server_started: Callable[[int], None] = None,
+        **kwargs
 ):
-    asyncio.run(serve_async(obj, mode=mode, concurrency=concurrency, port=port, on_server_started=on_server_started))
+    asyncio.run(serve_async(obj, mode=mode, concurrency=concurrency, ident=ident, on_server_started=on_server_started,
+                            **kwargs))
 
 
 async def serve_async(
         obj: Any,
-        mode: Literal["http", "websocket", "socket", "grpc"] = "http",
+        mode: MODE = "http",
         concurrency: int = 10,
-        port: int = 0,
-        on_server_started: Callable[[int], None] = None
+        ident: any = 0,
+        on_server_started: Callable[[int], None] = None,
+        **kwargs
 ):
     if mode == "http":
         from bricks.rpc.http_ import service
@@ -246,12 +258,14 @@ async def serve_async(
         from bricks.rpc.socket_ import service
     elif mode == "grpc":
         from bricks.rpc.grpc_ import service
+    elif mode == "redis":
+        from bricks.rpc.redis_ import service
     else:
         raise ValueError(f"不支持的模式: {mode}")
 
     server: BaseRpcService = service.Service()
     server.bind_target(target=obj)
     try:
-        await server.serve(concurrency=concurrency, port=port, on_server_started=on_server_started)
+        await server.serve(concurrency=concurrency, ident=ident, on_server_started=on_server_started, **kwargs)
     except (KeyboardInterrupt, SystemExit):
         return

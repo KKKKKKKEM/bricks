@@ -50,12 +50,12 @@ class Service(pb2_grpc.GenericServicer, BaseRpcService):
             request_id=rpc_response.request_id
         )
 
-    async def serve(self, concurrency: int = 10, port: int = 0, on_server_started: Callable[[int], None] = None):
+    async def serve(self, concurrency: int = 10, ident: int = 0, on_server_started: Callable[[int], None] = None, **kwargs):
         """
         启动 gRPC 服务器
 
         :param concurrency: 并发
-        :param port: 监听端口, 默认随机
+        :param ident: 监听端口, 默认随机
         :param on_server_started: 当服务启动完后的会回调, 如果是随机端口, 可以使用这个回调来获取端口, 或者链接其他服务
         :return:
         """
@@ -67,11 +67,11 @@ class Service(pb2_grpc.GenericServicer, BaseRpcService):
         # 将您的业务服务实例添加到 gRPC 服务器。
 
         pb2_grpc.add_generic_servicer_to_server(self, server)
-        port = server.add_insecure_port(f'[::]:{port}')
-        logger.info(f"gRPC Server started on port {port} (insecure)...")
+        ident = server.add_insecure_port(f'[::]:{ident}')
+        logger.info(f"gRPC Server started on port {ident} (insecure)...")
         await server.start()
         try:
-            on_server_started and on_server_started(port)
+            on_server_started and on_server_started(ident)
             await server.wait_for_termination()
         except KeyboardInterrupt:
             # 当接收到 Ctrl+C 时，优雅地关闭服务器

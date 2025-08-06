@@ -265,62 +265,63 @@ def spider_with_downloader_example():
         from bricks.spider.form import Parse, Spider
         from bricks.spider.form import Request as SpiderRequest
 
-        print("1. 创建自定义下载器配置的爬虫")
+        print("1. 演示爬虫中下载器的使用")
 
         # 创建带自定义配置的下载器
         custom_downloader = RequestsDownloader()
         custom_downloader.debug = True  # 开启调试模式
 
-        # 创建爬虫实例，传入自定义下载器
-        spider = Spider(
-            downloader=custom_downloader,  # 传入自定义下载器
-            concurrency=2,  # 并发数
-            interval=1.0,  # 请求间隔
-        )
+        print("✓ 创建了自定义下载器，开启了调试模式")
 
-        # 定义解析函数
-        def parse_httpbin_data(response):
-            """解析 httpbin 响应数据"""
-            data = response.json()
-            print(f"  解析到的数据: {data.get('url', 'N/A')}")
-            print(f"  User-Agent: {data.get('headers', {}).get('User-Agent', 'N/A')}")
-            return {
-                "url": data.get("url"),
-                "user_agent": data.get("headers", {}).get("User-Agent"),
-            }
+        # 演示如何创建一个简单的爬虫类
+        class SimpleSpider(Spider):
+            def __init__(self, downloader, **kwargs):
+                super().__init__(downloader=downloader, **kwargs)
 
-        # 添加爬取任务
-        spider.add_task(
-            SpiderRequest(
-                url="https://httpbin.org/get",
-                params={"spider": "demo", "downloader": "requests"},
-                headers={"X-Spider": "Bricks-Demo"},
-            ),
-            Parse(func=parse_httpbin_data),
-        )
+            @property
+            def config(self):
+                from bricks.spider.form import Config, Download, Init, Parse
+
+                return Config(
+                    init=[Init(func=lambda: {"test": "spider_demo"})],
+                    spider=[
+                        Download(
+                            url="https://httpbin.org/get",
+                            params={"spider": "demo", "downloader": "requests"},
+                            headers={"X-Spider": "Bricks-Demo"},
+                        ),
+                        Parse(func=self.parse_httpbin_data),
+                    ],
+                )
+
+            def parse_httpbin_data(self, context):
+                """解析 httpbin 响应数据"""
+                response = context.response
+                data = response.json()
+                print(f"  ✓ 解析到的数据: {data.get('url', 'N/A')}")
+                print(
+                    f"  ✓ User-Agent: {data.get('headers', {}).get('User-Agent', 'N/A')[:50]}..."
+                )
+                context.success()  # 标记成功
+                return {
+                    "url": data.get("url"),
+                    "user_agent": data.get("headers", {}).get("User-Agent"),
+                }
 
         print("2. 运行爬虫（使用自定义下载器）")
-        results = list(spider.run())
-        print(f"爬取结果数量: {len(results)}")
 
-        print("\n3. 使用不同下载器的爬虫对比")
+        # 创建爬虫实例，传入自定义下载器
+        spider = SimpleSpider(downloader=custom_downloader, concurrency=1)
 
-        # 使用 httpx 下载器的爬虫
-        httpx_downloader = HttpxDownloader()
-        httpx_spider = Spider(downloader=httpx_downloader, concurrency=1)
+        # 运行爬虫
+        results = spider.run()
+        print(f"✓ 爬虫运行完成")
 
-        httpx_spider.add_task(
-            SpiderRequest(
-                url="https://httpbin.org/get",
-                params={"downloader": "httpx"},
-                headers={"X-Downloader": "Httpx"},
-            ),
-            Parse(func=parse_httpbin_data),
-        )
-
-        print("使用 Httpx 下载器的爬虫:")
-        httpx_results = list(httpx_spider.run())
-        print(f"Httpx 爬虫结果数量: {len(httpx_results)}")
+        print("\n3. 下载器在爬虫中的作用")
+        print("- 下载器负责发送 HTTP 请求")
+        print("- 爬虫通过 downloader 参数传入自定义下载器")
+        print("- 可以根据需求选择不同的下载器（requests, httpx, tls_client 等）")
+        print("- 下载器的配置会影响整个爬虫的行为")
 
         print("\n4. 爬虫下载器配置示例")
 
