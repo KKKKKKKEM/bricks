@@ -1,20 +1,21 @@
+import asyncio
 import collections
 import concurrent.futures
 import json
 import uuid
-from typing import Type, Union, Callable, Optional
+from typing import Type, Union, Callable, Optional, Literal, List
 
 from loguru import logger
 
-from bricks.core import signals
+from bricks.core import signals, dispatch
 from bricks.core.events import REGISTERED_EVENTS
 from bricks.lib.items import Items
 from bricks.lib.queues import Item, LocalQueue, TaskQueue
+from bricks.rpc.common import serve_async
 from bricks.spider.air import Context, Spider
-from bricks.rpc.grpc_.service import GrpcService
+
 
 def ctx2json(ctx: Context):
-
     seeds = ctx.seeds
     future_type = seeds.get("$futureType", "$response")
     if future_type == "$request":
@@ -26,9 +27,10 @@ def ctx2json(ctx: Context):
     else:
         return json.dumps({"data": "", "type": future_type, "seeds": seeds}, default=str)
 
+
 class Mocker:
 
-    def __init__(self, *on_finish: Callable[[Context, Optional[Exception]], None]):
+    def __init__(self, on_finish: Callable[[Context, Optional[Exception]], None]):
         self.on_finish = on_finish
 
     def create_hooks(self):
@@ -36,23 +38,20 @@ class Mocker:
             future_max_retry = ctx.seeds.get("$futureMaxRetry")
             future_retry = ctx.seeds.get("$futureRetry") or 0
             if future_retry >= future_max_retry:
-                for on_finish in self.on_finish:
-                    on_finish(ctx, RuntimeError(f"超出最大重试次数: {future_max_retry} 次"))
+                self.on_finish(ctx, RuntimeError(f"超出最大重试次数: {future_max_retry} 次"))
                 return ctx.success(shutdown)
             else:
                 return super(ctx.__class__, ctx).retry()
 
         def error(ctx: Context, e: Exception, shutdown=True):
             if shutdown:
-                for on_finish in self.on_finish:
-                    on_finish(ctx, e)
+                self.on_finish(ctx, e)
                 return ctx.success(shutdown)
             else:
                 return super(ctx.__class__, ctx).error(e, shutdown)
 
         def success(ctx: Context, shutdown=False):
-            for on_finish in self.on_finish:
-                on_finish(ctx, None)
+            self.on_finish(ctx, None)
             return super(ctx.__class__, ctx).success(shutdown)
 
         def on_request(spider, context: Context):
@@ -66,8 +65,7 @@ class Mocker:
             try:
                 return super(spider.__class__, spider).on_retry(context)
             except signals.Success:
-                for on_finish in self.on_finish:
-                    on_finish(context, RuntimeError("超出最大重试次数"))
+                self.on_finish(context, RuntimeError("超出最大重试次数"))
                 raise
 
         def on_response(spider, context: Context):
@@ -93,22 +91,19 @@ class Mocker:
         }
 
 
-class Rpc(GrpcService):
+class Rpc:
     def __init__(self):
         self.spider: Spider = ...
         self.running: bool = False
         self._futures = collections.defaultdict(concurrent.futures.Future)
-        self.form = "rpc"
+        self._on_finish: List[Callable[[Context, Optional[Exception]], None]] = []
 
     def run(self):
-
-        self.spider.dispatcher.start()
-        self.running = True
-        if self.form == "listener":
-            logger.debug(
-                f'[开始监听] {self.spider.__class__.__name__}, queueName: {self.spider.queue_name}, queueType: {self.spider.task_queue.__class__.__name__}')
-            self.spider.run_spider()
-        return self
+        spider_name = self.spider.__class__.__name__
+        queue_name = self.spider.queue_name
+        queue_type = self.spider.task_queue.__class__.__name__
+        logger.info(f'[开始监听] {spider_name}, queueName: {queue_name}, queueType: {queue_type}')
+        self.spider.run_spider()
 
     def stop(self):
         self.running = False
@@ -151,10 +146,7 @@ class Rpc(GrpcService):
         :param seeds: 需要消耗的种子
         :return:
         """
-        if self.form != "rpc":
-            self.spider.put_seeds(seeds)
-        else:
-            raise RuntimeError("只能在 listener 模式下使用 submit")
+        self.spider.put_seeds(seeds)
 
     @classmethod
     def wrap(
@@ -164,7 +156,7 @@ class Rpc(GrpcService):
             modded: dict = None,
             ctx_modded: dict = None,
             mocker: Mocker = None,
-            use_local: bool = True
+            ensure_local: bool = True
     ):
         """
         将 Spider 转化为 RPC, 等于后台运行爬虫, 支持动态添加种子, 然后获取该种子消耗的结果
@@ -177,8 +169,8 @@ class Rpc(GrpcService):
 
         也就是说: 如果你有翻页事件, 且在 pipeline, 则不会生效 (但是我们一般都不需要这个, 建议自己注释掉)
 
-        :param use_local:
-        :param mocker:
+        :param ensure_local: 确保使用本地队列
+        :param mocker: 默认的 mocker
         :param spider: 爬虫类
         :param modded: 魔改 class
         :param attrs: 初始化参数
@@ -193,7 +185,6 @@ class Rpc(GrpcService):
 
         mocker = mocker or Mocker(rpc.on_finish)
         hooks = mocker.create_hooks()
-
 
         modded.setdefault("on_request", hooks["on_request"])
         modded.setdefault("on_response", hooks["on_response"])
@@ -214,7 +205,7 @@ class Rpc(GrpcService):
         rpc.spider = spider(**attrs)
         default_attrs = {"forever": True}
 
-        if use_local:
+        if ensure_local:
             default_attrs.update(**{
                 "task_queue": local,
                 "spider.task_queue": local,
@@ -247,20 +238,33 @@ class Rpc(GrpcService):
         except Exception as e:
             logger.warning(f"[error] 放弃存储: {future_id}, error: {e}")
 
-    @classmethod
-    def listen(
-            cls,
-            spider: Type[Spider],
-            attrs: dict = None,
-            on_finish: Callable[[Context, Optional[Exception]], None] = None
+        for on_finish in self._on_finish:
+            on_finish(ctx, error)
+
+    def with_callback(self, *on_finish: Callable[[Context, Optional[Exception]], None]):
+        self._on_finish.extend(on_finish)
+        return self
+
+    def serve(
+            self,
+            concurrency: int = 10,
+            port: int = 0,
+            on_server_started: Callable[[int], None] = None,
+            mode: Literal["http", "websocket", "socket", "grpc"] = "http"
     ):
+        """
+        启动 RPC 服务器
 
-        def private_on_finish(ctx: Context, error: Optional[Exception]):
-            future_id = ctx.seeds.get("$futureID")
-            future_id and ins.on_finish(ctx, error)
-            on_finish and on_finish(ctx, error)
-
-        mocker = Mocker(private_on_finish)
-        ins = cls.wrap(spider=spider, attrs=attrs, mocker=mocker, use_local=False)
-        ins.form = "listener"
-        return ins
+        :param mode: rpc 模式: http, websocket, socket, grpc
+        :param concurrency: 并发数
+        :param port: 监听端口，默认随机
+        :param on_server_started: 当服务启动完后的回调
+        """
+        self.spider.dispatcher = dispatch.Dispatcher(max_workers=concurrency)
+        coro = serve_async(self, mode=mode, concurrency=concurrency, port=port, on_server_started=on_server_started)
+        try:
+            with self.spider.dispatcher:
+                asyncio.run_coroutine_threadsafe(coro, loop=self.spider.dispatcher.loop)
+                self.run()
+        except (KeyboardInterrupt, SystemExit):
+            return

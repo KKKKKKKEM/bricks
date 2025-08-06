@@ -1,17 +1,16 @@
-import asyncio
-import time
+"""
+纯代码式开发, 所有内容都通过编写代码
+
+"""
 
 from loguru import logger
 
 from bricks import Request, const
 from bricks.core import events, signals
-from bricks.rpc.grpc_.service import GrpcClient
 from bricks.spider import air
-from bricks.spider.addon import Rpc
 from bricks.spider.air import Context
 
 
-# 编写一个 spider
 class MySpider(air.Spider):
     def make_seeds(self, context: Context, **kwargs):
         # 因为只需要爬这个种子
@@ -44,6 +43,7 @@ class MySpider(air.Spider):
 
     def parse(self, context: Context):
         response = context.response
+        print(response.text)
         if context.seeds.get("$config", 0) == 0:
             return response.extract(
                 engine="json",
@@ -92,62 +92,7 @@ class MySpider(air.Spider):
                 # 重试信号
                 raise signals.Retry
 
-        context.response.status_code = 429
-
-        # raise signals.Retry
-
-
-# 运行 grpc 服务
-
-def run_rpc_server():
-    """
-    启动 rpc 服务, client 调用一次, 跑一次
-
-    :return:
-    """
-    rpc = Rpc.wrap(MySpider)
-    """
-    serve 的参数配置如下:
-        :param concurrency: 并发
-        :param port: 监听端口, 默认随机
-        :param on_server_started: 当服务启动完后的会回调, 如果是随机端口, 可以使用这个回调来获取端口, 或者链接其他服务
-    
-    """
-    asyncio.run(rpc.serve())
-
-
-def run_listener_server():
-    """
-    启动 listener 服务, 通过 submit 投放种子, 后台跑
-
-    :return:
-    """
-    rpc = Rpc.listen(MySpider)
-    """
-    serve 的参数配置如下:
-        :param concurrency: 并发
-        :param port: 监听端口, 默认随机
-        :param on_server_started: 当服务启动完后的会回调, 如果是随机端口, 可以使用这个回调来获取端口, 或者链接其他服务
-    
-    """
-    asyncio.run(rpc.serve())
-
-
-def test_client(endpoint: str):
-    """
-
-
-    :param endpoint: 这个是 grpc 监听的 ip和端口
-    :return:
-    """
-    client = GrpcClient(endpoint)
-    for _ in range(100):
-        t = time.time()
-        # threading.Thread(target=client.rpc, args=("execute", {"page": 1})).start()
-        client.rpc("execute", {"page": 1})  # 这个是阻塞的, 可以使用线程提交
-        print(time.time() - t)
-
 
 if __name__ == "__main__":
-    # run_rpc_server()
-    test_client("localhost:54604")  # 修改返回的端口
+    spider = MySpider()
+    spider.run()

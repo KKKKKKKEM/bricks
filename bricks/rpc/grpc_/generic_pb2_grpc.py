@@ -7,7 +7,6 @@ pandora.require("grpcio==1.74.0")
 import grpc
 from bricks.rpc.grpc_ import generic_pb2
 
-
 GRPC_GENERATED_VERSION = '1.74.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
@@ -57,7 +56,14 @@ class GenericServicer(object):
         raise NotImplementedError('Method not implemented!')
 
 
-def add_generic_servicer_to_server(rpc_method_handlers, server):
+def add_generic_servicer_to_server(servicer: GenericServicer, server):
+    rpc_method_handlers = {
+        'rpc': grpc.unary_unary_rpc_method_handler(
+            servicer.rpc,
+            request_deserializer=generic_pb2.Request.FromString,
+            response_serializer=generic_pb2.Response.SerializeToString,
+        ),
+    }
     generic_handler = grpc.method_handlers_generic_handler('generic.Generic', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
     server.add_registered_method_handlers('generic.Generic', rpc_method_handlers)
@@ -70,15 +76,15 @@ class Generic(object):
 
     @staticmethod
     def rpc(request,
-                target,
-                options=(),
-                channel_credentials=None,
-                call_credentials=None,
-                insecure=False,
-                compression=None,
-                wait_for_ready=None,
-                timeout=None,
-                metadata=None):
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
         return grpc.experimental.unary_unary(
             request,
             target,

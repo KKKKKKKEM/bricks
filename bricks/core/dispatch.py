@@ -442,7 +442,13 @@ class Dispatcher:
             await self._shutdown.wait()
             self._set_env()
 
-        asyncio.run(main())
+        try:
+            loop = asyncio.get_running_loop()
+            future = asyncio.run_coroutine_threadsafe(main(), loop=loop)
+            future.result()
+        except RuntimeError:
+            asyncio.run(main())
+
 
     def stop(self):
         self.stop_worker(*self.workers.keys())

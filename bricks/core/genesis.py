@@ -139,7 +139,7 @@ class Chaos(metaclass=MetaClass):
 
             except (signals.Failure, signals.Success):
                 logger.debug(f"[{const.BEFORE_START}] 任务被中断")
-                return
+                return None
 
             except signals.Signal as e:
                 logger.warning(f"[{const.BEFORE_START}] 无法处理的信号类型: {e}")

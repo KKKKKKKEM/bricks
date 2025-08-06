@@ -627,7 +627,6 @@ class Spider(Pangu):
 
                 except (KeyboardInterrupt, SystemExit):
                     raise
-
                 except Exception as e:
                     EventManager.invoke(
                         Error(context=context, error=e), errors="output"

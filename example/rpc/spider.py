@@ -2,11 +2,11 @@ from loguru import logger
 
 from bricks import Request, const
 from bricks.core import events, signals
-from bricks.lib.queues import RedisQueue
 from bricks.spider import air
 from bricks.spider.air import Context
 
 
+# 编写一个 spider
 class MySpider(air.Spider):
     def make_seeds(self, context: Context, **kwargs):
         # 因为只需要爬这个种子
@@ -39,7 +39,6 @@ class MySpider(air.Spider):
 
     def parse(self, context: Context):
         response = context.response
-        print(response.text)
         if context.seeds.get("$config", 0) == 0:
             return response.extract(
                 engine="json",
@@ -73,11 +72,6 @@ class MySpider(air.Spider):
         # 确认种子爬取完毕后删除, 不删除的话后面又会爬取
         context.success()
 
-    # @events.on(const.BEFORE_REQUEST)
-    # def mock_resp(self, context: Context):
-    #     resp = bricks.Response(content=str({"code": 0, "msg": "mock_resp"}))
-    #     context.switch({"response": resp}, by="block")
-
     @staticmethod
     @events.on(const.AFTER_REQUEST)
     def is_success(context: Context):
@@ -93,25 +87,6 @@ class MySpider(air.Spider):
                 # 重试信号
                 raise signals.Retry
 
-    #
-    # def catch(self, exception: Error):
-    #     super().catch(exception)
+        context.response.status_code = 429
 
-
-if __name__ == "__main__":
-    spider = MySpider(
-        proxy={
-            'ref': "bricks.lib.proxies.ClashProxy",
-            'key': "127.0.0.1:9097",
-            # "scheme": "http",
-            # "threshold": 10, # 一个节点请求多少次就更换
-        },
-        # downloader=go_requests.Downloader(),
-        # task_queue=RedisQueue(password="0boNLgeuiPIxv7"),
-        # **{
-        #     "init.history.ttl": 3600,
-        #     "init.record.ttl": 0
-        # }
-        # concurrency=5
-    )
-    spider.run()
+        # raise signals.Retry
