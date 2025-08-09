@@ -6,6 +6,7 @@ import random
 import re
 import string
 from datetime import datetime, timedelta
+from typing import List, Optional, Union
 
 _re_hash = re.compile(r"#")
 _re_perc = re.compile(r"%")
@@ -298,11 +299,11 @@ def locale():
     """
     language_code = _choice(list(language_locale_codes.keys()))
     return (
-            language_code
-            + "_"
-            + _choice(
-        language_locale_codes[language_code],
-    )
+        language_code
+        + "_"
+        + _choice(
+            language_locale_codes[language_code],
+        )
     )
 
 
@@ -395,6 +396,8 @@ android_versions = (
     "12",  # Android 12
     "12L",  # Android 12L
     "13",  # Android 13
+    "14",  # Android 14
+    "15",  # Android 15
 )
 
 apple_devices = ("iPhone", "iPad")
@@ -722,10 +725,11 @@ phone_models = (
 )
 
 nettypes = (
+    "5G",
     "4G",
     "WIFI",
-    "2G",
     "3G",
+    "2G",
 )
 
 
@@ -745,8 +749,7 @@ def mac_platform_token():
     :return:
     """
 
-    return "Macintosh; {} Mac OS X {} {}".format(
-        random.randint(10, 11),
+    return "Macintosh; {} Mac OS X {}".format(
         _choice(mac_processors),
         _choice(mac_versions).replace(".", "_"),
     )
@@ -770,6 +773,47 @@ def android_platform_token():
     return "Android {}".format(_choice(android_versions))
 
 
+def _android_build_id():
+    # 生成类似于 TP1A.220624.014 的 Build ID
+    letters = "TPQRSUVA"  # 常见前缀字母
+    prefix = (
+        random.choice(list(letters))
+        + random.choice(list(letters))
+        + str(random.randint(1, 9))
+        + random.choice(["A", "B"])
+    )
+    y = random.choice(["21", "22", "23", "24", "25"])  # 2021-2025
+    m = random.choice(
+        ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
+    )
+    d = random.choice(["01", "05", "10", "15", "20", "24", "30"])  # 常见补丁日
+    patch = f"{y}{m}{d}"
+    tail = f"{random.randint(1, 999):03d}"
+    return f"{prefix}.{patch}.{tail}"
+
+
+def android_platform_token_full():
+    """
+    更真实的 Android 平台 token，包含 Linux; Android 版本; 机型 Build/ID
+    例如: Linux; Android 13; SM-G991B Build/TP1A.220624.014
+    """
+    version = _choice(android_versions)
+    model = _choice(phone_models)
+    return f"Linux; Android {version}; {model} Build/{_android_build_id()}"
+
+
+def safari_webkit_version():
+    """返回更真实的 Safari WebKit 版本（常见为 605.1.15）"""
+    # 以高概率返回 605.1.15，偶尔返回 604.1 或 606.x
+    roll = random.random()
+    if roll < 0.8:
+        return "605.1.15"
+    elif roll < 0.9:
+        return "604.1"
+    else:
+        return f"606.{random.randint(1, 5)}"
+
+
 def ios_platform_token():
     """
     生成 IOS 平台令牌用于 user-agent
@@ -788,10 +832,14 @@ def wechat_platform_token():
 
     :return:
     """
-    return f'MicroMessenger/{random.randint(5, 9)}.{random.randint(0, 9)}.{random.randint(0, 9)} NetType/{_choice(nettypes)}  Language/{_choice(["en", "zh_CN"])}'
+    return f"MicroMessenger/{random.randint(5, 9)}.{random.randint(0, 9)}.{random.randint(0, 9)} NetType/{_choice(nettypes)}  Language/{_choice(['en', 'zh_CN'])}"
 
 
-def android(android_version_from="8.0", brand: str = None, prefix: str = "Dalvik"):
+def android(
+    android_version_from="8.0",
+    brand: Optional[Union[str, List[str]]] = None,
+    prefix: str = "Dalvik",
+):
     """
     生成 dalvik 平台令牌用于 user-agent
 
@@ -805,7 +853,7 @@ def android(android_version_from="8.0", brand: str = None, prefix: str = "Dalvik
     if brand and not isinstance(brand, list):
         brand = [brand]
     brand = _choice(brand or phone_models)
-    return f'{prefix}/{dalvik_version} (Linux; U; Android {android_version}; {brand} Build/{"".join(random.choices(string.hexdigits, k=4))}.{randomtimes("20000101", datetime.today().strftime("%Y%m%d"), "%Y%m%d")}.{numerify()})'
+    return f"{prefix}/{dalvik_version} (Linux; U; Android {android_version}; {brand} Build/{''.join(random.choices(string.hexdigits, k=4))}.{randomtimes('20000101', datetime.today().strftime('%Y%m%d'), '%Y%m%d')}.{numerify()})"
 
 
 def internet_explorer():
@@ -824,11 +872,11 @@ def internet_explorer():
 
 
 def opera(
-        device="all",
-        version_from=15,
-        version_end=77,
-        chrome_version_from=90,
-        chrome_version_end=120,
+    device="all",
+    version_from=15,
+    version_end=77,
+    chrome_version_from=90,
+    chrome_version_end=120,
 ):
     """
     生成 opera 的 user-agent
@@ -845,7 +893,7 @@ def opera(
     opera_version = f"{random.randint(version_from, version_end)}.0.{random.randint(1000, 9999)}.{random.randint(0, 999)}"
 
     tmp_pc = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) Chrome/{chrome_ver} Safari/{saf_version} OPR/{opera_ver}"
-    opera_mobile = f'Opera/{random.randint(9, 12)}.{random.randint(10, 99)} ({_choice([android_platform_token(), ios_platform_token()])}; Opera Mobile/{bld}; U; {locale().replace("_", "-")}) Presto/{opera_version} Version/{random.randint(10, 12)}.02'
+    opera_mobile = f"Opera/{random.randint(9, 12)}.{random.randint(10, 99)} ({_choice([android_platform_token(), ios_platform_token()])}; Opera Mobile/{bld}; U; {locale().replace('_', '-')}) Presto/{opera_version} Version/{random.randint(10, 12)}.02"
     saf_version = f"{random.randint(531, 537)}.{random.randint(0, 36)}"
     _v = random.randint(chrome_version_from, chrome_version_end)
     chrome_version = (
@@ -898,7 +946,7 @@ def chrome(device="all", version_from=90, version_end=120):
     tmp_android = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) Chrome/{version} Mobile Safari/{saf_version}"
     tmp_iphone = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) CriOS/{version} Mobile/{bld} Safari/{saf_version}"
     tmp_normal = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) Chrome/{version} Safari/{saf_version}"
-    saf_version = f"{random.randint(531, 537)}.{random.randint(0, 36)}"
+    saf_version = "537.36"
     bld = _re_qm.sub(lambda x: _choice(string.ascii_letters), numerify("##?###"))
 
     _v = random.randint(version_from, version_end)
@@ -906,7 +954,7 @@ def chrome(device="all", version_from=90, version_end=120):
 
     platforms_mobile = [
         tmp_android.format(
-            platform=android_platform_token(),
+            platform=android_platform_token_full(),
             saf_version=saf_version,
             version=version,
         ),
@@ -954,16 +1002,16 @@ def firefox(device="all", version_from=90, version_end=120):
     saf_version = f"{random.randint(531, 537)}.{random.randint(0, 36)}"
     bld = _re_qm.sub(lambda x: _choice(string.ascii_letters), numerify("##?###"))
     ver = (
-            datetime.today()
-            - timedelta(
-        days=random.randint(0, (datetime.today() - datetime(2018, 1, 1)).days)
-    )
+        datetime.today()
+        - timedelta(
+            days=random.randint(0, (datetime.today() - datetime(2018, 1, 1)).days)
+        )
     ).strftime("%Y%m%d")
 
     version = f"{random.randint(version_from, version_end)}.{random.randint(0, 3)}.{random.randint(0, 3)}"
 
     platforms_mobile = [
-        tmp_android.format(platform=android_platform_token(), version=version),
+        tmp_android.format(platform=android_platform_token_full(), version=version),
         tmp_iphone.format(
             platform=ios_platform_token(),
             saf_version=saf_version,
@@ -1005,8 +1053,8 @@ def edge(device="all", version_from=90, version_end=120):
     version = f"{_v}.0.{int(_v * (49 + random.random()))}.{random.randint(0, 100)}"
 
     return (
-            chrome(device=device, version_from=version_from, version_end=version_end)
-            + f" Edg/{version}"
+        chrome(device=device, version_from=version_from, version_end=version_end)
+        + f" Edg/{version}"
     )
 
 
@@ -1018,7 +1066,7 @@ def safari(device="all"):
     :return:
     """
     bld = _re_qm.sub(lambda x: _choice(string.ascii_letters), numerify("##?###"))
-    saf_version = f"{random.randint(531, 537)}.{random.randint(0, 36)}"
+    saf_version = safari_webkit_version()
     tmp_mac = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) Version/{mac_version} Safari/{saf_version}"
     tmp_ios = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) Version/{mac_version} Mobile/{bld} Safari/{saf_version}"
 
@@ -1050,7 +1098,7 @@ def wechat(device="all", chrome_version_from=90, chrome_version_end=120):
     :param device: 设备类型, 可选: all/mobile/pc
     :return:
     """
-    saf_version = f"{random.randint(531, 537)}.{random.randint(0, 36)}"
+    saf_version = "537.36"
     bld = _re_qm.sub(lambda x: _choice(string.ascii_letters), numerify("##?###"))
     tmplt = (
         "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko)"
@@ -1115,12 +1163,12 @@ def mobile(*apps):
     while True:
         ua = get(*apps)
         if any(
-                [
-                    ua.lower().__contains__("mobile"),
-                    ua.lower().__contains__("android"),
-                    ua.lower().__contains__("iphone"),
-                    ua.lower().__contains__("ipad"),
-                ]
+            [
+                ua.lower().__contains__("mobile"),
+                ua.lower().__contains__("android"),
+                ua.lower().__contains__("iphone"),
+                ua.lower().__contains__("ipad"),
+            ]
         ):
             return ua
         else:
@@ -1138,12 +1186,12 @@ def pc(*apps):
     while True:
         ua = get(*apps)
         if not any(
-                [
-                    ua.lower().__contains__("mobile"),
-                    ua.lower().__contains__("android"),
-                    ua.lower().__contains__("iphone"),
-                    ua.lower().__contains__("ipad"),
-                ]
+            [
+                ua.lower().__contains__("mobile"),
+                ua.lower().__contains__("android"),
+                ua.lower().__contains__("iphone"),
+                ua.lower().__contains__("ipad"),
+            ]
         ):
             return ua
         else:
@@ -1159,3 +1207,12 @@ def get(*apps):
     """
     name = _choice(apps or user_agents)
     return globals()[name]()
+
+
+if __name__ == "__main__":
+    # 简单的样例输出，便于快速检查格式
+    for fn in [chrome, firefox, safari, edge, opera, wechat, android, pc, mobile]:
+        try:
+            print(fn.__name__, "->", str(fn())[:180])
+        except Exception as e:
+            print(fn.__name__, "error:", e)
