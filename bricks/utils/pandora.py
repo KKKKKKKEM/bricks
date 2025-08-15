@@ -101,10 +101,12 @@ def require(
         action: Literal["raise", "fix"] = "fix",
         mirror_sources: str = "TUNA",
         pip_kwargs: Dict[str, str] = None,
+        mode=None,
 ) -> str:
     """
     依赖 python 包
 
+    :param mode:
     :param action: 依赖操作, 若为 fix 则自动下载对应包,
     :param package_spec: pymongo==4.6.0 / pymongo
     :param mirror_sources : pip 源, 内置有 "TUNA", "USTC", "Aliyun", "Tencent", "Huawei", "pypi", 可以传自己的源进来
@@ -112,6 +114,7 @@ def require(
     :return: 安装的包版本号
     """
     # 分离包名和版本规范
+    mode = mode or os.environ.get('$require_mode') or 'pip'
     package_spec = re.sub(r"\s+", "", package_spec)
     match = PACKAGE_REGEX.match(package_spec)
     mirror_sources = PYPI_MIRROR.get(mirror_sources, mirror_sources)
@@ -121,7 +124,6 @@ def require(
     assert not mirror_sources or PIPY_REGEX.match(mirror_sources), ValueError(
         f"无效的镜像源: {mirror_sources}"
     )
-    mirror_sources and pip_kwargs.setdefault("-i", mirror_sources)
 
     package, operator, required_version = match.groups()
 
@@ -139,13 +141,16 @@ def require(
             return installed_version
 
     except importlib_metadata.PackageNotFoundError:
+        package = package_spec if required_version else package
         # 包没有安装或版本不符合要求
-        install_command = package_spec if required_version else package
-        cmd = [sys.executable, "-m", "pip", "install"]
-        for k, v in pip_kwargs.items():
-            k and cmd.append(k)
-            v and cmd.append(v)
-        cmd.append(install_command)
+        if mode == "pip":
+            cmd = require_cmd_by_pip(package, mirror_sources, pip_kwargs)
+        elif mode == "uv":
+            cmd = require_cmd_by_uv(package, mirror_sources, pip_kwargs)
+        elif isinstance(mode, str) and callable(func := globals().get(f'require_cmd_by_{mode}')):
+            cmd = func(package, mirror_sources, pip_kwargs)
+        else:
+            raise ValueError("mode must be str or not func mode func!")
         if action == "raise":
             raise importlib_metadata.PackageNotFoundError(
                 f"依赖包不符合要求, 请使用以下命令安装: {' '.join(cmd)}"
@@ -154,6 +159,41 @@ def require(
             logger.debug(f"依赖包不符合要求, 自动修正, 命令: {' '.join(cmd)}")
             subprocess.check_call(cmd)
             return importlib_metadata.version(package)
+
+
+def require_cmd_by_pip(
+        package: str,
+        mirror_sources: str = "",
+        pip_kwargs: Dict[str, str] = None
+):
+    mirror_sources and pip_kwargs.setdefault("-i", mirror_sources)
+    cmd = [sys.executable, "-m", "pip", "install"]
+    for k, v in pip_kwargs.items():
+        k and cmd.append(k)
+        v and cmd.append(v)
+    cmd.append(package)
+    return cmd
+
+
+def require_cmd_by_uv(
+        package: str,
+        mirror_sources: str = "",
+        uv_kwargs: Dict[str, str] = None
+):
+    mirror_sources and uv_kwargs.setdefault("--default-index", mirror_sources)
+
+    try:
+        import uv  # noqa
+    except ImportError:
+        require("uv", mode="pip", action="fix")
+        import uv  # noqa
+
+    cmd = [uv.find_uv_bin(), "add"]
+    for k, v in uv_kwargs.items():
+        k and cmd.append(k)
+        v and cmd.append(v)
+    cmd.append(package)
+    return cmd
 
 
 def invoke(
@@ -557,3 +597,7 @@ def guess(_object: Any) -> Any:
 
     else:
         return _object
+
+
+if __name__ == '__main__':
+    require("why-tools", mode="uv", action="raise")
