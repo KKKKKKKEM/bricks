@@ -96,32 +96,56 @@ def load_objects(path_or_reference, reload=False):
         raise ImportError(f"无法导入指定路径或引用: {path_or_reference}")
 
 
+def _build_by_pip(package: str, mirror: str = "", options: Dict[str, str] = None):
+    mirror and options.setdefault("-i", mirror)
+    cmd = [sys.executable, "-m", "pip", "install"]
+    for k, v in options.items():
+        k and cmd.append(k)
+        v and cmd.append(v)
+    cmd.append(package)
+    return cmd
+
+
+def _build_by_uv(package: str, mirror: str = "", options: Dict[str, str] = None):
+    mirror and options.setdefault("--default-index", mirror)
+    cmd = [sys.executable, "-m", "uv", "add"]
+    for k, v in options.items():
+        k and cmd.append(k)
+        v and cmd.append(v)
+    cmd.append(package)
+    return cmd
+
+
 def require(
         package_spec: str,
         action: Literal["raise", "fix"] = "fix",
         mirror_sources: str = "TUNA",
-        pip_kwargs: Dict[str, str] = None,
+        build_options: Dict[str, str] = None,
+        mode: Union[Literal["pip", "uv"], str] = None
 ) -> str:
     """
     依赖 python 包
 
+    :param mode: pip / uv / anything ?
     :param action: 依赖操作, 若为 fix 则自动下载对应包,
     :param package_spec: pymongo==4.6.0 / pymongo
     :param mirror_sources : pip 源, 内置有 "TUNA", "USTC", "Aliyun", "Tencent", "Huawei", "pypi", 可以传自己的源进来
-    :param pip_kwargs: pip 的一些参数, 如 --trusted-host, 单独的参数可以使用 {"--upgrade": ""} 这种方式
+    :param build_options: pip 的一些参数, 如 --trusted-host, 单独的参数可以使用 {"--upgrade": ""} 这种方式
     :return: 安装的包版本号
     """
     # 分离包名和版本规范
+    mode = mode or os.environ.get('REQUIRE_MODE', 'pip')
     package_spec = re.sub(r"\s+", "", package_spec)
     match = PACKAGE_REGEX.match(package_spec)
     mirror_sources = PYPI_MIRROR.get(mirror_sources, mirror_sources)
-    pip_kwargs = pip_kwargs or {}
+    build_options = build_options or {}
 
     assert match, ValueError(f"无效的包规范: {package_spec}")
     assert not mirror_sources or PIPY_REGEX.match(mirror_sources), ValueError(
         f"无效的镜像源: {mirror_sources}"
     )
-    mirror_sources and pip_kwargs.setdefault("-i", mirror_sources)
+
+    mode == "uv" and require("uv", action="raise")
 
     package, operator, required_version = match.groups()
 
@@ -140,16 +164,16 @@ def require(
 
     except importlib_metadata.PackageNotFoundError:
         # 包没有安装或版本不符合要求
-        install_command = package_spec if required_version else package
-        cmd = [sys.executable, "-m", "pip", "install"]
-        for k, v in pip_kwargs.items():
-            k and cmd.append(k)
-            v and cmd.append(v)
-        cmd.append(install_command)
+        package = package_spec if required_version else package
+        builder_func = f'_build_by_{mode}'
+        builder: Callable[[str, str, Dict[str, str]], str] = globals().get(builder_func)
+        if not callable(builder):
+            raise ValueError(f"不支持的安装模式: {mode}")
+
+        cmd: str = builder(package, mirror_sources, build_options)
+
         if action == "raise":
-            raise importlib_metadata.PackageNotFoundError(
-                f"依赖包不符合要求, 请使用以下命令安装: {' '.join(cmd)}"
-            )
+            raise importlib_metadata.PackageNotFoundError(f"依赖包不符合要求, 请使用以下命令安装: {' '.join(cmd)}")
         else:
             logger.debug(f"依赖包不符合要求, 自动修正, 命令: {' '.join(cmd)}")
             subprocess.check_call(cmd)
@@ -447,7 +471,7 @@ def with_metaclass(
         singleton: bool = False,
         thread_safe: bool = True,
         key_maker: Callable = None,
-        autonomous: (Tuple[Union[str, Callable]], List[Union[str, Callable]]) = (),
+        autonomous: Union[Tuple[Union[str, Callable]], List[Union[str, Callable]]]= (),
         wrappers: Union[dict, str] = None,
         modded: dict = None,
 ):
@@ -557,3 +581,7 @@ def guess(_object: Any) -> Any:
 
     else:
         return _object
+
+
+if __name__ == '__main__':
+    require("requests", mode='uv')
