@@ -25,4 +25,4 @@ if __name__ == '__main__':
     # websocket
     # socket
     # grpc
-    rpc.serve(concurrency=10, mode="redis", ident="redis://:0boNLgeuiPIxv7@127.0.0.1:6379/0?server_id=1")
+    rpc.serve(concurrency=10, mode="redis", ident="redis://:0boNLgeuiPIxv7@127.0.0.1:6379/0")

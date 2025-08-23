@@ -33,4 +33,4 @@ def test_redis(ident: str):
     print(client.rpc("execute", {"page": 1}))
 
 if __name__ == '__main__':
-    test_redis("1")
+    test_socket(65161)
