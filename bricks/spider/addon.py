@@ -195,11 +195,7 @@ class Rpc:
         ctx_modded.setdefault("to_json", ctx2json)
 
         local = LocalQueue()
-        key = f"{spider.__module__}.{spider.__name__}"
         spider = type("RPC", (spider,), modded)
-        REGISTERED_EVENTS.lazy_loading[f"{spider.__module__}.{spider.__name__}"] = (
-            REGISTERED_EVENTS.lazy_loading[key].copy()
-        )
 
         spider.Context = type("RPCContext", (spider.Context,), ctx_modded)
         rpc.spider = spider(**attrs)

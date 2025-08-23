@@ -21,7 +21,6 @@ class RegisteredEvents:
         self.permanent = defaultdict(functools.partial(defaultdict, list))
         # 一次性事件
         self.disposable = defaultdict(functools.partial(defaultdict, list))
-        self.lazy_loading = defaultdict(functools.partial(defaultdict, list))
 
         self.registered: Dict[str, List[Register]] = defaultdict(list)
 
@@ -250,20 +249,22 @@ class EventManager:
 
 def on(
         form: str,
-        index: int = None,  # type: ignore
+        index: Optional[int] = None,
         disposable: Optional[bool] = False,
-        binding: Any = ...,  # type: ignore
+        args: Optional[list] = None,
+        kwargs: Optional[dict] = None,
+        match: Optional[Union[Callable, str]] = None,
+        is_global: bool = False,
 ):
     """
     使用装饰器的方式注册事件
     如果有 staticmethod 之类的装饰器, 则需要紧贴着你的函数
 
 
-    :param binding: 事件作用对象, 默认为自动判断
-        如果是类相关的方法(静态方法, 类方法, 实例方法), 则会作用于该类的实例
-        如果是普通函数(则会作用于全局)
-        如果传入了对象, 则仅作用于该对象
-
+    :param is_global: 是否为全局事件, 如果非对象方法 / 类方法, 需要标识为 True 才会起作用
+    :param match:
+    :param kwargs:
+    :param args:
     :param form: 事件类型, 可以传入 const 属性
     :param index: 事件排序, 默认会在最后注册执行, 按照代码顺序索引一次递增, 索引越大, 执行速度越靠后
     :param disposable: 是否为可弃用事件(仅运行一次)
@@ -271,22 +272,18 @@ def on(
     """
 
     def inner(func):
-        if binding is ...:
-            if "." in func.__qualname__:
-                key = f"{func.__module__}.{func.__qualname__.rsplit('.', 1)[0]}"
-                REGISTERED_EVENTS.lazy_loading[key][form].append(
-                    Task(func=func.__name__, index=index, disposable=disposable)
-                )
-            else:
-                EventManager.register(
-                    Context(form=form),
-                    Task(func=func, index=index, disposable=disposable),
-                )
+        e = Task(
+            func=func,
+            index=index,
+            disposable=disposable,
+            args=args,
+            kwargs=kwargs,
+            match=match,
+        )
+        if is_global:
+            EventManager.register(Context(form=form, target=None), e)
         else:
-            EventManager.register(
-                Context(form=form, target=binding),
-                Task(func=func, index=index, disposable=disposable),
-            )
+            setattr(func, "__event__", (form, e))
 
         return func
 
