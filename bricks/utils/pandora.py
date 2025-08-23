@@ -164,13 +164,12 @@ def require(
 
     except importlib_metadata.PackageNotFoundError:
         # 包没有安装或版本不符合要求
-        package = package_spec if required_version else package
         builder_func = f'_build_by_{mode}'
         builder: Callable[[str, str, Dict[str, str]], str] = globals().get(builder_func)
         if not callable(builder):
             raise ValueError(f"不支持的安装模式: {mode}")
 
-        cmd: str = builder(package, mirror_sources, build_options)
+        cmd: str = builder(package_spec if required_version else package, mirror_sources, build_options)
 
         if action == "raise":
             raise importlib_metadata.PackageNotFoundError(f"依赖包不符合要求, 请使用以下命令安装: {' '.join(cmd)}")
