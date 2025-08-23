@@ -15,19 +15,19 @@ class CustomJSONEncoder(json.JSONEncoder):
         """
         重写 default 方法来处理不能被标准 JSON 编码器序列化的对象。
         """
-        # 1. 检查对象是否有 'to_json' 方法
-        if hasattr(obj, 'to_json') and callable(obj.to_json):
+        # 1. 检查对象是否有 'on_json_dump' 方法
+        if hasattr(obj, 'on_json_dump') and callable(obj.on_json_dump):
             try:
-                # 尝试调用 to_json 方法并返回其结果
-                return obj.to_json()
+                # 尝试调用 on_json_dump 方法并返回其结果
+                return obj.on_json_dump()
             except TypeError:
-                # 如果 to_json 方法本身返回了不可序列化的内容，
-                # 或者调用 to_json 失败，就退化到 str()
+                # 如果 on_json_dump 方法本身返回了不可序列化的内容，
+                # 或者调用 on_json_dump 失败，就退化到 str()
                 logger.warning(
-                    f"WARNING: to_json() for {type(obj).__name__} failed or returned un_serializable data, falling back to str().")
+                    f"WARNING: on_json_dump() for {type(obj).__name__} failed or returned un_serializable data, falling back to str().")
                 return str(obj)
 
-        # 2. 如果没有 'to_json' 方法，或者 to_json 处理失败，则将其转换为字符串
+        # 2. 如果没有 'on_json_dump' 方法，或者 on_json_dump 处理失败，则将其转换为字符串
         # 这一步会捕获所有其他未能被 json 默认处理的对象，例如 SimpleObject
         try:
             # 尝试直接使用父类的 default 方法处理，如果可以，就让它处理
@@ -40,6 +40,71 @@ class CustomJSONEncoder(json.JSONEncoder):
             logger.warning(
                 f"DEBUG: Object of type {type(obj).__name__} cannot be serialized by default JSON encoder, falling back to str().")
             return str(obj)
+
+
+class MultiObjectProxy:
+    """多对象代理类，支持按顺序查找和类名.方法名调用"""
+
+    def __init__(self, objects: list):
+        self.objects = []
+        self._method_cache = {}
+        self._class_map = {}  # 类名到对象的映射
+
+        for obj in objects:
+            if inspect.isfunction(obj):
+                # 函数包装成类
+                wrapper_name = f"{obj.__name__.title()}Wrapper"
+                wrapper = type(wrapper_name, (), {obj.__name__: staticmethod(obj)})
+                instance = wrapper()
+                self.objects.append(instance)
+                self._class_map[wrapper_name] = instance
+                self._class_map[obj.__name__] = instance  # 也支持函数名作为类名
+            elif inspect.isclass(obj):
+                # 类实例化
+                instance = obj()
+                self.objects.append(instance)
+                self._class_map[obj.__name__] = instance
+            else:
+                # 已经是实例
+                self.objects.append(obj)
+                self._class_map[obj.__class__.__name__] = obj
+
+    def __getattr__(self, name):
+        # 先检查缓存
+        if name in self._method_cache:
+            return self._method_cache[name]
+
+        # 检查是否为 className.method 格式
+        if '.' in name:
+            class_name, method_name = name.split('.', 1)
+            if class_name in self._class_map:
+                obj = self._class_map[class_name]
+                if hasattr(obj, method_name):
+                    method = getattr(obj, method_name)
+                    if callable(method):
+                        self._method_cache[name] = method
+                        return method
+            raise AttributeError(f"Method '{method_name}' not found in class '{class_name}'")
+
+        # 按顺序查找方法（原有逻辑）
+        for obj in self.objects:
+            if hasattr(obj, name):
+                method = getattr(obj, name)
+                if callable(method):
+                    self._method_cache[name] = method
+                    return method
+
+        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
+
+    def get_available_methods(self):
+        """获取所有可用的方法列表"""
+        methods = {}
+        for obj in self.objects:
+            class_name = obj.__class__.__name__
+            obj_methods = [attr for attr in dir(obj)
+                           if callable(getattr(obj, attr)) and not attr.startswith('_')]
+            methods[class_name] = obj_methods
+        return methods
 
 
 class RpcRequest:
@@ -73,7 +138,7 @@ class RpcResponse:
     """统一的 RPC 响应数据结构"""
 
     def __init__(self, data: str = "", message: str = "", code: int = 0, request_id: str = ""):
-        self.data = pandora.json_or_eval(data) if code == 0 else data
+        self.data = data
         self.message = message
         self.code = code
         self.request_id = request_id
@@ -94,6 +159,13 @@ class RpcResponse:
             code=data.get("code", 0),
             request_id=data.get("request_id", "")
         )
+
+    @staticmethod
+    def ensure_str(data):
+        if isinstance(data, str):
+            return data
+        else:
+            return json.dumps(data, cls=CustomJSONEncoder, ensure_ascii=False)
 
     def __str__(self):
         return f"RpcResponse(data={self.data}, message={self.message}, code={self.code}, request_id={self.request_id})"
@@ -159,19 +231,16 @@ class BaseRpcService:
 
             # 判断业务方法是否是异步的
             if inspect.iscoroutinefunction(handler_method):
-                result_data = await prepared.func(*prepared.args, **prepared.kwargs)
+                result = await prepared.func(*prepared.args, **prepared.kwargs)
             else:
                 loop = asyncio.get_running_loop()
-                result_data = await loop.run_in_executor(
+                result = await loop.run_in_executor(
                     self._executor,
                     lambda: prepared.func(*prepared.args, **prepared.kwargs)
                 )
 
-            # 4. 将业务方法的返回值打包成 JSON 字符串
-            packed_response_payload = json.dumps(result_data, cls=CustomJSONEncoder, ensure_ascii=False)
-
             return RpcResponse(
-                data=packed_response_payload,
+                data=json.dumps(result, cls=CustomJSONEncoder, ensure_ascii=False),
                 request_id=request_id
             )
 
@@ -238,23 +307,31 @@ MODE = Literal["http", "websocket", "socket", "grpc", "redis"]
 
 
 def serve(
-        obj: Any,
+        *obj: Any,
         mode: MODE = "http",
         concurrency: int = 10,
         ident: any = 0,
-        on_server_started: Callable[[int], None] = None,
+        on_server_started: Callable[[any], None] = None,
         **kwargs
 ):
-    asyncio.run(serve_async(obj, mode=mode, concurrency=concurrency, ident=ident, on_server_started=on_server_started,
-                            **kwargs))
+    asyncio.run(
+        start_rpc_server(
+            *obj,
+            mode=mode,
+            concurrency=concurrency,
+            ident=ident,
+            on_server_started=on_server_started,
+            **kwargs
+        )
+    )
 
 
-async def serve_async(
-        obj: Any,
+async def start_rpc_server(
+        *obj: Any,
         mode: MODE = "http",
         concurrency: int = 10,
         ident: any = 0,
-        on_server_started: Callable[[int], None] = None,
+        on_server_started: Callable[[any], None] = None,
         **kwargs
 ):
     if mode == "http":
@@ -270,8 +347,11 @@ async def serve_async(
     else:
         raise ValueError(f"不支持的模式: {mode}")
 
+    proxy = MultiObjectProxy(obj)
+
+
     server: BaseRpcService = service.Service()
-    server.bind_target(target=obj)
+    server.bind_target(target=proxy)
     try:
         await server.serve(concurrency=concurrency, ident=ident, on_server_started=on_server_started, **kwargs)
     except (KeyboardInterrupt, SystemExit):

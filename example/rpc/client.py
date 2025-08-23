@@ -1,4 +1,4 @@
-
+import json
 
 
 def test_http(port: int):
@@ -33,4 +33,4 @@ def test_redis(ident: str):
     print(client.rpc("execute", {"page": 1}))
 
 if __name__ == '__main__':
-    test_socket(65161)
+    test_grpc(53548)

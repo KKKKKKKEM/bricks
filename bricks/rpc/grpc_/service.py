@@ -39,9 +39,6 @@ class Service(pb2_grpc.GenericServicer, BaseRpcService):
         })
 
         rpc_response = await self.process_rpc_request(rpc_request)
-        if rpc_response.code != 0:
-            context.set_code(rpc_response.code)
-            context.set_details(rpc_response.message)
 
         return pb2.Response(
             data=rpc_response.data,
