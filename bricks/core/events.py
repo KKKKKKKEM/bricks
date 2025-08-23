@@ -254,7 +254,6 @@ def on(
         args: Optional[list] = None,
         kwargs: Optional[dict] = None,
         match: Optional[Union[Callable, str]] = None,
-        is_global: bool = False,
 ):
     """
     使用装饰器的方式注册事件
@@ -280,7 +279,8 @@ def on(
             kwargs=kwargs,
             match=match,
         )
-        if is_global:
+
+        if "." in func.__qualname__:
             EventManager.register(Context(form=form, target=None), e)
         else:
             setattr(func, "__event__", (form, e))
