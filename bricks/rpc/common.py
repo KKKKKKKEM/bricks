@@ -114,6 +114,13 @@ class BaseRpcService:
         request_id = request.request_id
         target = self._targe or self
         try:
+            if method_name == "PING":
+                return RpcResponse(
+                    message="success",
+                    data="PONG",
+                    request_id=request_id
+                )
+
             # 1. 检查方法是否存在且已注册
             if not hasattr(target, method_name):
                 logger.error(f"Error: Method '{method_name}' not found or not registered.")

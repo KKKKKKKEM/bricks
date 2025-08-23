@@ -33,15 +33,12 @@ def _parse_redis_endpoint(endpoint: str):
         "db": int(parsed.path.lstrip('/')) if parsed.path and parsed.path != '/' else 0,
     }
 
-    # 提取 server_id
-    server_id = None
-    if "server_id" in query_params:
-        server_id = query_params["server_id"][0]
 
     # 移除 None 值
     config = {k: v for k, v in config.items() if v is not None}
 
-    return config, server_id
+    query_params = {k: v[0] for k, v in query_params.items()}
+    return config, query_params
 
 
 class Service(BaseRpcService):
@@ -57,7 +54,9 @@ class Service(BaseRpcService):
         """
         super().__init__()
         self._running = False
-        self.key_prefix = "rpc"
+        self.input_key = "rpc:request"
+        self.output_key = "rpc:response"
+        self.key_type = "list"
 
     async def _connect_redis(self, endpoint: str, **kwargs):
         """
@@ -68,15 +67,19 @@ class Service(BaseRpcService):
 
         """
         # 解析连接字符串
-        if "key_prefix" in kwargs:
-            self.key_prefix = kwargs.pop("key_prefix")
 
-        self.redis_config, server_id = _parse_redis_endpoint(endpoint)
+
+        self.redis_config, options = _parse_redis_endpoint(endpoint)
+        self.input_key = options.get("input_key") or kwargs.pop("input_key", "rpc:request")
+        self.output_key = options.get("output_key") or kwargs.pop("output_key", "rpc:response")
+        self.key_type = options.get("key_type") or kwargs.pop("key_type", "list")
+        self.server_id = options.get("server_id") or kwargs.pop("server_id", str(uuid.uuid4())) or str(uuid.uuid4())
+
         self.redis_config.update(kwargs)
-        self.server_id = server_id or str(uuid.uuid4())
-
+        self.server_id = options.get("server_id") or str(uuid.uuid4())
         self.redis = async_redis.Redis(**self.redis_config)
-        self.request_queue = f"{self.key_prefix}:requests:{self.server_id}"
+        self.input_key = f"{self.input_key}:{self.server_id}"
+        self.output_key = f"{self.output_key}:{self.server_id}"
 
         # 测试连接
         await self.redis.ping()
@@ -86,12 +89,12 @@ class Service(BaseRpcService):
         """
         监听 Redis 队列中的请求
         """
-        logger.info(f"Redis RPC Server listening on queue: {self.request_queue}")
+        logger.info(f"Redis RPC Server listening on queue: {self.input_key}")
 
         while self._running:
             try:
                 # 使用 BLPOP 阻塞式监听请求，超时时间为 1 秒
-                result = await self.redis.blpop([self.request_queue], timeout=5)
+                result = await self.redis.blpop([self.input_key], timeout=5)
 
                 if result:
                     _, request_data = result
@@ -119,7 +122,7 @@ class Service(BaseRpcService):
             rpc_response = await self.process_rpc_request(rpc_request)
 
             # 将响应存储到 Redis，使用 request_id 作为键
-            response_key = f"{self.key_prefix}:response:{rpc_request.request_id}"
+            response_key = f"{self.output_key}:{rpc_request.request_id}"
             response_data = json.dumps(rpc_response.to_dict())
             await self.redis.lpush(response_key, response_data)
             # 设置响应数据，并设置 30 秒过期时间
@@ -167,7 +170,7 @@ class Service(BaseRpcService):
             self._running = False
             # 清理请求队列
             if self.redis:
-                await self.redis.delete(self.request_queue)
+                await self.redis.delete(self.input_key)
                 await self.redis.close()
 
 
@@ -186,16 +189,21 @@ class Client(BaseRpcClient):
         super().__init__()
 
         # 解析连接字符串
-        self.redis_config, server_id = _parse_redis_endpoint(endpoint)
+        self.redis_config, options = _parse_redis_endpoint(endpoint)
+        self.input_key = options.get("input_key") or kwargs.pop("input_key", "rpc:request")
+        self.output_key = options.get("output_key") or kwargs.pop("output_key", "rpc:response")
+
+        server_id = options.get("server_id") or kwargs.pop("server_id")
+        if not server_id:
+            raise ValueError("server_id is required in endpoint or as parameter")
+
         self.redis_config.update(kwargs)
         self.redis_config.update(decode_responses=True)
         self.key_prefix = self.redis_config.pop("key_prefix", "rpc")
 
-        if not server_id:
-            raise ValueError("server_id is required in endpoint or as parameter")
 
         self.server_id = server_id
-        self.request_queue = f"{self.key_prefix}:requests:{self.server_id}"
+        self.output_key = f"{self.output_key}:{self.server_id}"
         self.redis: Optional[redis.Redis] = None
         self._connected = False
 
@@ -227,7 +235,7 @@ class Client(BaseRpcClient):
         try:
             # 发送请求到服务器队列
             request_data = json.dumps(rpc_request.to_dict())
-            self.redis.rpush(self.request_queue, request_data)
+            self.redis.rpush(self.output_key, request_data)
 
             # 等待响应
             response_key = f"{self.key_prefix}:response:{rpc_request.request_id}"
