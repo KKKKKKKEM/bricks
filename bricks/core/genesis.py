@@ -21,32 +21,29 @@ class MetaClass(type):
         instance = type.__call__(cls, *args, **kwargs)
 
         # 加载拦截器
-        for method in filter(lambda x: str(x).startswith("_when_"), dir(instance)):
+        for method in dir(instance):
             # 修改被拦截的方法
-            raw_method_name = method.replace("_when_", "")
-            raw_method = getattr(instance, raw_method_name, None)
-            if not raw_method:
-                continue
+            if method.startswith("_when_"):
+                raw_method_name = method.replace("_when_", "")
+                raw_method = getattr(instance, raw_method_name, None)
+                if not raw_method:
+                    continue
 
-            method_wrapper = getattr(instance, method)
-            raw_method and setattr(
-                instance, raw_method_name, method_wrapper(raw_method)
-            )  # type: ignore
+                method_wrapper = getattr(instance, method)
+                raw_method and setattr(
+                    instance, raw_method_name, method_wrapper(raw_method)
+                )  # type: ignore
+            else:
+                func = getattr(instance, method, None)
+                if not func or not callable(func):
+                    continue
+
+                if hasattr(func, "__event__"):
+                    instance.use(*func.__event__)
+
 
         else:
             hasattr(instance, "install") and instance.install()  # type: ignore
-            key = f"{cls.__module__}.{cls.__name__}"
-            for form, events in REGISTERED_EVENTS.lazy_loading[key].items():
-                for event in events:
-                    instance.use(
-                        form,
-                        Task(
-                            func=getattr(instance, event.func),
-                            match=event.match,
-                            index=event.index,
-                            disposable=event.disposable,
-                        ),
-                    )
 
         return instance
 

@@ -1208,10 +1208,6 @@ class Spider(Pangu):
         attrs.setdefault("task_queue", LocalQueue())
         attrs.setdefault("queue_name", f"{cls.__module__}.{cls.__name__}:survey")
         clazz = type("Survey", (cls,), modded)
-        key = f"{cls.__module__}.{cls.__name__}"
-        REGISTERED_EVENTS.lazy_loading[f"{clazz.__module__}.{clazz.__name__}"] = (
-            REGISTERED_EVENTS.lazy_loading[key].copy()
-        )
         survey: Spider = clazz(**attrs)  # type: ignore
         survey.run()
         return (
