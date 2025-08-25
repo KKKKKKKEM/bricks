@@ -2,6 +2,7 @@ import asyncio
 import collections
 import concurrent.futures
 import json
+import math
 import uuid
 from typing import Type, Union, Callable, Optional, List
 
@@ -11,7 +12,7 @@ from bricks.core import signals, dispatch
 from bricks.core.events import REGISTERED_EVENTS
 from bricks.lib.items import Items
 from bricks.lib.queues import Item, LocalQueue, TaskQueue
-from bricks.rpc.common import serve_async, MODE
+from bricks.rpc.common import start_rpc_server, MODE
 from bricks.spider.air import Context, Spider
 
 
@@ -19,13 +20,13 @@ def ctx2json(ctx: Context):
     seeds = ctx.seeds
     future_type = seeds.get("$futureType", "$response")
     if future_type == "$request":
-        return json.dumps({"data": ctx.request.curl, "type": future_type, "seeds": seeds}, default=str)
+        return {"data": ctx.request.curl, "type": future_type, "seeds": dict(seeds)}
     elif future_type == "$response":
-        return json.dumps({"data": ctx.response.text, "type": future_type, "seeds": seeds}, default=str)
+        return {"data": ctx.response.text, "type": future_type, "seeds": dict(seeds)}
     elif future_type == "$items":
-        return json.dumps({"data": list(ctx.items), "type": future_type, "seeds": seeds}, default=str)
+        return {"data": list(ctx.items), "type": future_type, "seeds": dict(seeds)}
     else:
-        return json.dumps({"data": "", "type": future_type, "seeds": seeds}, default=str)
+        return {"data": "", "type": future_type, "seeds": dict(seeds)}
 
 
 class Mocker:
@@ -35,23 +36,23 @@ class Mocker:
 
     def create_hooks(self):
         def failure(ctx: Context, shutdown=False):
-            future_max_retry = ctx.seeds.get("$futureMaxRetry")
-            future_retry = ctx.seeds.get("$futureRetry") or 0
+            future_max_retry = ctx.seeds.get("$futureMaxRetry") or math.inf
+            future_retry = ctx.seeds.get("$futureRetry") or ctx.request.retry
             if future_retry >= future_max_retry:
-                self.on_finish(ctx, RuntimeError(f"超出最大重试次数: {future_max_retry} 次"))
+                self.on_task_done(ctx, RuntimeError(f"超出最大重试次数: {future_max_retry} 次"))
                 return ctx.success(shutdown)
             else:
                 return super(ctx.__class__, ctx).retry()
 
         def error(ctx: Context, e: Exception, shutdown=True):
             if shutdown:
-                self.on_finish(ctx, e)
+                self.on_task_done(ctx, e)
                 return ctx.success(shutdown)
             else:
                 return super(ctx.__class__, ctx).error(e, shutdown)
 
         def success(ctx: Context, shutdown=False):
-            self.on_finish(ctx, None)
+            self.on_task_done(ctx, None)
             return super(ctx.__class__, ctx).success(shutdown)
 
         def on_request(spider, context: Context):
@@ -89,6 +90,11 @@ class Mocker:
             "on_response": on_response,
             "on_retry": on_retry,
         }
+
+    def on_task_done(self, context: Context, error: Optional[Exception]):
+        if not hasattr(context, "$finish"):
+            setattr(context, "$finish", True)
+            self.on_finish(context, error)
 
 
 class Rpc:
@@ -192,7 +198,7 @@ class Rpc:
         ctx_modded.setdefault("failure", hooks["failure"])
         ctx_modded.setdefault("error", hooks["error"])
         ctx_modded.setdefault("success", hooks["success"])
-        ctx_modded.setdefault("to_json", ctx2json)
+        ctx_modded.setdefault("on_json_dump", ctx2json)
 
         local = LocalQueue()
         spider = type("RPC", (spider,), modded)
@@ -258,7 +264,8 @@ class Rpc:
         :param on_server_started: 当服务启动完后的回调
         """
         self.spider.dispatcher = dispatch.Dispatcher(max_workers=concurrency)
-        coro = serve_async(self, mode=mode, concurrency=concurrency, ident=ident, on_server_started=on_server_started, **kwargs)
+        coro = start_rpc_server(self, mode=mode, concurrency=concurrency, ident=ident,
+                                on_server_started=on_server_started, **kwargs)
         try:
             with self.spider.dispatcher:
                 asyncio.run_coroutine_threadsafe(coro, loop=self.spider.dispatcher.loop)

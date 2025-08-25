@@ -7,6 +7,7 @@
 from bricks.utils import pandora
 
 pandora.require("grpcio==1.74.0")
+pandora.require("grpcio-tools==1.74.0")
 
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import descriptor_pool as _descriptor_pool
