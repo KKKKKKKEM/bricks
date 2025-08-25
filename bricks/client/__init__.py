@@ -32,8 +32,8 @@ class Argv:
         else:
             return cmd
 
-    @staticmethod
-    def get_parser() -> argparse.ArgumentParser:
+    @classmethod
+    def get_parser(cls) -> argparse.ArgumentParser:
         def set_work_dir(x):
             x and sys.path.insert(0, x)
             x and os.chdir(x)
@@ -48,8 +48,28 @@ class Argv:
             "-extra", "--extra", help="其他信息: key=value", action="append"
         )
         parser.add_argument("-workdir", "--workdir", help="工作目录", type=set_work_dir)
-        parser.add_argument("-env", "--env", help="环境信息", action="append")
+        parser.add_argument("-env", "--env", help="环境变量信息", action="append", type=cls.set_env_var)
         parser.add_argument(
             "-rpc", "--rpc", help="rpc 参数: key=value", action="append"
         )
         return parser
+
+    @staticmethod
+    def set_env_var(env_string: str) -> str:
+        """
+        解析并设置环境变量
+
+        :param env_string: 格式为 "key=value" 的字符串
+        :return: 原始字符串
+        """
+        if not env_string or '=' not in env_string:
+            return env_string
+
+        key, value = env_string.split('=', 1)
+        key = key.strip()
+        value = value.strip()
+
+        if key:
+            os.environ[key] = value
+
+        return env_string

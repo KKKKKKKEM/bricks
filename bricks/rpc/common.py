@@ -3,7 +3,7 @@ import inspect
 import json
 import uuid
 from concurrent import futures
-from typing import Any, Dict, Optional, Callable, Literal
+from typing import Any, Dict, Optional, Callable, Literal, Tuple
 
 from loguru import logger
 
@@ -45,7 +45,7 @@ class CustomJSONEncoder(json.JSONEncoder):
 class MultiObjectProxy:
     """多对象代理类，支持按顺序查找和类名.方法名调用"""
 
-    def __init__(self, objects: list):
+    def __init__(self, objects: Tuple[Any]):
         self.objects = []
         self._method_cache = {}
         self._class_map = {}  # 类名到对象的映射
@@ -59,11 +59,13 @@ class MultiObjectProxy:
                 self.objects.append(instance)
                 self._class_map[wrapper_name] = instance
                 self._class_map[obj.__name__] = instance  # 也支持函数名作为类名
+
             elif inspect.isclass(obj):
                 # 类实例化
                 instance = obj()
                 self.objects.append(instance)
                 self._class_map[obj.__name__] = instance
+
             else:
                 # 已经是实例
                 self.objects.append(obj)
@@ -126,7 +128,7 @@ class RpcRequest:
     def from_dict(cls, data: Dict[str, str]) -> "RpcRequest":
         return cls(
             method=data["method"],
-            data=data["data"],
+            data=data.get("data"),
             request_id=data.get("request_id")
         )
 
@@ -207,7 +209,7 @@ class BaseRpcService:
 
             # 3. 解析请求 JSON 负载
             try:
-                payload = json.loads(request.data)
+                payload = json.loads(request.data) if request.data else {}
             except json.JSONDecodeError as e:
                 error_msg = f"Invalid JSON payload: {e}"
                 return RpcResponse(
@@ -265,7 +267,7 @@ class BaseRpcService:
     async def serve(
             self,
             concurrency: int = 10,
-            ident: any = 0,
+            ident: Any = 0,
             on_server_started: Callable[[any], None] = None,
             **kwargs
     ):
@@ -310,8 +312,8 @@ def serve(
         *obj: Any,
         mode: MODE = "http",
         concurrency: int = 10,
-        ident: any = 0,
-        on_server_started: Callable[[any], None] = None,
+        ident: Any = 0,
+        on_server_started: Callable[[Any], None] = None,
         **kwargs
 ):
     asyncio.run(
@@ -330,8 +332,8 @@ async def start_rpc_server(
         *obj: Any,
         mode: MODE = "http",
         concurrency: int = 10,
-        ident: any = 0,
-        on_server_started: Callable[[any], None] = None,
+        ident: Any = 0,
+        on_server_started: Callable[[Any], None] = None,
         **kwargs
 ):
     if mode == "http":
