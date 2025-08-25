@@ -9,3 +9,7 @@ __pycache__
 /no_views
 .vscode/launch.json
 .gitignore
+.python-version
+.gitignore
+uv.lock
+pyproject.toml
