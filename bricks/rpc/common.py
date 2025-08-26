@@ -139,8 +139,8 @@ class RpcRequest:
 class RpcResponse:
     """统一的 RPC 响应数据结构"""
 
-    def __init__(self, data: str = "", message: str = "", code: int = 0, request_id: str = ""):
-        self.data = data
+    def __init__(self, data: str = "", message: str = "", code: int = 0, request_id: str = "", decode_response= False):
+        self.data = data if not decode_response else pandora.json_or_eval(data)
         self.message = message
         self.code = code
         self.request_id = request_id
@@ -154,12 +154,13 @@ class RpcResponse:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "RpcResponse":
+    def from_dict(cls, data: Dict[str, Any], decode_response= False) -> "RpcResponse":
         return cls(
             data=data.get("data", ""),
             message=data.get("message", ""),
             code=data.get("code", 0),
-            request_id=data.get("request_id", "")
+            request_id=data.get("request_id", ""),
+            decode_response=decode_response
         )
 
     @staticmethod
@@ -209,7 +210,8 @@ class BaseRpcService:
 
             # 3. 解析请求 JSON 负载
             try:
-                payload = json.loads(request.data) if request.data else {}
+                payload = json.loads(request.data) if isinstance(request.data, str) else (request.data or {})
+
             except json.JSONDecodeError as e:
                 error_msg = f"Invalid JSON payload: {e}"
                 return RpcResponse(

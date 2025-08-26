@@ -64,7 +64,7 @@ class Service(BaseRpcService):
         finally:
             self.connections.discard(websocket)
 
-    async def serve(self, concurrency: int = 10, ident: int = 0, on_server_started: Callable[[int], None] = None, **kwargs):
+    async def serve(self, concurrency: int = 10, ident: int = 0, on_server_started: Callable[[str], None] = None, **kwargs):
         """
         启动 WebSocket RPC 服务器
 
@@ -86,12 +86,10 @@ class Service(BaseRpcService):
 
         # 获取实际端口
         actual_port = server.sockets[0].getsockname()[1]
-        logger.info(f"WebSocket RPC Server started on port {actual_port}...")
-
+        identity = f"ws://0.0.0.0:{actual_port}"
+        logger.info(f"WebSocket RPC Server started at: {identity}")
         try:
-            if on_server_started:
-                on_server_started(actual_port)
-
+            on_server_started and on_server_started(identity)
             # 保持服务器运行
             await server.wait_closed()
 
