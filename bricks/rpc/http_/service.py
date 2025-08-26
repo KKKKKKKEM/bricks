@@ -52,7 +52,7 @@ class Service(BaseRpcService):
                 "request_id": ""
             }, status=500)
 
-    async def serve(self, concurrency: int = 10, ident: int = 0, on_server_started: Callable[[int], None] = None, **kwargs):
+    async def serve(self, concurrency: int = 10, ident: int = 0, on_server_started: Callable[[str], None] = None, **kwargs):
         """
         启动 HTTP RPC 服务器
 
@@ -62,10 +62,11 @@ class Service(BaseRpcService):
         """
         # 设置线程池
         self._executor = futures.ThreadPoolExecutor(max_workers=concurrency)
+        uri = kwargs.get("uri", "/rpc")
 
         # 创建 aiohttp 应用
         app = web.Application()
-        app.router.add_post('/rpc', self.handle_rpc)
+        app.router.add_post(uri, self.handle_rpc)
 
         # 创建服务器
         runner = web.AppRunner(app)
@@ -77,11 +78,11 @@ class Service(BaseRpcService):
 
         # 获取实际端口
         actual_port = site._server.sockets[0].getsockname()[1]
-        logger.info(f"HTTP RPC Server started on port {actual_port}...")
+        identity = f"http://0.0.0.0:{actual_port}{uri}"
+        logger.info(f"HTTP RPC Server started at: {identity}")
 
         try:
-            if on_server_started:
-                on_server_started(actual_port)
+            on_server_started and on_server_started(identity)
 
             # 保持服务器运行
             while True:
@@ -127,7 +128,7 @@ class Client(BaseRpcClient):
 
             # 解析响应
             response_data = response.json()
-            return RpcResponse.from_dict({**response_data, "request_id": rpc_request.request_id})
+            return RpcResponse.from_dict({**response_data, "request_id": rpc_request.request_id}, decode_response=True)
 
         except Exception as e:
             raise RuntimeError(f"HTTP RPC call failed for method '{method}': {e}")
