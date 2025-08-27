@@ -204,8 +204,14 @@ class EventManager:
                 event.func,
                 args=event.args,
                 kwargs=event.kwargs,  # type: ignore
-                annotations={type(context): context, **annotations},
-                namespace={"context": context, **namespace},
+                annotations={
+                    **context.annotations,
+                    **(annotations or {})
+                },
+                namespace={
+                    **context.namespace,
+                    **(namespace or {})
+                }
             )
         except Exception as e:
             if errors == "raise":

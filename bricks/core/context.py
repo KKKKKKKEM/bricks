@@ -55,6 +55,19 @@ class Context:
             setattr(self, name, value)
             return value
 
+    @property
+    def namespace(self):
+        return {
+            "context": self,
+            "ctx": self
+        }
+
+    @property
+    def annotations(self):
+        return {
+            self.__class__: self
+        }
+
     @classmethod
     def get_context(cls) -> "Context":
         """
@@ -242,3 +255,18 @@ class Error(Context):
         )
         self.error = error
         self.context = context
+
+    @property
+    def namespace(self):
+        return {
+            "error": self.error,
+            "context": self.context
+        }
+
+    @property
+    def annotations(self):
+        return {
+            **super().annotations,
+            type(self.context): self.context,
+            Exception: self.error
+        }

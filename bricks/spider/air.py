@@ -19,7 +19,7 @@ from loguru import logger
 from bricks import state
 from bricks.core import dispatch, events, signals
 from bricks.core.context import Error, Flow
-from bricks.core.events import REGISTERED_EVENTS, EventManager
+from bricks.core.events import EventManager
 from bricks.core.genesis import Pangu
 from bricks.downloader import AbstractDownloader, cffi
 from bricks.lib.counter import FastWriteCounter
@@ -103,6 +103,32 @@ class Context(Flow):
     def save(self):
         return self.replace({**self.seeds})
 
+    @property
+    def namespace(self):
+        return {
+            **super().namespace,
+            "request": self.request,
+            "response": self.response,
+            "items": self.items,
+            "seeds": self.seeds,
+            "task_queue": self.task_queue,
+            "queue_name": self.queue_name,
+            "target": self.target
+        }
+
+    @property
+    def annotations(self):
+        return {
+            Request: self.request,
+            Response: self.response,
+            Items: self.items,
+            self.task_queue.__class__: self.task_queue,
+            str: self.queue_name,
+            Item: self.seeds,
+            dict: self.seeds,
+            **super().annotations
+        }
+
     def divisive(self, qtypes=("temp",)):
         new = {**self.seeds, "$division": str(uuid.uuid4())}
         self.task_queue.put(self.queue_name, new, qtypes=qtypes)
@@ -172,6 +198,26 @@ class InitContext(Flow):
         self.priority: bool = priority
         super().__init__(form, target, **kwargs)
         self.target: Spider = target
+
+    @property
+    def namespace(self):
+        return {
+            **super().namespace,
+            "seeds": self.seeds,
+            "task_queue": self.task_queue,
+            "queue_name": self.queue_name,
+            "target": self.target
+        }
+
+    @property
+    def annotations(self):
+        return {
+            self.task_queue.__class__: self.task_queue,
+            str: self.queue_name,
+            Item: self.seeds,
+            dict: self.seeds,
+            **super().annotations
+        }
 
     def success(self, shutdown=False):
         if self.form == state.const.AFTER_PUT_SEEDS:
@@ -331,8 +377,8 @@ class Spider(Pangu):
         gen = pandora.invoke(
             func=self.make_seeds,
             kwargs={"record": record},
-            annotations={Context: context},
-            namespace={"context": context},
+            annotations=context.annotations,
+            namespace=context.namespace,
         )
 
         if not inspect.isgenerator(gen):
@@ -378,15 +424,15 @@ class Spider(Pangu):
         seeds = pandora.iterable(seeds)
 
         seeds = seeds[
-                0: min(
-                    [
-                        settings["count_size"] - settings["count"],
-                        settings["total_size"] - settings["total"],
-                        settings["success_size"] - settings["success"],
-                        len(seeds),
-                    ]
-                )
+            0: min(
+                [
+                    settings["count_size"] - settings["count"],
+                    settings["total_size"] - settings["total"],
+                    settings["success_size"] - settings["success"],
+                    len(seeds),
                 ]
+            )
+        ]
         context.update(
             {
                 "maxsize": settings["queue_size"],
@@ -397,8 +443,8 @@ class Spider(Pangu):
             func=self.put_seeds,
             args=[context.seeds],
             kwargs={"where": "init"},
-            annotations={InitContext: context},
-            namespace={"context": context},
+            annotations=context.annotations,
+            namespace=context.namespace,
         )
 
         size = len(pandora.iterable(seeds))
@@ -530,8 +576,8 @@ class Spider(Pangu):
             with context:
                 prepared = pandora.prepare(
                     func=self.get_seeds,
-                    annotations={Context: context},
-                    namespace={"context": context},
+                    annotations=context.annotations,
+                    namespace=context.namespace
                 )
 
                 try:
@@ -699,8 +745,8 @@ class Spider(Pangu):
             prepared = pandora.prepare(
                 func=raw_method,
                 kwargs=kwargs,
-                annotations={Context: context},
-                namespace={"context": context},
+                annotations=context.annotations,
+                namespace=context.namespace,
             )
             ret = prepared.func(*prepared.args, **prepared.kwargs)
             # 没有种子返回空信号
@@ -708,11 +754,7 @@ class Spider(Pangu):
                 raise signals.Empty
             context.seeds = ret
             context.form = state.const.AFTER_GET_SEEDS
-            events.EventManager.invoke(
-                context,
-                annotations={Context: context},
-                namespace={"context": context, "seeds": context.seeds},
-            )
+            events.EventManager.invoke(context)
 
             return ret
 
@@ -770,16 +812,8 @@ class Spider(Pangu):
                 func=raw_method,
                 args=args,
                 kwargs=kwargs,
-                annotations={
-                    type(context): context,
-                    Response: context.response,
-                    Item: context.seeds,
-                },
-                namespace={
-                    "context": context,
-                    "response": context.response,
-                    "seeds": context.seeds,
-                },
+                annotations=context.annotations,
+                namespace=context.namespace,
             )
             ret = prepared.func(*prepared.args, **prepared.kwargs)
             return ret
@@ -813,19 +847,7 @@ class Spider(Pangu):
             context.form = state.const.BEFORE_REQUEST
             context.response = None
             try:
-                events.EventManager.invoke(
-                    context,
-                    annotations={
-                        type(context): context,
-                        Item: context.seeds,
-                        Request: context.request,
-                    },
-                    namespace={
-                        "context": context,
-                        "seeds": context.seeds,
-                        "request": context.request,
-                    },
-                )
+                events.EventManager.invoke(context)
             except signals.Switch as jump:
                 if jump.by == "func":
                     raise
@@ -838,34 +860,12 @@ class Spider(Pangu):
                         func=raw_method,
                         args=args,
                         kwargs=kwargs,
-                        annotations={
-                            type(context): context,
-                            Item: context.seeds,
-                            Request: context.request,
-                        },
-                        namespace={
-                            "context": context,
-                            "seeds": context.seeds,
-                            "request": context.request,
-                        },
+                        annotations=context.annotations,
+                        namespace=context.namespace,
                     )
 
                 context.form = state.const.AFTER_REQUEST
-                events.EventManager.invoke(
-                    context,
-                    annotations={
-                        type(context): context,
-                        Item: context.seeds,
-                        Request: context.request,
-                        Response: context.response,
-                    },
-                    namespace={
-                        "context": context,
-                        "seeds": context.seeds,
-                        "request": context.request,
-                        "response": context.response,
-                    },
-                )
+                events.EventManager.invoke(context)
                 context.flow(
                     {"response": context.response, "request": context.request},
                     context.next == self.on_request,
@@ -884,18 +884,8 @@ class Spider(Pangu):
         prepared = pandora.prepare(
             func=callback,
             args=[context],
-            annotations={
-                Response: context.response,
-                Request: context.request,
-                Item: context.seeds,
-                Context: context,
-            },
-            namespace={
-                "context": context,
-                "request": context.request,
-                "response": context.response,
-                "seeds": context.seeds,
-            },
+            annotations=context.annotations,
+            namespace=context.namespace,
         )
 
         if inspect.iscoroutinefunction(prepared.func):
@@ -919,18 +909,8 @@ class Spider(Pangu):
                 func=raw_method,
                 args=args,
                 kwargs=kwargs,
-                annotations={
-                    Response: context.response,
-                    Request: context.request,
-                    Item: context.seeds,
-                    Context: context,
-                },
-                namespace={
-                    "context": context,
-                    "request": context.request,
-                    "response": context.response,
-                    "seeds": context.seeds,
-                },
+                annotations=context.annotations,
+                namespace=context.namespace,
             )
             context.flow({"items": context.items}, flag=context.next == self.on_response)
 
@@ -948,20 +928,8 @@ class Spider(Pangu):
         prepared = pandora.prepare(
             func=callback,
             args=[items],
-            annotations={
-                Response: context.response,
-                Request: context.request,
-                Items: context.items,
-                Item: context.seeds,
-                Context: context,
-            },
-            namespace={
-                "context": context,
-                "request": context.request,
-                "response": context.response,
-                "seeds": context.seeds,
-                "items": context.items,
-            },
+            annotations=context.annotations,
+            namespace=context.namespace,
         )
 
         if inspect.iscoroutinefunction(callback):
@@ -979,23 +947,7 @@ class Spider(Pangu):
         def wrapper(context: Context, *args, **kwargs):
             context.form = state.const.BEFORE_PIPELINE
             try:
-                events.EventManager.invoke(
-                    context,
-                    annotations={
-                        Response: context.response,
-                        Request: context.request,
-                        Items: context.items,
-                        Item: context.seeds,
-                        Context: context,
-                    },
-                    namespace={
-                        "context": context,
-                        "request": context.request,
-                        "response": context.response,
-                        "seeds": context.seeds,
-                        "items": context.items,
-                    },
-                )
+                events.EventManager.invoke(context)
             except signals.Skip:
                 pass
 
@@ -1005,41 +957,13 @@ class Spider(Pangu):
                     func=raw_method,
                     args=args,
                     kwargs=kwargs,
-                    annotations={
-                        Response: context.response,
-                        Request: context.request,
-                        Items: context.items,
-                        Item: context.seeds,
-                        Context: context,
-                    },
-                    namespace={
-                        "context": context,
-                        "request": context.request,
-                        "response": context.response,
-                        "seeds": context.seeds,
-                        "items": context.items,
-                    },
+                    annotations=context.annotations,
+                    namespace=context.namespace,
                 )
                 prepared.func(*prepared.args, **prepared.kwargs)
 
             context.form = state.const.AFTER_PIPELINE
-            events.EventManager.invoke(
-                context,
-                annotations={
-                    Response: context.response,
-                    Request: context.request,
-                    Items: context.items,
-                    Item: context.seeds,
-                    Context: context,
-                },
-                namespace={
-                    "context": context,
-                    "request": context.request,
-                    "response": context.response,
-                    "seeds": context.seeds,
-                    "items": context.items,
-                },
-            )
+            events.EventManager.invoke(context)
 
             context.flow(flag=context.next == self.on_pipeline)
 
@@ -1055,22 +979,12 @@ class Spider(Pangu):
         @functools.wraps(raw_method)
         def wrapper(context: Context):
             context.form = state.const.BEFORE_MAKE_REQUEST
-            events.EventManager.invoke(
-                context,
-                annotations={Item: context.seeds, Context: context},
-                namespace={
-                    "context": context,
-                    "seeds": context.seeds,
-                },
-            )
+            events.EventManager.invoke(context)
             context.form = state.const.ON_MAKE_REQUEST
             prepared = pandora.prepare(
                 func=raw_method,
-                annotations={Item: context.seeds, Context: context},
-                namespace={
-                    "context": context,
-                    "seeds": context.seeds,
-                },
+                annotations=context.annotations,
+                namespace=context.namespace,
             )
             future_max_retry = context.seeds.get("$futureMaxRetry")
             future_retry: int = context.seeds.get("$futureRetry") or 0  # type: ignore
@@ -1082,15 +996,7 @@ class Spider(Pangu):
                 context.seeds["$futureRetry"] = request.retry
 
             context.form = state.const.AFTER_MAKE_REQUEST
-            events.EventManager.invoke(
-                context,
-                annotations={Request: request, Item: context.seeds, Context: context},
-                namespace={
-                    "context": context,
-                    "request": request,
-                    "seeds": context.seeds,
-                },
-            )
+            events.EventManager.invoke(context)
 
             return request
 

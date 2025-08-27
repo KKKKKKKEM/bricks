@@ -220,16 +220,16 @@ class Pangu(Chaos):
                     try:
                         prepared = pandora.prepare(
                             func=context.next.root,
-                            annotations={type(context): context},
-                            namespace={"context": context},
+                            annotations=context.annotations,
+                            namespace=context.namespace,
                         )
 
                         product = prepared.func(*prepared.args, **prepared.kwargs)
                         callable(context.callback) and pandora.invoke(
                             context.callback,
                             args=[product],
-                            annotations={type(context): context},
-                            namespace={"context": context},
+                            annotations=context.annotations,
+                            namespace=context.namespace,
                         )  # type: ignore
 
                     # 中断信号
