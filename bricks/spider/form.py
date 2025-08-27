@@ -241,20 +241,8 @@ class Spider(air.Spider):
                         func=node.func,
                         args=node.args,
                         kwargs=node.kwargs,
-                        annotations={
-                            Context: context,
-                            Response: context.response,
-                            Request: context.request,
-                            Item: context.seeds,
-                            Items: context.items,
-                        },
-                        namespace={
-                            "context": context,
-                            "response": context.response,
-                            "request": context.request,
-                            "seeds": context.seeds,
-                            "items": context.items,
-                        },
+                        annotations=context.annotations,
+                        namespace=context.namespace,
                     )
 
                 else:
@@ -278,8 +266,8 @@ class Spider(air.Spider):
                 func=engine,
                 args=node_args,
                 kwargs={**kwargs, **node_kwargs},
-                annotations={Context: context},
-                namespace={"context": context},
+                annotations=context.annotations,
+                namespace=context.namespace,
             )
             layout = layout.render(seeds)
 
@@ -323,18 +311,8 @@ class Spider(air.Spider):
                 func=context.response.extract,
                 args=[engine.lower(), *args],
                 kwargs=kwargs,
-                annotations={
-                    Context: context,
-                    Response: context.response,
-                    Request: context.request,
-                    Item: context.seeds,
-                },
-                namespace={
-                    "context": context,
-                    "response": context.response,
-                    "request": context.request,
-                    "seeds": context.seeds,
-                },
+                annotations=context.annotations,
+                namespace=context.namespace,
             )
         else:
             if not callable(engine):
@@ -344,18 +322,8 @@ class Spider(air.Spider):
                 func=engine,
                 args=args,
                 kwargs=kwargs,
-                annotations={
-                    Context: context,
-                    Response: context.response,
-                    Request: context.request,
-                    Item: context.seeds,
-                },
-                namespace={
-                    "context": context,
-                    "response": context.response,
-                    "request": context.request,
-                    "seeds": context.seeds,
-                },
+                annotations=context.annotations,
+                namespace=context.namespace,
             )
 
         pandora.clean_rows(
@@ -392,20 +360,8 @@ class Spider(air.Spider):
                 func=engine,
                 args=args,
                 kwargs=kwargs,
-                annotations={
-                    Context: context,
-                    Response: context.response,
-                    Request: context.request,
-                    Item: context.seeds,
-                    Items: context.items,
-                },
-                namespace={
-                    "context": context,
-                    "response": context.response,
-                    "request": context.request,
-                    "seeds": context.seeds,
-                    "items": context.items,
-                },
+                annotations=context.annotations,
+                namespace=context.namespace,
             )
         finally:
             context.items = backup
