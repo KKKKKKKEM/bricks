@@ -26,7 +26,7 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
         发送请求以获得一个响应
 
         :param request: 请求或包含请求参数的字典
-        :return:
+        :return: Response
         """
         raise NotImplementedError
 

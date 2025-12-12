@@ -84,7 +84,7 @@ class Request:
         self.method = method.upper()
         self.body = body
         self._headers = Header(headers)
-        self.options = options or {}
+        self.options: dict = options or {}
         self.timeout = timeout
         self.allow_redirects = allow_redirects
         self.proxies = proxies
