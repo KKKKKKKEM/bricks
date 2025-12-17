@@ -163,7 +163,7 @@ def example_download_video():
         save_path="./downloads/videos",
         filename="158043.mp4",
         resume=True,
-        skip_existing=True,
+        skip_existing=False,
     )
 
     success = downloader.download_task(task)
