@@ -10,10 +10,10 @@ from bricks.utils.pandora import iterable
 
 
 class Type(str, enum.Enum):
-    define: str = "define"  # 变量定义
-    choice: str = "choice"  # 只选择一个
-    condition: str = "condition"  # 只要满足条件都会走
-    code: str = "code"  # 直接拼接的代码
+    define = "define"  # 变量定义
+    choice = "choice"  # 只选择一个
+    condition = "condition"  # 只要满足条件都会走
+    code = "code"  # 直接拼接的代码
 
 
 @dataclasses.dataclass

@@ -20,7 +20,9 @@ _HEADER_ENCODING_RE = re.compile(r"charset=([\w-]+)", re.I)
 
 class Response:
     __slots__ = (
-        "content",
+        "_content",
+        "_stream_iterator",
+        "auto_read_stream",
         "status_code",
         "_headers",
         "url",
@@ -49,7 +51,9 @@ class Response:
             error: Any = "",
             callback: Callable = None,
     ):
-        self.content: Union[str, bytes] = content  # type: ignore
+        self._content: Union[str, bytes] = content  # type: ignore
+        self._stream_iterator = None  # 流式下载的迭代器
+        self.auto_read_stream = False  # 默认不自动读取流式内容
         self.status_code = status_code
         self._headers = Header(headers)
         self.url: str = url
@@ -63,6 +67,73 @@ class Response:
         self._cache = {}
         self.cost: float = 0
 
+    @property
+    def content(self) -> Union[str, bytes]:
+        """
+        获取响应内容
+
+        如果是流式响应且 _auto_read_stream=True，会自动从迭代器读取全部内容
+        否则返回已存储的内容（如果是流式且未读取则返回空）
+        """
+        if self._stream_iterator is not None:
+            if self.auto_read_stream:
+                # 自动从迭代器读取所有内容
+                chunks = []
+                for chunk in self._stream_iterator:
+                    if chunk:
+                        chunks.append(chunk)
+                self._content = b''.join(chunks)
+                self._stream_iterator = None  # 清空迭代器
+            else:
+                # 不自动读取，返回空
+                return b''
+        return self._content
+
+    @content.setter
+    def content(self, value: Union[str, bytes]):
+        """设置响应内容"""
+        self._content = value
+        self._stream_iterator = None
+        self.auto_read_stream = False
+
+    def read_stream_content(self) -> bytes:
+        """
+        从流式迭代器中读取所有内容
+
+        :return: 完整的响应内容
+        """
+        if self._stream_iterator is not None:
+            chunks = []
+            for chunk in self._stream_iterator:
+                if chunk:
+                    chunks.append(chunk)
+            self._content = b''.join(chunks)
+            self._stream_iterator = None
+        return self._content if isinstance(self._content, bytes) else self._content.encode()
+
+    @property
+    def is_stream(self) -> bool:
+        """判断是否为流式响应"""
+        return self._stream_iterator is not None
+
+    def iter_content(self, chunk_size: int = 8192):
+        """
+        流式读取响应内容
+
+        :param chunk_size: 块大小（如果已有迭代器则忽略）
+        :return: 内容迭代器
+        """
+        if self._stream_iterator is not None:
+            # 返回流式迭代器，遍历它
+            for chunk in self._stream_iterator:
+                yield chunk
+        elif self._content:
+            # 如果已有内容，分块返回
+            content = self._content if isinstance(
+                self._content, bytes) else self._content.encode()
+            for i in range(0, len(content), chunk_size):
+                yield content[i:i + chunk_size]
+
     headers: Header = property(
         fget=lambda self: self._headers,
         fset=lambda self, v: setattr(self, "_headers", Header(v)),
@@ -71,16 +142,22 @@ class Response:
     )  # type: ignore
 
     def guess_encoding(self):
-        if not self.content:
+        # 如果是流式响应且未读取，从 header 获取
+        if self._stream_iterator is not None:
+            content_type = self.headers.get("Content-Type")
+            temp = http_content_type_encoding(content_type)
+            return temp or "utf-8"
+
+        if not self._content:
             return "utf-8"
 
-        # 1. 从header中获取编码
+        # 1. 从 header 中获取编码
         content_type = self.headers.get("Content-Type")
         temp = http_content_type_encoding(content_type)
         if temp:
             return temp
 
-        temp = html_body_declared_encoding(self.content)
+        temp = html_body_declared_encoding(self._content)
         if temp:
             return temp
 
@@ -112,6 +189,15 @@ class Response:
         """
         :return:the length of response content.
         """
+        # 如果是流式响应，尝试从 Content-Length 获取
+        if self._stream_iterator is not None:
+            content_length = self.headers.get("Content-Length")
+            if content_length:
+                try:
+                    return int(content_length)
+                except (ValueError, TypeError):
+                    pass
+            return 0
         return len(self.content or "")
 
     @property
@@ -119,6 +205,15 @@ class Response:
         """
         :return:the size of response content in bytes.
         """
+        # 如果是流式响应，尝试从 Content-Length 获取
+        if self._stream_iterator is not None:
+            content_length = self.headers.get("Content-Length")
+            if content_length:
+                try:
+                    return int(content_length)
+                except (ValueError, TypeError):
+                    pass
+            return 0
         return sys.getsizeof(self.content)
 
     def json(self, **kwargs):

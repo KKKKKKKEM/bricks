@@ -5,11 +5,13 @@
 from __future__ import absolute_import
 
 import copy
+import csv
 import datetime
 import functools
 import json
 import time
-from typing import List, Literal, Union
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Literal, Optional, Union
 
 import redis
 from loguru import logger
@@ -705,6 +707,316 @@ return  redis.call("DEL", unpack(ARGV))
     return redis.call(cmd, unpack(ARGV))
         """
         return self.lua.run(lua=lua, keys=keys, args=args)
+
+    def _flatten_dict(
+        self, data: Dict[str, Any], parent_key: str = "", sep: str = "_", max_depth: int = 1, current_depth: int = 0
+    ) -> Dict[str, Any]:
+        """
+        展平嵌套的字典
+
+        :param data: 要展平的字典
+        :param parent_key: 父键名
+        :param sep: 分隔符
+        :param max_depth: 最大展平深度
+        :param current_depth: 当前深度
+        :return: 展平后的字典
+        """
+        items = []
+        for k, v in data.items():
+            new_key = f"{parent_key}{sep}{k}" if parent_key else k
+            if isinstance(v, dict) and current_depth < max_depth:
+                items.extend(
+                    self._flatten_dict(
+                        v, new_key, sep=sep, max_depth=max_depth, current_depth=current_depth + 1).items()
+                )
+            elif isinstance(v, (list, tuple)) and current_depth < max_depth:
+                # 将列表转换为索引字典
+                for i, item in enumerate(v):
+                    if isinstance(item, dict):
+                        items.extend(
+                            self._flatten_dict(
+                                item, f"{new_key}{sep}{i}", sep=sep, max_depth=max_depth, current_depth=current_depth + 1
+                            ).items()
+                        )
+                    else:
+                        items.append((f"{new_key}{sep}{i}", item))
+            else:
+                items.append((new_key, v))
+        return dict(items)
+
+    def _iter_redis_data(
+        self,
+        name: str,
+        key_type: str,
+        chunk_size: int = 1000,
+        db_num: Optional[int] = None,
+        include_score: bool = True,
+    ):
+        """
+        迭代 Redis 数据的生成器
+
+        :param name: Redis key 名称
+        :param key_type: Redis 数据类型
+        :param chunk_size: 每次读取的数据量
+        :param db_num: 数据库编号
+        :param include_score: 对于 zset，是否包含 score
+        :yield: 数据项
+        """
+        db_num = self.database if db_num is None else db_num
+
+        # 切换数据库
+        if db_num != self.database:
+            self.select(db_num)
+
+        try:
+            if key_type == "list":
+                # 使用 LRANGE 分批读取
+                start = 0
+                while True:
+                    items = self.lrange(name, start, start + chunk_size - 1)
+                    if not items:
+                        break
+                    for item in items:
+                        yield item
+                    start += chunk_size
+
+            elif key_type == "set":
+                # 使用 SSCAN 迭代
+                cursor = 0
+                while True:
+                    cursor, items = self.sscan(name, cursor, count=chunk_size)
+                    for item in items:
+                        yield item
+                    if cursor == 0:
+                        break
+
+            elif key_type == "zset":
+                # 使用 ZSCAN 迭代
+                cursor = 0
+                while True:
+                    cursor, items = self.zscan(name, cursor, count=chunk_size)
+                    for member, score in items.items():
+                        if include_score:
+                            yield {"value": member, "score": score}
+                        else:
+                            yield member
+                    if cursor == 0:
+                        break
+
+            elif key_type == "hash":
+                # 使用 HSCAN 迭代
+                cursor = 0
+                while True:
+                    cursor, items = self.hscan(name, cursor, count=chunk_size)
+                    for field, value in items.items():
+                        yield {"field": field, "value": value}
+                    if cursor == 0:
+                        break
+        finally:
+            # 恢复原数据库
+            if db_num != self.database:
+                self.select(self.database)
+
+    def export_to_csv(
+        self,
+        name: str,
+        output_path: Union[str, Path],
+        *,
+        db_num: Optional[int] = None,
+        chunk_size: int = 10000,
+        headers: Optional[List[str]] = None,
+        auto_detect_headers: bool = True,
+        delimiter: str = ",",
+        encoding: str = "utf-8-sig",
+        quote_all: bool = False,
+        include_score: bool = True,
+        flatten: bool = True,
+        max_depth: int = 1,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        write_mode: Literal["w", "a"] = "w",
+        skip_errors: bool = True,
+        default_value: str = "",
+    ) -> Dict[str, Any]:
+        """
+        将 Redis key 中的数据导出为 CSV/TSV 文件
+
+        支持流式导出，避免内存占用过高
+
+        Examples:
+            >>> redis = Redis()
+            >>> # 基本用法
+            >>> redis.export_to_csv("my_set", "output.csv")
+
+            >>> # 导出为 TSV
+            >>> redis.export_to_csv("my_list", "output.tsv", delimiter="\\t")
+
+            >>> # 自定义表头和进度回调
+            >>> def progress(current, total):
+            ...     print(f"Progress: {current}/{total}")
+            >>> redis.export_to_csv(
+            ...     "my_zset",
+            ...     "output.csv",
+            ...     headers=["name", "age", "score"],
+            ...     progress_callback=progress,
+            ...     include_score=True
+            ... )
+
+            >>> # 不展平嵌套 JSON
+            >>> redis.export_to_csv("my_data", "output.csv", flatten=False)
+
+        :param name: Redis key 名称
+        :param output_path: 输出文件路径
+        :param db_num: 数据库编号
+        :param chunk_size: 每次读取的数据量，默认 1000
+        :param headers: CSV 表头，None 则自动检测
+        :param auto_detect_headers: 是否自动检测表头（从第一批数据中提取键名）
+        :param delimiter: 分隔符，默认逗号（TSV 使用 \\t）
+        :param encoding: 文件编码，默认 utf-8-sig（带 BOM，Excel 友好）
+        :param quote_all: 是否对所有字段加引号
+        :param include_score: 对于 zset，是否包含 score 列
+        :param flatten: 是否展平嵌套的 JSON
+        :param max_depth: 展平的最大深度
+        :param progress_callback: 进度回调函数 callback(current, total)
+        :param write_mode: 写入模式，'w' 覆盖，'a' 追加
+        :param skip_errors: 是否跳过解析错误的数据
+        :param default_value: 缺失字段的默认值
+        :return: 导出统计信息字典
+        """
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        db_num = self.database if db_num is None else db_num
+
+        # 切换数据库获取 key 类型和总数
+        if db_num != self.database:
+            self.select(db_num)
+
+        try:
+            # 检查 key 是否存在
+            if not self.exists(name):
+                logger.warning(
+                    f"Key '{name}' does not exist in database {db_num}")
+                return {
+                    "success": False,
+                    "exported_count": 0,
+                    "error_count": 0,
+                    "total_count": 0,
+                    "key_type": None,
+                    "output_path": str(output_path),
+                }
+
+            # 获取 key 类型和总数
+            key_type = self.type(name)
+            total_count = self.count(name, db_num=db_num)
+
+            if key_type not in ["list", "set", "zset", "hash"]:
+                raise ValueError(
+                    f"Unsupported key type: {key_type}. Only list, set, zset, hash are supported.")
+
+            logger.info(
+                f"Exporting {name} ({key_type}, {total_count} items) to {output_path}")
+
+        finally:
+            # 恢复原数据库
+            if db_num != self.database:
+                self.select(self.database)
+
+        # 统计信息
+        stats = {
+            "exported_count": 0,
+            "error_count": 0,
+            "total_count": total_count,
+            "key_type": key_type,
+            "output_path": str(output_path),
+        }
+
+        # CSV 写入配置
+        quoting = csv.QUOTE_ALL if quote_all else csv.QUOTE_MINIMAL
+
+        # 打开文件准备写入
+        with open(output_path, write_mode, encoding=encoding, newline="") as f:
+            writer = None
+            detected_headers = None
+
+            # 迭代数据
+            for raw_item in self._iter_redis_data(name, key_type, chunk_size, db_num, include_score):
+                try:
+                    # 解析 JSON
+                    if isinstance(raw_item, str):
+                        try:
+                            item = json.loads(raw_item)
+                        except json.JSONDecodeError:
+                            if skip_errors:
+                                logger.warning(
+                                    f"Failed to parse JSON: {raw_item[:100]}")
+                                stats["error_count"] += 1
+                                continue
+                            else:
+                                raise
+                    else:
+                        item = raw_item
+
+                    # 确保是字典
+                    if not isinstance(item, dict):
+                        item = {"value": item}
+
+                    # 展平嵌套结构
+                    if flatten:
+                        item = self._flatten_dict(item, max_depth=max_depth)
+
+                    # 初始化 writer（第一次写入时）
+                    if writer is None:
+                        # 确定表头
+                        if headers:
+                            detected_headers = headers
+                        elif auto_detect_headers:
+                            detected_headers = list(item.keys())
+                        else:
+                            detected_headers = []
+
+                        # 创建 CSV writer
+                        writer = csv.DictWriter(
+                            f,
+                            fieldnames=detected_headers,
+                            delimiter=delimiter,
+                            quoting=quoting,
+                            extrasaction="ignore",  # 忽略多余的字段
+                        )
+
+                        # 写入表头
+                        if detected_headers and write_mode == "w":
+                            writer.writeheader()
+
+                    # 补充缺失的字段
+                    row = {header: item.get(header, default_value)
+                           for header in detected_headers}
+
+                    # 写入数据
+                    writer.writerow(row)
+                    stats["exported_count"] += 1
+
+                    # 进度回调
+                    if progress_callback and stats["exported_count"] % chunk_size == 0:
+                        progress_callback(stats["exported_count"], total_count)
+
+                except Exception as e:
+                    if skip_errors:
+                        logger.warning(f"Error processing item: {e}")
+                        stats["error_count"] += 1
+                    else:
+                        raise
+
+        # 最后一次进度回调
+        if progress_callback:
+            progress_callback(stats["exported_count"], total_count)
+
+        stats["success"] = True
+        logger.info(
+            f"Export completed: {stats['exported_count']} records exported, "
+            f"{stats['error_count']} errors, output: {output_path}"
+        )
+
+        return stats
 
 
 if __name__ == "__main__":

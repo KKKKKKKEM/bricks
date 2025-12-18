@@ -274,16 +274,39 @@ def numerify(text="###"):
     text = _re_hash.sub(lambda x: str(random.randint(0, 9)), text)
     text = _re_perc.sub(lambda x: str(random.randint(1, 9)), text)
     text = _re_excl.sub(
-        lambda x: str(random.randint(0, 1) and random.randint(0, 9) or ""), text
+        lambda x: str(random.randint(0, 1)
+                      and random.randint(0, 9) or ""), text
     )
     text = _re_at.sub(
-        lambda x: str(random.randint(0, 1) and random.randint(1, 9) or ""), text
+        lambda x: str(random.randint(0, 1)
+                      and random.randint(1, 9) or ""), text
     )
     return text
 
 
 def _choice(elements):
+    """普通随机选择"""
     return random.choice(elements)
+
+
+def _weighted_choice(choices):
+    """加权随机选择
+
+    :param choices: 元组列表，格式为 [(value, weight), ...]
+                   或直接传入值列表（等权重）
+    :return: 随机选择的值
+    """
+    if not choices:
+        raise ValueError("choices cannot be empty")
+
+    # 如果是普通列表/元组，直接使用 random.choice
+    if not isinstance(choices[0], (tuple, list)):
+        return random.choice(choices)
+
+    # 如果是加权列表
+    values = [c[0] for c in choices]
+    weights = [c[1] for c in choices]
+    return random.choices(values, weights=weights, k=1)[0]
 
 
 def randomtimes(start, end, frmt="%Y-%m-%d %H:%M:%S"):
@@ -317,290 +340,83 @@ user_agents = (
     "edge",
 )
 
-windows_platform_tokens = (
-    "Windows NT 11.0",  # Windows 11
-    "Windows NT 10.0",  # Windows 10
-    "Windows NT 6.3",  # Windows 8.1
-    "Windows NT 6.2",  # Windows 8
-    "Windows NT 6.1",  # Windows 7
-    "Windows NT 6.0",  # Windows Vista
-    "Windows NT 5.2",  # Windows Server 2003/Windows XP x64 Edition
-    "Windows NT 5.1",  # Windows XP
-    "Windows NT 5.0",  # Windows 2000
-    "Windows 98",  # Windows 98
-    "Windows 95",  # Windows 95
-    "Windows CE",  # Windows CE
-    # 64位和32位区分
-    "Windows NT 10.0; Win64; x64",  # 64位Windows 10
-    "Windows NT 10.0; WOW64",  # 32位应用在64位Windows 10
-    # 其他可能的变体
-    "Windows NT 6.1; Win64; x64",  # 64位Windows 7
-    "Windows NT 6.1; WOW64",  # 32位应用在64位Windows 7
-    "Windows NT 11.0; Win64; x64",  # 64位Windows 11
-    "Windows NT 11.0; WOW64",  # 32位应用在64位Windows 11
-)
+# 格式: (value, weight) - weight 越大，出现概率越高
+windows_platform_tokens = [
+    ("Windows NT 10.0; Win64; x64", 50),  # 64位 Windows 10 (最常见)
+    ("Windows NT 11.0; Win64; x64", 45),  # 64位 Windows 11 (逐渐普及)
+    ("Windows NT 10.0; WOW64", 5),  # 32位应用在64位 Windows 10（少见）
+]
 
-linux_processors = (
-    "i686",  # 表示使用 32 位的 Intel 处理器架构
-    "x86_64",  # 表示使用 64 位的 Intel 或 AMD 处理器架构
-    "armv7l",  # 表示使用 ARMv7 架构的处理器，常见于旧一些的移动设备
-    "i586",  # 表示较早期的 32 位 Intel 处理器架构
-    "aarch64",  # 表示 64 位的 ARM 处理器架构（ARM64架构）
-    "armv8",  # 表示 ARMv8 架构的处理器，也是一种 64 位 ARM 架构
-)
+linux_processors = [
+    ("x86_64", 85),  # 64 位 Intel/AMD 架构（最常见）
+    ("aarch64", 15),  # 64 位 ARM 架构（如树莓派 4、服务器）
+]
 
-mac_processors = (
-    "Intel",  # 表示使用 Intel 处理器的 Mac
-    "PPC",  # 表示使用 PowerPC 处理器的 Mac
-    "U; Intel",  # 另一种表示 Intel 处理器的方式
-    "U; PPC",  # 另一种表示 PowerPC 处理器的方式
-    "ARM",  # 表示使用 ARM 架构处理器的 Mac，如 Apple Silicon M1
-    "U; ARM",  # 另一种表示 ARM 架构处理器的方式
-)
+mac_processors = [
+    ("Intel", 60),  # Intel 处理器的 Mac（仍有一定占比）
+    ("Intel Mac OS X", 40),  # 更标准的 Intel Mac 标识
+]
 
-android_versions = (
-    "4.0",
-    "4.0.1",
-    "4.0.2",
-    "4.0.3",
-    "4.0.4",  # Ice Cream Sandwich
-    "4.1",
-    "4.1.1",
-    "4.1.2",  # Jelly Bean
-    "4.2",
-    "4.2.1",
-    "4.2.2",  # Jelly Bean
-    "4.3",
-    "4.3.1",  # Jelly Bean
-    "4.4",
-    "4.4.1",
-    "4.4.2",
-    "4.4.3",
-    "4.4.4",  # KitKat
-    "5.0",
-    "5.0.1",
-    "5.0.2",  # Lollipop
-    "5.1",
-    "5.1.1",  # Lollipop
-    "6.0",
-    "6.0.1",  # Marshmallow
-    "7.0",  # Nougat
-    "7.1",
-    "7.1.1",
-    "7.1.2",  # Nougat
-    "8.0.0",  # Oreo
-    "8.1.0",  # Oreo
-    "9",  # Pie
-    "10",  # Android 10
-    "11",  # Android 11
-    "12",  # Android 12
-    "12L",  # Android 12L
-    "13",  # Android 13
-    "14",  # Android 14
-    "15",  # Android 15
-)
+android_versions = [
+    ("10", 5),   # Android 10 (较少)
+    ("11", 10),  # Android 11
+    ("12", 20),  # Android 12
+    ("13", 30),  # Android 13 (常见)
+    ("14", 30),  # Android 14 (常见)
+    ("15", 5),   # Android 15 (最新)
+]
 
 apple_devices = ("iPhone", "iPad")
 
-ios_versions = (
-    "9.0",
-    "9.1",
-    "9.2",
-    "9.2.1",
-    "9.3",
-    "9.3.1",
-    "9.3.2",
-    "9.3.3",
-    "9.3.4",
-    "9.3.5",  # iOS 9 系列
-    "10.0",
-    "10.0.1",
-    "10.0.2",
-    "10.1",
-    "10.1.1",
-    "10.2",
-    "10.2.1",
-    "10.3",
-    "10.3.1",
-    "10.3.2",
-    "10.3.3",
-    # iOS 10 系列
-    "11.0",
-    "11.0.1",
-    "11.0.2",
-    "11.0.3",
-    "11.1",
-    "11.1.1",
-    "11.1.2",
-    "11.2",
-    "11.2.1",
-    "11.2.2",
-    "11.2.5",
-    "11.2.6",
-    "11.3",
-    "11.3.1",
-    "11.4",
-    "11.4.1",  # iOS 11 系列
-    "12.0",
-    "12.0.1",
-    "12.1",
-    "12.1.1",
-    "12.1.2",
-    "12.1.3",
-    "12.1.4",
-    "12.2",
-    "12.3",
-    "12.3.1",
-    "12.3.2",
-    "12.4",
-    "12.4.1",
-    "12.4.2",
-    "12.4.3",
-    "12.4.4",
-    "12.4.5",
-    "12.4.6",
-    "12.4.7",
-    "12.4.8",  # iOS 12 系列
-    "13.0",
-    "13.1",
-    "13.1.1",
-    "13.1.2",
-    "13.1.3",
-    "13.2",
-    "13.2.1",
-    "13.2.2",
-    "13.2.3",
-    "13.3",
-    "13.3.1",
-    "13.4",
-    "13.4.1",
-    "13.5",
-    "13.5.1",
-    "13.6",
-    "13.6.1",
-    "13.7",  # iOS 13 系列
-    "14.0",
-    "14.0.1",
-    "14.1",
-    "14.2",
-    "14.2.1",
-    "14.3",
-    "14.4",
-    "14.4.1",
-    "14.4.2",
-    "14.5",
-    "14.5.1",
-    "14.6",
-    "14.7",
-    "14.7.1",
-    "14.8",  # iOS 14 系列
-    "15.0",
-    "15.0.1",
-    "15.0.2",
-    "15.1",
-    "15.1.1",
-    "15.2",
-    "15.2.1",
-    "15.3",
-    "15.3.1",
-    "15.4",
-    "15.4.1",
-    "15.5",
-    "15.6",
-    "15.6.1",
-    "15.7",  # iOS 15 系列
-    "16.0",
-    "16.1",  # iOS 16 系列
-)
+ios_versions = [
+    # iOS 版本权重分布：新版本权重更高
+    ("15.7", 3),
+    ("15.8", 2),
+    ("16.0", 2),
+    ("16.1", 3),
+    ("16.2", 3),
+    ("16.3", 3),
+    ("16.4", 4),
+    ("16.5", 5),
+    ("16.6", 5),
+    ("16.7", 6),
+    ("16.7.2", 4),
+    ("17.0", 3),
+    ("17.1", 4),
+    ("17.2", 5),
+    ("17.3", 6),
+    ("17.4", 8),
+    ("17.5", 10),
+    ("17.6", 12),
+    ("17.6.1", 8),
+    ("18.0", 5),
+    ("18.1", 8),
+    ("18.1.1", 6),
+    ("18.2", 4),
+]
 
-mac_versions = (
-    "10.7",
-    "10.7.1",
-    "10.7.2",
-    "10.7.3",
-    "10.7.4",
-    "10.7.5",  # Lion
-    "10.8",
-    "10.8.1",
-    "10.8.2",
-    "10.8.3",
-    "10.8.4",
-    "10.8.5",  # Mountain Lion
-    "10.9",
-    "10.9.1",
-    "10.9.2",
-    "10.9.3",
-    "10.9.4",
-    "10.9.5",  # Mavericks
-    "10.10",
-    "10.10.1",
-    "10.10.2",
-    "10.10.3",
-    "10.10.4",
-    "10.10.5",  # Yosemite
-    "10.11",
-    "10.11.1",
-    "10.11.2",
-    "10.11.3",
-    "10.11.4",
-    "10.11.5",
-    "10.11.6",  # El Capitan
-    "10.12",
-    "10.12.1",
-    "10.12.2",
-    "10.12.3",
-    "10.12.4",
-    "10.12.5",
-    "10.12.6",  # Sierra
-    "10.13",
-    "10.13.1",
-    "10.13.2",
-    "10.13.3",
-    "10.13.4",
-    "10.13.5",
-    "10.13.6",  # High Sierra
-    "10.14",
-    "10.14.1",
-    "10.14.2",
-    "10.14.3",
-    "10.14.4",
-    "10.14.5",
-    "10.14.6",  # Mojave
-    "10.15",
-    "10.15.1",
-    "10.15.2",
-    "10.15.3",
-    "10.15.4",
-    "10.15.5",
-    "10.15.6",
-    "10.15.7",  # Catalina
-    "11.0",
-    "11.0.1",
-    "11.1",
-    "11.2",
-    "11.2.1",
-    "11.2.2",
-    "11.2.3",
-    "11.3",
-    "11.3.1",
-    "11.4",
-    "11.5",
-    "11.5.1",
-    "11.5.2",
-    "11.6",
-    "11.6.1",  # Big Sur
-    "12.0",
-    "12.0.1",
-    "12.1",
-    "12.2",
-    "12.2.1",
-    "12.3",
-    "12.3.1",
-    "12.4",
-    "12.5",  # Monterey
-    "13.0",
-    "13.1",  # Ventura
-)
+mac_versions = [
+    # macOS 版本权重分布
+    ("10.15.7", 2),  # Catalina (最后一个 10.x)
+    ("11.7", 2),
+    ("11.7.2", 2),  # Big Sur
+    ("12.6", 4),
+    ("12.7", 5),
+    ("12.7.1", 3),  # Monterey
+    ("13.5", 6),
+    ("13.6", 8),
+    ("13.6.2", 6),
+    ("13.7", 5),  # Ventura
+    ("14.3", 8),
+    ("14.4", 10),
+    ("14.5", 12),
+    ("14.6", 10),
+    ("14.7", 8),  # Sonoma
+    ("15.0", 4),
+    ("15.1", 6),
+    ("15.1.1", 4),
+    ("15.2", 3),  # Sequoia
+]
 
 dalvik_versions = (
     "1.1",
@@ -612,117 +428,68 @@ dalvik_versions = (
     "2.1",
 )
 
-phone_models = (
-    # Apple iPhone 系列
-    "iPhone 13,1",  # iPhone 12 Mini
-    "iPhone 13,2",  # iPhone 12
-    "iPhone 13,3",  # iPhone 12 Pro
-    "iPhone 13,4",  # iPhone 12 Pro Max
-    "iPhone 12,1",  # iPhone 11
-    "iPhone 12,3",  # iPhone 11 Pro
-    "iPhone 12,5",  # iPhone 11 Pro Max
-    "iPhone 11,8",  # iPhone XR
-    "iPhone 10,3",  # iPhone X
-    "iPhone 10,6",  # iPhone X
-    "iPhone 9,1",  # iPhone 7
-    "iPhone 9,3",  # iPhone 7
-    "iPhone 8,1",  # iPhone 6S
-    # ... 更多 iPhone 型号
-    # Samsung Galaxy 系列
-    "SM-G991B",  # Samsung Galaxy S21
-    "SM-G996B",  # Samsung Galaxy S21+
-    "SM-G998B",  # Samsung Galaxy S21 Ultra
-    "SM-G970F",  # Samsung Galaxy S10e
-    "SM-G973F",  # Samsung Galaxy S10
-    "SM-G975F",  # Samsung Galaxy S10+
-    # ... 更多 Samsung 型号
-    # Huawei 系列
-    "ELE-L29",  # Huawei P30
-    "VOG-L29",  # Huawei P30 Pro
-    "MAR-LX1A",  # Huawei P30 Lite
-    "P40 Pro",  # 华为 P40 Pro
-    "P40",  # 华为 P40
-    "P30 Pro",  # 华为 P30 Pro
-    "P30",  # 华为 P30
-    "Mate 40 Pro",  # 华为 Mate 40 Pro
-    "Mate 40",  # 华为 Mate 40
-    "Mate 30 Pro",  # 华为 Mate 30 Pro
-    "Mate 30",  # 华为 Mate 30
-    "Mate 20 Pro",  # 华为 Mate 20 Pro
-    "Mate 20",  # 华为 Mate 20
-    "Nova 7",  # 华为 Nova 7
-    "Nova 6",  # 华为 Nova 6
-    "Nova 5T",  # 华为 Nova 5T
-    "Honor 30",  # 荣耀 30
-    "Honor 20",  # 荣耀 20
-    "Honor 10",  # 荣耀 10
-    # ... 更多 Huawei 型号
-    # Xiaomi 系列
-    "M2102K1AC",  # Xiaomi Mi 11 Ultra
-    "M2011K2C",  # Xiaomi Mi 11
-    "M2007J3SC",  # Xiaomi Mi 10 Ultra
-    "Mi 10",  # 小米 Mi 10
-    "Mi 10 Pro",  # 小米 Mi 10 Pro
-    "Mi 11",  # 小米 Mi 11
-    "Mi 11 Ultra",  # 小米 Mi 11 Ultra
-    "Mi 9",  # 小米 Mi 9
-    "Mi 9 SE",  # 小米 Mi 9 SE
-    "Mi 8",  # 小米 Mi 8
-    "Redmi Note 9",  # 红米 Note 9
-    "Redmi Note 8",  # 红米 Note 8
-    "Redmi Note 7",  # 红米 Note 7
-    "Redmi 9",  # 红米 9
-    "Redmi 8",  # 红米 8
-    "Redmi 7",  # 红米 7
-    "Poco F3",  # Poco F3
-    "Poco X3 NFC",  # Poco X3 NFC
-    "Poco M3",  # Poco M3
-    # ... 更多 Xiaomi 型号
-    # OnePlus 系列
-    "IN2023",  # OnePlus 8 Pro
-    "IN2013",  # OnePlus 8
-    "IN2003",  # OnePlus 8T
-    # ... 更多 OnePlus 型号
+phone_models = [
+    # 权重根据市场占有率和新旧程度分配
+    # Apple iPhone 系列 (高端市场主导)
+    ("iPhone 16,1", 10),  # iPhone 15 Pro
+    ("iPhone 16,2", 12),  # iPhone 15 Pro Max
+    ("iPhone 15,2", 8),   # iPhone 14 Pro
+    ("iPhone 15,3", 9),   # iPhone 14 Pro Max
+    ("iPhone 14,2", 6),   # iPhone 13 Pro
+    ("iPhone 14,3", 7),   # iPhone 13 Pro Max
+    ("iPhone 13,2", 5),   # iPhone 12
+    ("iPhone 13,3", 4),   # iPhone 12 Pro
+    # Samsung Galaxy 系列 (全球占有率最高)
+    ("SM-S928B", 8),   # Galaxy S24 Ultra
+    ("SM-S926B", 7),   # Galaxy S24+
+    ("SM-S921B", 9),   # Galaxy S24
+    ("SM-S918B", 6),   # Galaxy S23 Ultra
+    ("SM-S916B", 5),   # Galaxy S23+
+    ("SM-S911B", 7),   # Galaxy S23
+    ("SM-A546B", 12),  # Galaxy A54 (中端畅销)
+    ("SM-A536B", 10),  # Galaxy A53
+    ("SM-G991B", 4),   # Galaxy S21
+    # Xiaomi 系列 (中国和印度市场主力)
+    ("23078PND5G", 6),  # Xiaomi 14 Pro
+    ("23049PCD8G", 8),  # Xiaomi 14
+    ("2311DRK48C", 5),  # Xiaomi 13 Ultra
+    ("2210132C", 6),    # Xiaomi 13 Pro
+    ("2211133C", 7),    # Xiaomi 13
+    ("2203121C", 5),    # Xiaomi 12 Pro
+    ("23124RN87C", 10),  # Redmi Note 13 Pro (性价比之王)
+    ("23090RA98C", 8),  # Redmi Note 12 Pro+
+    ("23013RK75C", 4),  # Poco F5 Pro
+    # Huawei 系列 (国内高端市场)
+    ("HMA-AL00", 4),  # Mate 60 Pro
+    ("NOH-AN00", 5),  # Mate 50 Pro
+    ("ELS-AN00", 3),  # P60 Pro
+    ("ALN-AL10", 3),  # P50 Pro
     # Google Pixel 系列
-    "Pixel 5",  # Google Pixel 5
-    "Pixel 4A",  # Google Pixel 4A
-    "Pixel 4",  # Google Pixel 4
-    # ... 更多 Pixel 型号
+    ("Pixel 9 Pro", 3),
+    ("Pixel 9", 4),
+    ("Pixel 8 Pro", 3),
+    ("Pixel 8", 5),
+    ("Pixel 8a", 4),
+    ("Pixel 7a", 3),
+    # OnePlus 系列
+    ("CPH2581", 4),  # OnePlus 12
+    ("CPH2451", 5),  # OnePlus 11
+    ("CPH2449", 3),  # OnePlus 10 Pro
     # Oppo 系列
-    "CPH2173",  # Oppo Find X3 Pro
-    "CPH2025",  # Oppo Find X2 Pro
-    # ... 更多 Oppo 型号
+    ("PHT110", 3),   # Find X7 Ultra
+    ("PJD110", 4),   # Find X7 Pro
+    ("PHN110", 3),   # Find X6 Pro
     # Vivo 系列
-    "V2035",  # Vivo Y31
-    "V2031",  # Vivo Y20G
-    # ... 更多 Vivo 型号
+    ("V2309A", 4),   # X100 Pro
+    ("V2285A", 3),   # X90 Pro+
+    ("V2227A", 4),   # X90 Pro
     # Realme 系列
-    "RMX2151",  # Realme 7 Pro
-    "RMX2040",  # Realme 6
-    # ... 更多 Realme 型号
-    # Nokia 系列
-    "TA-1053",  # Nokia 6
-    "TA-1043",  # Nokia 7 Plus
-    # ... 更多 Nokia 型号
-    # LG 系列
-    "LM-V600",  # LG V60 ThinQ
-    "LM-G900",  # LG Velvet
-    # ... 更多 LG 型号
-    # Sony 系列
-    "XQ-AS72",  # Sony Xperia 1 III
-    "XQ-AT52",  # Sony Xperia 5 II
-    # ... 更多 Sony 型号
-    # Motorola 系列
-    "XT1962-1",  # Motorola Moto G7
-    "XT2041-4",  # Motorola Moto G Power
-    # ... 更多 Motorola 型号
-    # Asus 系列
-    "ZS661KS",  # Asus ROG Phone 3
-    "ZS590KS",  # Asus Zenfone 8
-    # ... 更多 Asus 型号
-    # 更多其他品牌和型号
-    # ...
-)
+    ("RMX3890", 3),  # GT5 Pro
+    ("RMX3851", 4),  # GT5
+    # Honor 系列
+    ("PGT-AN10", 3),  # Magic 6 Pro
+    ("LGE-AN00", 4),  # Magic 5 Pro
+]
 
 nettypes = (
     "5G",
@@ -739,7 +506,7 @@ def windows_platform_token():
 
     :return:
     """
-    return _choice(windows_platform_tokens)
+    return _weighted_choice(windows_platform_tokens)
 
 
 def mac_platform_token():
@@ -748,11 +515,13 @@ def mac_platform_token():
 
     :return:
     """
-
-    return "Macintosh; {} Mac OS X {}".format(
-        _choice(mac_processors),
-        _choice(mac_versions).replace(".", "_"),
-    )
+    processor = _weighted_choice(mac_processors)
+    mac_ver = _weighted_choice(mac_versions).replace(".", "_")
+    # 如果 processor 已经包含 "Mac OS X"，直接使用；否则添加格式
+    if "Mac OS X" in processor:
+        return "Macintosh; {} {}".format(processor, mac_ver)
+    else:
+        return "Macintosh; {} Mac OS X {}".format(processor, mac_ver)
 
 
 def linux_platform_token():
@@ -761,7 +530,7 @@ def linux_platform_token():
 
     :return:
     """
-    return "X11; Linux {}".format(_choice(linux_processors))
+    return "X11; Linux {}".format(_weighted_choice(linux_processors))
 
 
 def android_platform_token():
@@ -770,7 +539,7 @@ def android_platform_token():
 
     :return:
     """
-    return "Android {}".format(_choice(android_versions))
+    return "Android {}".format(_weighted_choice(android_versions))
 
 
 def _android_build_id():
@@ -797,21 +566,26 @@ def android_platform_token_full():
     更真实的 Android 平台 token，包含 Linux; Android 版本; 机型 Build/ID
     例如: Linux; Android 13; SM-G991B Build/TP1A.220624.014
     """
-    version = _choice(android_versions)
-    model = _choice(phone_models)
+    version = _weighted_choice(android_versions)
+    model = _weighted_choice(phone_models)
     return f"Linux; Android {version}; {model} Build/{_android_build_id()}"
 
 
 def safari_webkit_version():
-    """返回更真实的 Safari WebKit 版本（常见为 605.1.15）"""
-    # 以高概率返回 605.1.15，偶尔返回 604.1 或 606.x
-    roll = random.random()
-    if roll < 0.8:
-        return "605.1.15"
-    elif roll < 0.9:
-        return "604.1"
-    else:
-        return f"606.{random.randint(1, 5)}"
+    """返回更真实的 Safari WebKit 版本（现代版本）"""
+    # 2024-2025 年的 WebKit 版本主要在 615-619 之间，新版本权重更高
+    versions = [
+        ("615.1.26", 3),
+        ("616.1.27", 5),        # Safari 17.2+
+        ("617.1.15", 8),        # Safari 17.4+
+        ("617.1.15.11.12", 6),
+        ("617.2.6", 5),
+        ("618.1.15", 15),       # Safari 18.x (最常见)
+        ("618.1.15.11.14", 12),
+        ("618.2.12", 10),
+        ("619.1.1", 8),         # Safari 18.2+
+    ]
+    return _weighted_choice(versions)
 
 
 def ios_platform_token():
@@ -820,10 +594,14 @@ def ios_platform_token():
 
     :return:
     """
-    return "{0}; CPU {0} OS {1} like Mac OS X".format(
-        _choice(apple_devices),
-        _choice(ios_versions).replace(".", "_"),
-    )
+    device = _choice(apple_devices)
+    ios_ver = _weighted_choice(ios_versions).replace(".", "_")
+
+    # iPhone 和 iPad 的格式略有不同
+    if device == "iPhone":
+        return "{0}; CPU {0} OS {1} like Mac OS X".format(device, ios_ver)
+    else:  # iPad
+        return "{0}; CPU OS {1} like Mac OS X".format(device, ios_ver)
 
 
 def wechat_platform_token():
@@ -832,11 +610,19 @@ def wechat_platform_token():
 
     :return:
     """
-    return f"MicroMessenger/{random.randint(5, 9)}.{random.randint(0, 9)}.{random.randint(0, 9)} NetType/{_choice(nettypes)}  Language/{_choice(['en', 'zh_CN'])}"
+    # 微信版本主要在 8.0.x 版本段
+    wechat_versions = [
+        ("8.0.49", 8),
+        ("8.0.50", 10),
+        ("8.0.51", 6),
+        ("8.0.52", 4),
+    ]
+    version = _weighted_choice(wechat_versions)
+    return f"MicroMessenger/{version} NetType/{_choice(nettypes)}  Language/{_choice(['en', 'zh_CN'])}"
 
 
 def android(
-    android_version_from="8.0",
+    android_version_from="11",
     brand: Optional[Union[str, List[str]]] = None,
     prefix: str = "Dalvik",
 ):
@@ -846,19 +632,23 @@ def android(
     :return:
     """
     dalvik_version = f"{random.randint(1, 2)}.{random.randint(0, 9)}"
-    android_version = _choice(
-        [i for i in android_versions if i > android_version_from]
-        or [android_version_from]
-    )
+    # 过滤出符合条件的版本（带权重）
+    valid_versions = [(v, w)
+                      for v, w in android_versions if v >= android_version_from]
+    android_version = _weighted_choice(
+        valid_versions) if valid_versions else android_version_from
     if brand and not isinstance(brand, list):
         brand = [brand]
-    brand = _choice(brand or phone_models)
+    brand = _choice(brand) if brand else _weighted_choice(phone_models)
     return f"{prefix}/{dalvik_version} (Linux; U; Android {android_version}; {brand} Build/{''.join(random.choices(string.hexdigits, k=4))}.{randomtimes('20000101', datetime.today().strftime('%Y%m%d'), '%Y%m%d')}.{numerify()})"
 
 
 def internet_explorer():
     """
     生成 internet_explorer 的 user-agent
+
+    警告: IE 已于 2022 年退役，生成 IE UA 可能增加被识别风险。
+    建议使用 Edge 或 Chrome 代替。
 
     :return:
     """
@@ -873,10 +663,10 @@ def internet_explorer():
 
 def opera(
     device="all",
-    version_from=15,
-    version_end=77,
-    chrome_version_from=90,
-    chrome_version_end=120,
+    version_from=100,
+    version_end=110,
+    chrome_version_from=120,
+    chrome_version_end=132,
 ):
     """
     生成 opera 的 user-agent
@@ -888,7 +678,8 @@ def opera(
     :param device: 设备类型, 可选: all/mobile/pc
     :return:
     """
-    bld = _re_qm.sub(lambda x: _choice(string.ascii_letters), numerify("##?###"))
+    bld = _re_qm.sub(lambda x: _choice(
+        string.ascii_letters), numerify("##?###"))
 
     opera_version = f"{random.randint(version_from, version_end)}.0.{random.randint(1000, 9999)}.{random.randint(0, 999)}"
 
@@ -896,25 +687,13 @@ def opera(
     opera_mobile = f"Opera/{random.randint(9, 12)}.{random.randint(10, 99)} ({_choice([android_platform_token(), ios_platform_token()])}; Opera Mobile/{bld}; U; {locale().replace('_', '-')}) Presto/{opera_version} Version/{random.randint(10, 12)}.02"
     saf_version = f"{random.randint(531, 537)}.{random.randint(0, 36)}"
     _v = random.randint(chrome_version_from, chrome_version_end)
-    chrome_version = (
-        f"{_v}.0.{int(_v * (49 + random.random()))}.{random.randint(0, 100)}"
-    )
+    # 优化版本号生成
+    build_num = random.randint(5000, 6999)
+    patch_num = random.randint(0, 200)
+    chrome_version = f"{_v}.0.{build_num}.{patch_num}"
 
+    # Opera 现在基于 Chromium，不再生成 Presto 引擎的 UA
     platforms_pc = [
-        "Opera/{}.{}.({}; {}) Presto/2.{}.{} Version/{}.00".format(
-            random.randint(9, 12),
-            random.randint(10, 99),
-            random.choice(
-                [
-                    linux_platform_token(),
-                    windows_platform_token(),
-                ]
-            ),
-            locale().replace("_", "-"),
-            random.randint(9, 12),
-            random.randint(160, 400),
-            random.randint(10, 12),
-        ),
         tmp_pc.format(
             platform=windows_platform_token(),
             saf_version=saf_version,
@@ -927,33 +706,51 @@ def opera(
             chrome_ver=chrome_version,
             opera_ver=opera_version,
         ),
+        tmp_pc.format(
+            platform=linux_platform_token(),
+            saf_version=saf_version,
+            chrome_ver=chrome_version,
+            opera_ver=opera_version,
+        ),
     ]
     platforms_mobile = [opera_mobile]
     platforms_all = [*platforms_mobile, *platforms_pc]
     return "Mozilla/5.0 " + _choice(locals()[f"platforms_{device}"])
 
 
-def chrome(device="all", version_from=90, version_end=120):
+def chrome(device="all", version_from=120, version_end=132, webview=False):
     """
     生成 chrome 的 user-agent
 
     :param version_end:
     :param version_from: 最小版本号
     :param device: 设备类型, 可选: all/mobile/pc
+    :param webview: 是否生成 WebView UA (仅 Android)
     :return:
     """
 
+    # Android Chrome 可以是普通浏览器或 WebView
     tmp_android = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) Chrome/{version} Mobile Safari/{saf_version}"
+    tmp_android_wv = "({platform}; wv) AppleWebKit/{saf_version} (KHTML, like Gecko) Version/4.0 Chrome/{version} Mobile Safari/{saf_version}"
     tmp_iphone = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) CriOS/{version} Mobile/{bld} Safari/{saf_version}"
     tmp_normal = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) Chrome/{version} Safari/{saf_version}"
     saf_version = "537.36"
-    bld = _re_qm.sub(lambda x: _choice(string.ascii_letters), numerify("##?###"))
+    bld = _re_qm.sub(lambda x: _choice(
+        string.ascii_letters), numerify("##?###"))
 
     _v = random.randint(version_from, version_end)
-    version = f"{_v}.0.{int(_v * (49 + random.random()))}.{random.randint(0, 100)}"
+    # 优化算法：第三位为 4位数，第四位为 2-3 位数
+    build_num = random.randint(5000, 6999)  # Chrome 典型的 build 号段
+    patch_num = random.randint(0, 200)       # patch 号通常较小
+    version = f"{_v}.0.{build_num}.{patch_num}"
+
+    # 根据 webview 参数或随机选择是否使用 WebView 格式
+    use_webview = webview or (
+        device in ["mobile", "all"] and random.random() < 0.15)  # 15% 概率生成 WebView UA
+    android_template = tmp_android_wv if use_webview else tmp_android
 
     platforms_mobile = [
-        tmp_android.format(
+        android_template.format(
             platform=android_platform_token_full(),
             saf_version=saf_version,
             version=version,
@@ -986,7 +783,7 @@ def chrome(device="all", version_from=90, version_end=120):
     return "Mozilla/5.0 " + _choice(locals()[f"platforms_{device}"])
 
 
-def firefox(device="all", version_from=90, version_end=120):
+def firefox(device="all", version_from=120, version_end=135):
     """
     生成 firefox 的 user-agent
 
@@ -997,21 +794,25 @@ def firefox(device="all", version_from=90, version_end=120):
     """
 
     tmp_android = "({platform}; Mobile; rv:{version}) Gecko/{version} Firefox/{version}"
-    tmp_normal = "({platform}; Mobile; rv:{version}) Gecko/{ver} Firefox/{version}"
+    # PC 版不应该有 Mobile
+    tmp_pc = "({platform}; rv:{version}) Gecko/{ver} Firefox/{version}"
     tmp_iphone = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) FxiOS/{version} Mobile/{bld} Safari/{saf_version}"
     saf_version = f"{random.randint(531, 537)}.{random.randint(0, 36)}"
-    bld = _re_qm.sub(lambda x: _choice(string.ascii_letters), numerify("##?###"))
+    bld = _re_qm.sub(lambda x: _choice(
+        string.ascii_letters), numerify("##?###"))
     ver = (
         datetime.today()
         - timedelta(
-            days=random.randint(0, (datetime.today() - datetime(2018, 1, 1)).days)
+            days=random.randint(
+                0, (datetime.today() - datetime(2018, 1, 1)).days)
         )
     ).strftime("%Y%m%d")
 
     version = f"{random.randint(version_from, version_end)}.{random.randint(0, 3)}.{random.randint(0, 3)}"
 
     platforms_mobile = [
-        tmp_android.format(platform=android_platform_token_full(), version=version),
+        tmp_android.format(
+            platform=android_platform_token_full(), version=version),
         tmp_iphone.format(
             platform=ios_platform_token(),
             saf_version=saf_version,
@@ -1020,17 +821,17 @@ def firefox(device="all", version_from=90, version_end=120):
         ),
     ]
     platforms_pc = [
-        tmp_normal.format(
+        tmp_pc.format(
             platform=windows_platform_token(),
             ver=ver,
             version=version,
         ),
-        tmp_normal.format(
+        tmp_pc.format(
             platform=mac_platform_token(),
             ver=ver,
             version=version,
         ),
-        tmp_normal.format(
+        tmp_pc.format(
             platform=linux_platform_token(),
             ver=ver,
             version=version,
@@ -1040,7 +841,7 @@ def firefox(device="all", version_from=90, version_end=120):
     return "Mozilla/5.0 " + _choice(locals()[f"platforms_{device}"])
 
 
-def edge(device="all", version_from=90, version_end=120):
+def edge(device="all", version_from=120, version_end=132):
     """
     生成 edge 的 user-agent
 
@@ -1065,31 +866,58 @@ def safari(device="all"):
     :param device: 设备类型, 可选: all/mobile/pc
     :return:
     """
-    bld = _re_qm.sub(lambda x: _choice(string.ascii_letters), numerify("##?###"))
+    bld = _re_qm.sub(lambda x: _choice(
+        string.ascii_letters), numerify("##?###"))
     saf_version = safari_webkit_version()
-    tmp_mac = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) Version/{mac_version} Safari/{saf_version}"
-    tmp_ios = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) Version/{mac_version} Mobile/{bld} Safari/{saf_version}"
 
+    # Safari 版本号应该与系统版本匹配
+    # macOS 14.x -> Safari 17.x, macOS 15.x -> Safari 18.x
+    # iOS 17.x -> Safari 17.x, iOS 18.x -> Safari 18.x
+    def get_safari_version(os_version):
+        """根据系统版本获取对应的 Safari 版本"""
+        major_version = int(os_version.split('.')[0])
+        if major_version >= 18:  # iOS 18 or macOS 15
+            return f"18.{random.randint(0, 2)}"
+        # iOS 17 or macOS 14
+        elif major_version >= 17 or (major_version >= 14 and '.' in os_version):
+            return f"17.{random.randint(0, 6)}"
+        # iOS 16 or macOS 13
+        elif major_version >= 16 or (major_version >= 13 and '.' in os_version):
+            return f"16.{random.randint(0, 6)}"
+        # iOS 15 or macOS 12
+        elif major_version >= 15 or (major_version >= 12 and '.' in os_version):
+            return f"15.{random.randint(0, 6)}"
+        else:
+            return f"{random.randint(14, 18)}.{random.randint(0, 6)}"
+
+    tmp_mac = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) Version/{safari_version} Safari/{saf_version}"
+    tmp_ios = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) Version/{safari_version} Mobile/{bld} Safari/{saf_version}"
+
+    # 为 mobile 生成
+    ios_ver = _weighted_choice(ios_versions)
     platforms_mobile = [
         tmp_ios.format(
             platform=ios_platform_token(),
             saf_version=saf_version,
-            mac_version=_choice(mac_versions),
+            safari_version=get_safari_version(ios_ver),
             bld=bld,
         ),
     ]
+
+    # 为 PC 生成
+    mac_ver = _weighted_choice(mac_versions)
     platforms_pc = [
         tmp_mac.format(
             platform=mac_platform_token(),
             saf_version=saf_version,
-            mac_version=_choice(mac_versions),
+            safari_version=get_safari_version(mac_ver),
         ),
     ]
     platforms_all = [*platforms_mobile, *platforms_pc]
     return "Mozilla/5.0 " + _choice(locals()[f"platforms_{device}"])
 
 
-def wechat(device="all", chrome_version_from=90, chrome_version_end=120):
+def wechat(device="all", chrome_version_from=120, chrome_version_end=132):
     """
     生成 wechat 的 user-agent
 
@@ -1099,7 +927,8 @@ def wechat(device="all", chrome_version_from=90, chrome_version_end=120):
     :return:
     """
     saf_version = "537.36"
-    bld = _re_qm.sub(lambda x: _choice(string.ascii_letters), numerify("##?###"))
+    bld = _re_qm.sub(lambda x: _choice(
+        string.ascii_letters), numerify("##?###"))
     tmplt = (
         "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko)"
         " Chrome/{chrome_ver} Safari/{saf_version}"
@@ -1110,9 +939,10 @@ def wechat(device="all", chrome_version_from=90, chrome_version_end=120):
     )
     tmp_xcx = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) Mobile/{bld}"
     _v = random.randint(chrome_version_from, chrome_version_end)
-    chrome_version = (
-        f"{_v}.0.{int(_v * (49 + random.random()))}.{random.randint(0, 100)}"
-    )
+    # 优化版本号生成
+    build_num = random.randint(5000, 6999)
+    patch_num = random.randint(0, 200)
+    chrome_version = f"{_v}.0.{build_num}.{patch_num}"
 
     platforms_pc = [
         tmplt.format(
@@ -1146,7 +976,8 @@ def wechat(device="all", chrome_version_from=90, chrome_version_end=120):
         )
         + " "
         + wechat_platform_token(),
-        tmp_xcx.format(platform=ios_platform_token(), saf_version=saf_version, bld=bld)
+        tmp_xcx.format(platform=ios_platform_token(),
+                       saf_version=saf_version, bld=bld)
         + f" {wechat_platform_token()} Branch/Br_trunk MiniProgramEnv/Mac",
     ]
     platforms_all = [*platforms_mobile, *platforms_pc]
