@@ -203,7 +203,8 @@ class TaskQueue(metaclass=genesis.MetaClass):
         def inner(name, *values, **kwargs):
             values = [
                 [
-                    (self.py2str(i.fingerprint)[0] if isinstance(i, Item) else i)
+                    (self.py2str(i.fingerprint)[0]
+                     if isinstance(i, Item) else i)
                     for i in value
                 ]
                 for value in values
@@ -299,3 +300,4 @@ class TaskQueue(metaclass=genesis.MetaClass):
 from bricks.lib.queues.local import LocalQueue  # noqa: F401 E402
 from bricks.lib.queues.redis_ import RedisQueue  # noqa: F401 E402
 from bricks.lib.queues.smart import SmartQueue  # noqa: F401 E402
+from bricks.lib.queues.sqlite_ import SQLiteQueue  # noqa: F401 E402

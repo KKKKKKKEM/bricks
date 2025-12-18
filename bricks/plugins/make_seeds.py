@@ -236,7 +236,7 @@ def by_redis(
         f"不支持的存储类型-{key_type}"
     )
     assert (
-            conn.type(path) == key_type or key_type == "string"
+        conn.type(path) == key_type or key_type == "string"
     ), f"读取类型错误-{path}:{conn.type(path)}, 读取类型-{key_type}"
 
     def read():
@@ -257,8 +257,99 @@ def by_redis(
         yield _data
 
 
-if __name__ == "__main__":
-    from no_views.conn import redis
+def by_range(
+        start: int = 0,
+        stop: Optional[int] = None,
+        step: int = 1,
+        batch_size: int = 10000,
+        skip: Union[str, int] = ...,
+        record: Optional[dict] = None,
+        key: str = "id",
+        reverse: bool = False,
+):
+    """
+    生成递增（或递减）ID 作为种子，支持断点续投
 
-    for _ in by_redis(path="*|*", conn=redis, key_type="string", batch_size=1):
-        print(_)
+    :param start: 起始值（包含）
+    :param stop: 结束值（不包含），如果为 None 则无限生成
+    :param step: 步长，正数递增，负数递减
+    :param batch_size: 一次生成多少条数据
+    :param skip: 跳过初始多少种子，支持 "auto" 自动从 record 恢复
+    :param record: 历史记录，用于断点续投
+    :param key: 字典的键名
+    :param reverse: 是否反向生成（从大到小），会自动调整 start/stop/step
+    :return: 生成器，每次 yield 一批数据
+    """
+    record = record or {}
+
+    # 处理反向生成
+    if reverse:
+        if stop is None:
+            raise ValueError("反向生成时必须指定 stop 参数")
+        start, stop = stop - 1, start - 1 if start > 0 else None
+        step = -abs(step)
+
+    # 确保步长与方向一致
+    if stop is not None and stop < start and step > 0:
+        step = -step
+    elif stop is not None and stop > start and step < 0:
+        step = -step
+
+    # 处理 skip 参数
+    if skip is ...:
+        skip = "auto" if record else 0
+
+    raw_skip = skip
+    record_key = _make_key(
+        {
+            "start": start,
+            "stop": stop,
+            "step": step,
+            "skip": raw_skip,
+            "reverse": reverse,
+        }
+    )
+
+    if raw_skip == "auto":
+        skip = int(record.get(record_key, 0))
+    else:
+        skip = int(skip) if skip else 0
+
+    # 计算实际起始位置
+    current = start + (skip * step)
+
+    # 检查是否已经超出范围
+    if stop is not None:
+        if (step > 0 and current >= stop) or (step < 0 and current <= stop):
+            return
+
+    batch = []
+    count = 0
+
+    # 生成器主循环
+    while True:
+        # 检查是否到达终点
+        if stop is not None:
+            if (step > 0 and current >= stop) or (step < 0 and current <= stop):
+                break
+
+        # 添加到批次
+        item = {key: current}
+        batch.append(item)
+        count += 1
+
+        # 当批次达到指定大小时 yield
+        if len(batch) >= batch_size:
+            skip += len(batch)
+            record.update({record_key: skip})
+            yield batch
+            batch = []
+
+        # 移动到下一个值
+        current += step
+
+    # yield 剩余的数据
+    if batch:
+        skip += len(batch)
+        record.update({record_key: skip})
+        yield batch
