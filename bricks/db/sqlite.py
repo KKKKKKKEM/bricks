@@ -2,11 +2,14 @@
 # @Time    : 2023-11-15 16:42
 # @Author  : Kem
 # @Desc    :
+import contextlib
 import csv
+import json
 import os
 import pickle
 import sqlite3
 import subprocess
+from threading import Lock
 from typing import List, Optional
 
 
@@ -14,12 +17,12 @@ class Sqlite:
     def __init__(self, database=":memory:", **kwargs):
         sqlite3.register_adapter(bool, int)
         sqlite3.register_adapter(object, pickle.dumps)
-        sqlite3.register_adapter(list, pickle.dumps)
-        sqlite3.register_adapter(set, pickle.dumps)
-        sqlite3.register_adapter(tuple, pickle.dumps)
-        sqlite3.register_adapter(dict, pickle.dumps)
+        sqlite3.register_adapter(list, json.dumps)
+        sqlite3.register_adapter(set, json.dumps)
+        sqlite3.register_adapter(tuple, json.dumps)
+        sqlite3.register_adapter(dict, json.dumps)
         sqlite3.register_converter("BOOLEAN", lambda v: bool(int(v)))
-        sqlite3.register_converter("OBJECT", pickle.loads)
+        sqlite3.register_converter("OBJECT", json.loads)
         if database != ":memory:" and not database.endswith(".db"):
             database = database + ".db"
 
@@ -29,6 +32,7 @@ class Sqlite:
             database, detect_types=sqlite3.PARSE_DECLTYPES, **kwargs
         )
         self._cursor: sqlite3.Cursor
+        self._lock = Lock()
         self.python_to_sqlite_types = {
             type(None): "NULL",
             int: "INTEGER",
@@ -74,9 +78,14 @@ class Sqlite:
                 else:
                     break
 
-    def insert(self, table: str, *docs: dict, row_keys: Optional[list] = None):
+    def insert(self, table: str, *docs: dict, row_keys: Optional[list] = None, with_lock: bool = True):
         if not docs:
             return
+        
+        if with_lock:
+            ctx = self._lock
+        else:
+            ctx = contextlib.nullcontext()
 
         keys = docs[0].keys()
         if row_keys:
@@ -85,29 +94,41 @@ class Sqlite:
             query = ""
 
         sql = (
-                "INSERT INTO "
-                + table
-                + f' ({",".join(keys)}) VALUES ({",".join(["?"] * len(keys))}){query}'
+            "INSERT INTO "
+            + table
+            + f' ({",".join(keys)}) VALUES ({",".join(["?"] * len(keys))}){query}'
         )
-        with self as cur:
-            cur.executemany(sql, [tuple(doc.values()) for doc in docs])
+        with ctx:
+            with self as cur:
+                cur.executemany(sql, [tuple(doc.values()) for doc in docs])
 
-    def upsert(self, table: str, *docs: dict):
+    def upsert(self, table: str, *docs: dict, with_lock: bool = True):
         sql = (
-                "INSERT OR REPLACE INTO "
-                + table
-                + f' ({",".join(docs[0].keys())}) VALUES ({",".join(["?"] * len(docs[0]))})'
+            "INSERT OR REPLACE INTO "
+            + table
+            + f' ({",".join(docs[0].keys())}) VALUES ({",".join(["?"] * len(docs[0]))})'
         )
-        with self as cur:
-            cur.executemany(sql, [tuple(doc.values()) for doc in docs])
+        if with_lock:
+            ctx = self._lock
+        else:
+            ctx = contextlib.nullcontext()
+        with ctx:
+            with self as cur:
+                cur.executemany(sql, [tuple(doc.values()) for doc in docs])
 
-    def update(self, table: str, query: str, update: dict):
+    def update(self, table: str, query: str, update: dict, with_lock: bool = True):
         sql = (
-                f"UPDATE {table}"
-                + f" SET {','.join([f'{k}=?' for k, v in update.items()])} WHERE {query}"
+            f"UPDATE {table}"
+            + f" SET {','.join([f'{k}=?' for k, v in update.items()])} WHERE {query}"
         )
-        with self as cur:
-            cur.execute(sql, tuple(update.values()))
+        if with_lock:
+            ctx = self._lock
+        else:
+            ctx = contextlib.nullcontext()
+            
+        with ctx:
+            with self as cur:
+                cur.execute(sql, tuple(update.values()))
 
     def delete(self, table: str, query: str):
         sql = "DELETE FROM " + f"{table} WHERE {query}"
@@ -120,20 +141,51 @@ class Sqlite:
             cur.execute(sql)
             return cur.fetchone()
 
-    def create_table(self, name, structure: dict):
+    def create_table(self, name, structure: dict, primary_keys: Optional[list] = None):
+        """
+        创建表
+
+        :param name: 表名
+        :param structure: 表结构 {"field": type}
+        :param primary_keys: 主键列表，支持单主键和复合主键
+        :return:
+        """
         with self as cur:
-            sql = (
+            if primary_keys:
+                # 带主键约束的表
+                if len(primary_keys) == 1:
+                    # 单主键
+                    pk_field = primary_keys[0]
+                    field_defs = [
+                        f'{k} {self.python_to_sqlite_types.get(v, "OBJECT")} PRIMARY KEY' if k == pk_field
+                        else f'{k} {self.python_to_sqlite_types.get(v, "OBJECT")}'
+                        for k, v in structure.items()
+                    ]
+                else:
+                    # 复合主键
+                    field_defs = [
+                        f'{k} {self.python_to_sqlite_types.get(v, "OBJECT")}'
+                        for k, v in structure.items()
+                    ]
+                    field_defs.append(
+                        f"PRIMARY KEY ({', '.join(primary_keys)})")
+
+                sql = f"CREATE TABLE IF NOT EXISTS {name} ({', '.join(field_defs)})"
+            else:
+                # 原来的逻辑，无主键
+                sql = (
                     f"CREATE TABLE IF NOT EXISTS {name}("
                     + ",".join(
-                [
-                    f'{k} {self.python_to_sqlite_types.get(v, "OBJECT")}'
-                    if v
-                    else k
-                    for k, v in structure.items()
-                ]
-            )
+                        [
+                            f'{k} {self.python_to_sqlite_types.get(v, "OBJECT")}'
+                            if v
+                            else k
+                            for k, v in structure.items()
+                        ]
+                    )
                     + ")"
-            )
+                )
+
             cur.execute(sql)
 
     def execute(self, sql: str):
@@ -148,6 +200,7 @@ class Sqlite:
             table: str,
             path: str,
             structure: dict = None,
+            primary_keys: Optional[list] = None,
             reload=True,
             debug=False,
     ):
@@ -170,7 +223,8 @@ class Sqlite:
         if reload:
             conn.execute(f"DROP TABLE IF EXISTS {table};")
         if structure:
-            conn.create_table(table, structure=structure)
+            conn.create_table(table, structure=structure,
+                              primary_keys=primary_keys)
         cmd = f'sqlite3 {database}.db ".mode csv" ".import {path!r} {table!r}"'
 
         options = {}
@@ -241,7 +295,6 @@ if __name__ == "__main__":
             return f"<People name: {self.name}>"
 
         __repr__ = __str__
-
 
     # sqlite = Sqlite()
     # sqlite.register_adapter(People, pickle.dumps)
