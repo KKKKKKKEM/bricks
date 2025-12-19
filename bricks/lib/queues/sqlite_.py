@@ -18,15 +18,27 @@ from loguru import logger
 from bricks.lib.queues import Item, TaskQueue
 from bricks.utils import pandora
 
+pandora.require("filelock")
+from filelock import FileLock  # noqa: E402
+
 
 class SQLiteQueue(TaskQueue):
     """
     基于 SQLite 的持久化队列
-    - 单机模式，非分布式
-    - 数据持久化，程序重启可恢复
-    - 多进程/多线程安全（所有写操作使用 IMMEDIATE 事务）
-    - 接口与 LocalQueue 保持一致
+
+    特性：
+    - 单机持久化存储，程序重启可恢复
+    - 多进程/多线程安全（文件锁 + IMMEDIATE 事务 + WAL 模式）
+    - 三队列模型：current（待处理）、temp（处理中）、failure（失败）
+    - 接口与 LocalQueue/RedisQueue 保持一致
     - 每个队列（name + qtype）使用独立的表
+
+    安全机制：
+    - 文件锁（FileLock）：每个队列独立的文件锁，保证多进程/多线程安全
+      * FileLock 本身是线程安全的，无需额外的线程锁
+      * 不同队列使用不同的文件锁，支持多队列并发操作
+    - IMMEDIATE 事务：确保读-写操作的原子性
+    - WAL 模式：提高并发读写性能
     """
 
     def __init__(self, db_path: Optional[str] = None, timeout: float = 30.0) -> None:
@@ -42,41 +54,37 @@ class SQLiteQueue(TaskQueue):
         self.db_path = db_path
         self.timeout = timeout
         self._local = threading.local()
-        self._locks = defaultdict(threading.Lock)
         self._status = defaultdict(threading.Event)
         self._table_cache = set()  # 缓存已创建的表名
 
         # 确保数据库目录存在
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        self.db_dir = Path(self.db_path).parent
+        self.db_dir.mkdir(parents=True, exist_ok=True)
+
+        # 文件锁字典（每个队列一个文件锁，支持多队列并发）
+        self._file_locks = {}
 
         # 初始化连接
         with self._get_connection() as conn:
-            # 启用外键约束
-            conn.execute("PRAGMA foreign_keys=ON")
-            # 创建元数据表
-            self._init_metadata_tables(conn)
+            cursor = conn.cursor()
 
-    def _init_metadata_tables(self, conn):
-        """初始化元数据表"""
-        cursor = conn.cursor()
+            # 记录表（用于存储队列元数据）
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS _queue_records (
+                    queue_name TEXT PRIMARY KEY,
+                    record_data TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+            """)
 
-        # 记录表（用于存储队列元数据）
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS _queue_records (
-                queue_name TEXT PRIMARY KEY,
-                record_data TEXT NOT NULL,
-                updated_at REAL NOT NULL
-            )
-        """)
-
-        # 状态表（用于存储队列状态）
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS _queue_status (
-                queue_name TEXT PRIMARY KEY,
-                status INTEGER DEFAULT 0,
-                updated_at REAL NOT NULL
-            )
-        """)
+            # 状态表（用于存储队列状态）
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS _queue_status (
+                    queue_name TEXT PRIMARY KEY,
+                    status INTEGER DEFAULT 0,
+                    updated_at REAL NOT NULL
+                )
+            """)
 
         conn.commit()
 
@@ -164,7 +172,26 @@ class SQLiteQueue(TaskQueue):
             raise e
 
     def __str__(self):
-        return f"<SQLiteQueue [ PATH: {self.db_path} ]>"
+        return f"<SQLiteQueue path={self.db_path}>"
+
+    def _get_lock(self, name: str) -> FileLock:
+        """获取队列的文件锁（每个队列独立，支持多队列并发）"""
+        if name not in self._file_locks:
+            lock_file = self.db_dir / f"{Path(self.db_path).stem}_{name}.lock"
+            self._file_locks[name] = FileLock(str(lock_file))
+        return self._file_locks[name]
+
+    @contextmanager
+    def _lock(self, name: str):
+        """
+        获取队列的文件锁
+
+        FileLock 本身是线程安全的，无需额外的线程锁
+        每个队列有独立的文件锁，支持多队列并发操作
+        """
+        lock = self._get_lock(name)
+        with lock:
+            yield
 
     def size(
         self, *names: str, qtypes: tuple = ("current", "temp", "failure"), **kwargs
@@ -260,73 +287,83 @@ class SQLiteQueue(TaskQueue):
                 raise e
 
     def get(self, name: str, count: int = 1, **kwargs) -> Item:
-        """获取任务（原子性写操作）"""
+        """
+        获取任务（原子性写操作）
+
+        使用文件锁 + IMMEDIATE 事务确保多进程/多线程安全：
+        1. 在查询前就获取该队列的文件锁
+        2. 开启 IMMEDIATE 事务后再查询
+        3. 原子性地将数据从 current 移动到 temp
+        """
         table_name = self._sanitize_table_name(name)
         tail = kwargs.pop("tail", False)
 
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
+        # 使用双重锁保护整个读-写过程
+        with self._lock(name):
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
 
-            # 检查表是否存在
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-                (table_name,)
-            )
-            if not cursor.fetchone():
-                return None
-
-            # 确保表存在
-            self._ensure_table_exists(table_name)
-
-            # 使用 IMMEDIATE 事务确保从查询到更新的原子性
-            try:
-                conn.execute("BEGIN IMMEDIATE")
-
-                # 按优先级和 ID 排序获取
-                order = "ASC" if tail else "ASC"
+                # 检查表是否存在
                 cursor.execute(
-                    f"""
-                    SELECT id, value, priority, created_at FROM "{table_name}"
-                    WHERE qtype = 'current'
-                    ORDER BY priority DESC, id {order}
-                    LIMIT ?
-                    """,
-                    (count,),
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                    (table_name,)
                 )
+                if not cursor.fetchone():
+                    return
 
-                rows = cursor.fetchall()
-                if not rows:
+                # 确保表存在
+                self._ensure_table_exists(table_name)
+
+                # 使用 IMMEDIATE 事务确保从查询到更新的原子性
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
+
+                    # 按优先级和 ID 排序获取
+                    order = "ASC" if tail else "ASC"
+                    cursor.execute(
+                        f"""
+                            SELECT id, value, priority, created_at FROM "{table_name}"
+                            WHERE qtype = 'current'
+                            ORDER BY priority DESC, id {order}
+                            LIMIT ?
+                            """,
+                        (count,),
+                    )
+
+                    rows = cursor.fetchall()
+                    if not rows:
+                        self._safe_rollback(conn, on_error="log")
+                        return None
+
+                    items = []
+                    ids_to_update = []
+
+                    for row_id, value_str, priority, created_at in rows:
+                        try:
+                            value = json.loads(value_str)
+                            items.append(value)
+                            ids_to_update.append(row_id)
+                        except json.JSONDecodeError:
+                            logger.error(
+                                f"Failed to decode value: {value_str}")
+
+                    if items:
+                        # 将 qtype 从 'current' 改为 'temp'
+                        for row_id in ids_to_update:
+                            cursor.execute(
+                                f'UPDATE "{table_name}" SET qtype = \'temp\', priority = 0 WHERE id = ?',
+                                (row_id,)
+                            )
+
+                        conn.execute("COMMIT")
+                        return items
+                    else:
+                        self._safe_rollback(conn, on_error="log")
+                        return None
+
+                except Exception as e:
                     self._safe_rollback(conn, on_error="log")
-                    return None
-
-                items = []
-                ids_to_update = []
-
-                for row_id, value_str, priority, created_at in rows:
-                    try:
-                        value = json.loads(value_str)
-                        items.append(value)
-                        ids_to_update.append(row_id)
-                    except json.JSONDecodeError:
-                        logger.error(f"Failed to decode value: {value_str}")
-
-                if items:
-                    # 将 qtype 从 'current' 改为 'temp'
-                    for row_id in ids_to_update:
-                        cursor.execute(
-                            f'UPDATE "{table_name}" SET qtype = \'temp\', priority = 0 WHERE id = ?',
-                            (row_id,)
-                        )
-
-                    conn.execute("COMMIT")
-                    return items
-                else:
-                    self._safe_rollback(conn, on_error="log")
-                    return None
-
-            except Exception as e:
-                self._safe_rollback(conn, on_error="log")
-                raise e
+                    raise e
 
     def remove(self, name: str, *values, **kwargs):
         """删除任务（原子性写操作）"""
