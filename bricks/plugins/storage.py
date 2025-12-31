@@ -17,6 +17,7 @@ def to_sqlite(
         conn: Sqlite,
         items: Union[List[dict], Items],
         row_keys: Optional[List[str]] = None,
+        with_lock: bool = True
 ):
     """
     存入数据至 sqlite
@@ -29,7 +30,7 @@ def to_sqlite(
     """
     if not items:
         return
-    return conn.insert(path, *items, row_keys=row_keys)
+    return conn.insert(path, *items, row_keys=row_keys, with_lock=with_lock)
 
 
 def to_mongo(
