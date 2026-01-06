@@ -8,7 +8,7 @@ import threading
 from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Dict, List, Literal, Optional, Union
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple, Union
 
 from loguru import logger
 
@@ -38,10 +38,10 @@ class RegisteredEvents:
         # 一次性事件
         self.disposable = defaultdict(functools.partial(defaultdict, list))
 
-        self.registered: Dict[str, List[Register]] = defaultdict(list)
+        self.registered: Dict[Any, List[Register]] = defaultdict(list)
 
         self._lock = threading.RLock()  # 使用可重入锁，避免死锁
-        self._sorted_cache: Dict[str, bool] = {}  # 缓存排序状态
+        self._sorted_cache: Dict[Tuple[str, Any], bool] = {}  # 缓存排序状态
 
     def __enter__(self):
         self._lock.acquire()
@@ -52,8 +52,7 @@ class RegisteredEvents:
 
     def mark_unsorted(self, form: str, target: Any):
         """标记指定容器需要重新排序"""
-        key = f"{form}:{target}"
-        self._sorted_cache[key] = False
+        self._sorted_cache[(form, target)] = False
 
 
 @dataclass
@@ -76,6 +75,7 @@ class Task:
     index: Optional[int] = None
     disposable: bool = False
     box: Optional[list] = None  # 改为Optional避免使用...
+    match_code: Optional[object] = None  # lazily-compiled eval code object for str matches
 
 
 @dataclass
@@ -262,13 +262,14 @@ class EventManager:
                         events = list(group[target])
 
                     # 延迟排序：仅在需要时排序
-                    cache_key = f"{context.form}:{target}"
-                    if not REGISTERED_EVENTS._sorted_cache.get(cache_key, False):
-                        events.sort(
-                            key=lambda x: x.index if x.index is not None else 0)
-                        if target is not ...:
+                    if target is ...:
+                        events.sort(key=lambda x: x.index if x.index is not None else 0)
+                    else:
+                        cache_key = (context.form, target)
+                        if not REGISTERED_EVENTS._sorted_cache.get(cache_key, False):
+                            events.sort(key=lambda x: x.index if x.index is not None else 0)
                             group[target] = events
-                        REGISTERED_EVENTS._sorted_cache[cache_key] = True
+                            REGISTERED_EVENTS._sorted_cache[cache_key] = True
 
                     # 匹配并yield事件
                     for event in events:
@@ -299,7 +300,9 @@ class EventManager:
         if callable(match):
             return match(context)
         if isinstance(match, str):
-            return eval(match, globals(), {"context": context})
+            if event.match_code is None:
+                event.match_code = compile(match, "<bricks.core.events.match>", "eval")
+            return eval(event.match_code, globals(), {"context": context})
         return False
 
     @classmethod
@@ -367,6 +370,16 @@ class EventManager:
                 # 支持字典形式的事件配置
                 if isinstance(event, dict):
                     event = Task(**event)
+                else:
+                    # Avoid mutating/cross-sharing Task templates (e.g., tasks coming from decorators).
+                    event = Task(
+                        func=event.func,
+                        args=list(event.args) if event.args is not None else None,
+                        kwargs=dict(event.kwargs) if event.kwargs is not None else None,
+                        match=event.match,
+                        index=event.index,
+                        disposable=event.disposable,
+                    )
 
                 disposable = event.disposable
 
@@ -390,9 +403,7 @@ class EventManager:
             REGISTERED_EVENTS.mark_unsorted(context.form, context.target)
 
             # 添加到registered索引
-            target_key = str(
-                context.target) if context.target is not None else "None"
-            REGISTERED_EVENTS.registered[target_key].extend(ret)
+            REGISTERED_EVENTS.registered[context.target].extend(ret)
 
         return ret
 

@@ -197,10 +197,14 @@ class Pangu(Chaos):
         for k, v in kwargs.items():
             self.set(k, v, nx=True)
 
-        self.dispatcher = dispatch.Dispatcher(
-            max_workers=self.get("concurrency", default=1),  # type: ignore
-            options=self.get("dispatcher.options", default={}),
-        )
+        provided_dispatcher = kwargs.get("dispatcher")
+        if provided_dispatcher is not None:
+            self.dispatcher = provided_dispatcher
+        else:
+            self.dispatcher = dispatch.Dispatcher(
+                max_workers=self.get("concurrency", default=1),  # type: ignore
+                options=self.get("dispatcher.options", default={}),
+            )
 
     @property
     def plugins(self) -> List[Register]:

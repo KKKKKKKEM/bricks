@@ -27,7 +27,7 @@ class Exit(signals.Signal):
 
 
 class _TaskQueue(queue.Queue):
-    def get(self, block=True, timeout=None, worker: "Worker" = None) -> "Task":
+    def get(self, block=True, timeout=None, worker: Optional["Worker"] = None) -> "Task":
         """
         获取任务，优先获取属于指定worker的任务，其次获取通用任务
 
@@ -205,7 +205,7 @@ class Worker(threading.Thread):
         if not self.is_alive():
             return
         exc = ctypes.py_object(SystemExit)
-        tid = ctypes.c_long(self.ident)
+        tid = ctypes.c_long(self.ident) # type: ignore
 
         res = ctypes.pythonapi.PyThreadState_SetAsyncExc(tid, exc)
         if res == 0:
@@ -258,26 +258,24 @@ class Dispatcher:
 
 
     """
+    loop: asyncio.AbstractEventLoop
+    doing: _TaskQueue  # _TaskQueue 在后面定义或导入
+    workers: dict[str, Worker]
+    _remain_workers: queue.Queue
+    _running_tasks: threading.Semaphore
+    _active_tasks: threading.Semaphore
+    _shutdown: Optional[asyncio.Event]
+    _running: threading.Event
+    thread: threading.Thread
+    _lock: threading.Lock
 
     def __init__(self, max_workers: int = 1, options: Optional[Dict] = None) -> None:
         self.max_workers = max_workers
         self.options = options or {}
-        self.loop: asyncio.AbstractEventLoop
-        self.doing: _TaskQueue
-        self.workers: Dict[str, Worker]
-
-        self._remain_workers: queue.Queue
-        self._running_tasks: threading.Semaphore
-        self._active_tasks: threading.Semaphore
-        self._shutdown: asyncio.Event
-        self._running: threading.Event
-        self.thread: threading.Thread
-        self._lock: threading.Lock
         self._set_env()
 
     def _set_env(self):
         self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
         self.doing = _TaskQueue()
         self.workers: Dict[str, Worker] = {}
         self._remain_workers = queue.Queue()
@@ -286,7 +284,10 @@ class Dispatcher:
 
         self._running_tasks = threading.Semaphore(self.max_workers)
         self._active_tasks = threading.Semaphore(self.max_workers)
-        self._shutdown = asyncio.Event()
+        # Created inside the dispatcher thread after setting the event loop.
+        # This avoids "There is no current event loop in thread ..." when a Dispatcher
+        # is instantiated from non-main threads.
+        self._shutdown = None
         self._running = threading.Event()
         self.thread = threading.Thread(
             target=self.run, name="DisPatch", daemon=True)
@@ -488,7 +489,7 @@ class Dispatcher:
         callback = task.get("callback")
 
         return Task(
-            func=func,
+            func=func, # type: ignore
             args=positional,
             kwargs=keyword,
             callback=callback,
@@ -496,7 +497,11 @@ class Dispatcher:
 
     def is_running(self) -> bool:
         """检查dispatcher是否正在运行"""
-        return not self._shutdown.is_set() and self._running.is_set()
+        return (
+            self._running.is_set()
+            and self._shutdown is not None
+            and not self._shutdown.is_set()
+        )
 
     @property
     def running(self) -> int:
@@ -505,30 +510,47 @@ class Dispatcher:
 
     def run(self) -> None:
         """运行dispatcher的主事件循环"""
-        async def main():
-            self.loop = asyncio.get_event_loop()
-            self._shutdown = asyncio.Event()
-            self._running.set()
-            await self._shutdown.wait()
-            # 清理完成后重置环境以便重新启动
-
+        asyncio.set_event_loop(self.loop)
+        self._shutdown = asyncio.Event()
+        self._running.set()
         try:
-            loop = asyncio.get_running_loop()
-            future = asyncio.run_coroutine_threadsafe(main(), loop=loop)
-            future.result()
-        except RuntimeError:
-            asyncio.run(main())
+            self.loop.run_until_complete(self._shutdown.wait())
+        finally:
+            try:
+                self.loop.stop()
+            except Exception:
+                pass
+            try:
+                self.loop.close()
+            except Exception:
+                pass
 
     def stop(self) -> None:
         """停止dispatcher及所有worker"""
         self.stop_worker(*self.workers.keys())
-        self.loop.call_soon_threadsafe(self._shutdown.set)
+        shutdown = self._shutdown
+        if shutdown is None:
+            return
+        try:
+            self.loop.call_soon_threadsafe(shutdown.set)
+        except RuntimeError:
+            pass
         # note: It must be called this way, otherwise the thread is unsafe and the write over there cannot be closed
 
     def start(self) -> None:
         with self._lock:
-            if not self.is_running():
-                self.thread.start()
+            if self.is_running():
+                self._running.wait()
+                return
+
+            # Dispatcher thread can't be started twice; re-init env for restart.
+            if self.thread.is_alive():
+                self._running.wait()
+                return
+            if self.thread.ident is not None:
+                self._set_env()
+
+            self.thread.start()
             self._running.wait()
 
     def __enter__(self):
