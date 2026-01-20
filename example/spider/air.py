@@ -71,6 +71,7 @@ class MySpider(air.Spider):
             )
 
     def item_pipeline(self, context: Context):
+        res = self.fetch(Request(url="https://www.baidu.com/"))
         items = context.items
         # 写自己的存储逻辑
         logger.debug(f"存储: {items}")
@@ -91,6 +92,8 @@ class MySpider(air.Spider):
             if context.response.get("code") != 0:
                 # 重试信号
                 raise signals.Retry
+        
+        
 
 
 if __name__ == "__main__":
