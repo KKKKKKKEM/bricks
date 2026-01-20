@@ -47,7 +47,7 @@ class Service(pb2_grpc.GenericServicer, BaseRpcService):
             request_id=rpc_response.request_id
         )
 
-    async def serve(self, concurrency: int = 10, ident: int = 0, on_server_started: Callable[[int], None] = None, **kwargs):
+    async def serve(self, concurrency: int = 10, ident: int = 0, on_server_started: Callable[[str], None] = None, **kwargs):
         """
         启动 gRPC 服务器
 
@@ -64,11 +64,13 @@ class Service(pb2_grpc.GenericServicer, BaseRpcService):
         # 将您的业务服务实例添加到 gRPC 服务器。
 
         pb2_grpc.add_generic_servicer_to_server(self, server)
-        ident = server.add_insecure_port(f'[::]:{ident}')
-        logger.info(f"gRPC Server started on port {ident} (insecure)...")
+        acture_port = server.add_insecure_port(f'[::]:{ident}')
+
+        identity = f"grpc://0.0.0.0:{acture_port}"
+        logger.info(f"gRPC Server started at: {identity} (insecure)")
         await server.start()
         try:
-            on_server_started and on_server_started(ident)
+            on_server_started and on_server_started(identity)
             await server.wait_for_termination()
         except KeyboardInterrupt:
             # 当接收到 Ctrl+C 时，优雅地关闭服务器

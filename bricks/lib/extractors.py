@@ -50,6 +50,13 @@ class Rule:
         if isinstance(value, (cls, Group)):
             value.build_engine(engine)
             return value
+        # 元祖 + 两位, 则是 exprs + post_script / exprs + default
+        # 主要看第二位的类型, 如果是函数就是 post_script, 否则就是 default
+        elif isinstance(value, tuple) and len(value) == 2:
+            if callable(value[1]):
+                return cls(exprs=value[0], post_script=value[1], engine=engine)
+            else:
+                return cls(exprs=value[0], default=value[1], engine=engine)
         else:
             return cls(exprs=value, engine=engine)
 
@@ -276,7 +283,8 @@ class Extractor:
                     elif rule.exprs == "@date":
                         yield (
                             k,
-                            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
+                            time.strftime("%Y-%m-%d %H:%M:%S",
+                                          time.localtime()),
                             *_rkey,
                         )
 
@@ -309,7 +317,8 @@ class Extractor:
                                 obj=sub_obj,
                                 rules=v,
                                 rkey=get_rkey(rkey, rule.exprs),
-                                pkey=get_rkey(pkey, str(index).zfill(number_of_digits)),
+                                pkey=get_rkey(
+                                    pkey, str(index).zfill(number_of_digits)),
                                 deep=bool(isinstance(sub_obj, list)),
                         ):
                             yield i
@@ -338,7 +347,8 @@ class XpathExtractor(Extractor):
             if obj.strip().startswith("<?xml "):
                 obj = etree.fromstring(obj, parser=parser, base_url=base_url)
             else:
-                obj = etree.HTML(obj.encode(), parser=parser, base_url=base_url)
+                obj = etree.HTML(obj.encode(), parser=parser,
+                                 base_url=base_url)
         return obj
 
 

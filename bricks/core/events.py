@@ -266,7 +266,6 @@ def on(
     如果有 staticmethod 之类的装饰器, 则需要紧贴着你的函数
 
 
-    :param is_global: 是否为全局事件, 如果非对象方法 / 类方法, 需要标识为 True 才会起作用
     :param match:
     :param kwargs:
     :param args:
@@ -286,7 +285,7 @@ def on(
             match=match,
         )
 
-        if "." in func.__qualname__:
+        if "." not in func.__qualname__ or "<locals>" in func.__qualname__:
             EventManager.register(Context(form=form, target=None), e)
         else:
             setattr(func, "__event__", (form, e))

@@ -1,16 +1,13 @@
 import asyncio
 import collections
 import concurrent.futures
-import json
 import math
 import uuid
-from typing import Type, Union, Callable, Optional, List
+from typing import Type, Union, Callable, Optional, List, Any
 
 from loguru import logger
 
 from bricks.core import signals, dispatch
-from bricks.core.events import REGISTERED_EVENTS
-from bricks.lib.items import Items
 from bricks.lib.queues import Item, LocalQueue, TaskQueue
 from bricks.rpc.common import start_rpc_server, MODE
 from bricks.spider.air import Context, Spider
@@ -75,12 +72,12 @@ class Mocker:
             if future_type == "$response":
                 raise signals.Success
 
-            items: Items = super(spider.__class__, spider).on_response(context)
+            context.items = super(spider.__class__, spider).on_response(context)
 
             if future_type == "$items":
                 raise signals.Success
 
-            return items
+            return context.items
 
         return {
             "failure": failure,
@@ -250,8 +247,8 @@ class Rpc:
     def serve(
             self,
             concurrency: int = 10,
-            ident: any = 0,
-            on_server_started: Callable[[int], None] = None,
+            ident: Any = 0,
+            on_server_started: Callable[[Any], None] = None,
             mode: MODE = "http",
             **kwargs
     ):
@@ -264,11 +261,17 @@ class Rpc:
         :param on_server_started: 当服务启动完后的回调
         """
         self.spider.dispatcher = dispatch.Dispatcher(max_workers=concurrency)
-        coro = start_rpc_server(self, mode=mode, concurrency=concurrency, ident=ident,
-                                on_server_started=on_server_started, **kwargs)
+        rpc_server = start_rpc_server(
+            self,
+            mode=mode,
+            concurrency=concurrency,
+            ident=ident,
+            on_server_started=on_server_started,
+            **kwargs
+        )
         try:
             with self.spider.dispatcher:
-                asyncio.run_coroutine_threadsafe(coro, loop=self.spider.dispatcher.loop)
+                asyncio.run_coroutine_threadsafe(rpc_server, loop=self.spider.dispatcher.loop)
                 self.run()
         except (KeyboardInterrupt, SystemExit):
             return

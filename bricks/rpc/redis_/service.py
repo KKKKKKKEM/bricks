@@ -156,12 +156,16 @@ class Service(BaseRpcService):
 
         self._running = True
 
-        logger.info(f"Redis RPC Server started with server_id: {self.server_id}")
+        # 为 ident 添加一个 url 参数
+        if "?" in ident:
+            identity = ident + f"&server_id={self.server_id}"
+        else:
+            identity = ident + f"?server_id={self.server_id}"
 
-        if on_server_started:
-            on_server_started(self.server_id)
+        logger.info(f"Redis RPC Server started at: {identity}")
 
         try:
+            on_server_started and on_server_started(identity)
             # 开始监听请求
             await self._listen_for_requests()
         except KeyboardInterrupt:
