@@ -770,7 +770,6 @@ class Spider(Pangu):
 
         :return:
         """
-        self.number_of_failure_requests.increment()
         request: Request = context.request
         response: Response = context.response
         error: str = response.error if response else ""
