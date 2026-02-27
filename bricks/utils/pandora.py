@@ -45,6 +45,65 @@ exec_formatter = better_exceptions.ExceptionFormatter(
     cap_char=better_exceptions.CAP_CHAR,
 )
 
+# 内置类型/函数的参数签名映射
+# 格式: (位置参数名列表, 支持的关键字参数集合, 最大位置参数数量)
+_BUILTIN_SIGNATURES = {
+    # 基本类型
+    int: (['x', 'base'], {'x', 'base'}, 2),
+    float: (['x'], {'x'}, 1),
+    str: (['object', 'encoding', 'errors'], {'object', 'encoding', 'errors'}, 3),
+    bytes: (['source', 'encoding', 'errors'], {'source', 'encoding', 'errors'}, 3),
+    bool: (['x'], {'x'}, 1),
+
+    # 容器类型
+    list: (['iterable'], {'iterable'}, 1),
+    tuple: (['iterable'], {'iterable'}, 1),
+    set: (['iterable'], {'iterable'}, 1),
+    frozenset: (['iterable'], {'iterable'}, 1),
+    dict: (['mapping'], {'mapping'}, 1),  # dict 比较特殊，还支持 **kwargs
+
+    # 常用内置函数
+    len: (['obj'], set(), 1),
+    abs: (['x'], set(), 1),
+    round: (['number', 'ndigits'], {'number', 'ndigits'}, 2),
+    min: (['iterable'], {'key', 'default'}, None),  # None 表示可变参数
+    max: (['iterable'], {'key', 'default'}, None),
+    sum: (['iterable', 'start'], {'iterable', 'start'}, 2),
+    sorted: (['iterable'], {'key', 'reverse'}, 1),
+    reversed: (['sequence'], set(), 1),
+    enumerate: (['iterable', 'start'], {'iterable', 'start'}, 2),
+    zip: ([], set(), None),  # 可变位置参数
+    map: (['func', 'iterable'], set(), None),
+    filter: (['function', 'iterable'], set(), 2),
+    range: (['start', 'stop', 'step'], set(), 3),
+    slice: (['start', 'stop', 'step'], set(), 3),
+
+    # 类型转换
+    ord: (['c'], set(), 1),
+    chr: (['i'], set(), 1),
+    hex: (['x'], set(), 1),
+    oct: (['x'], set(), 1),
+    bin: (['x'], set(), 1),
+
+    # 属性相关
+    getattr: (['object', 'name', 'default'], set(), 3),
+    setattr: (['object', 'name', 'value'], set(), 3),
+    hasattr: (['object', 'name'], set(), 2),
+    delattr: (['object', 'name'], set(), 2),
+
+    # 其他常用
+    isinstance: (['object', 'classinfo'], set(), 2),
+    issubclass: (['class', 'classinfo'], set(), 2),
+    callable: (['object'], set(), 1),
+    repr: (['object'], set(), 1),
+    hash: (['object'], set(), 1),
+    id: (['object'], set(), 1),
+    type: (['object'], set(), 1),  # 单参数形式
+    print: ([], {'sep', 'end', 'file', 'flush'}, None),
+    open: (['file', 'mode', 'buffering', 'encoding', 'errors', 'newline', 'closefd', 'opener'],
+           {'file', 'mode', 'buffering', 'encoding', 'errors', 'newline', 'closefd', 'opener'}, 8),
+}
+
 
 def load_objects(path_or_reference, reload=False):
     """
@@ -60,7 +119,8 @@ def load_objects(path_or_reference, reload=False):
     if os.path.sep in path_or_reference or os.path.exists(path_or_reference):
         # 尝试作为文件路径导入
         try:
-            module_name = os.path.splitext(os.path.basename(path_or_reference))[0]
+            module_name = os.path.splitext(
+                os.path.basename(path_or_reference))[0]
             spec = importlib.util.spec_from_file_location(
                 module_name, path_or_reference
             )
@@ -165,14 +225,17 @@ def require(
     except importlib_metadata.PackageNotFoundError:
         # 包没有安装或版本不符合要求
         builder_func = f'_build_by_{mode}'
-        builder: Callable[[str, str, Dict[str, str]], str] = globals().get(builder_func)
+        builder: Callable[[str, str, Dict[str, str]],
+                          str] = globals().get(builder_func)
         if not callable(builder):
             raise ValueError(f"不支持的安装模式: {mode}")
 
-        cmd: str = builder(package_spec if required_version else package, mirror_sources, build_options)
+        cmd: str = builder(
+            package_spec if required_version else package, mirror_sources, build_options)
 
         if action == "raise":
-            raise importlib_metadata.PackageNotFoundError(f"依赖包不符合要求, 请使用以下命令安装: {' '.join(cmd)}")
+            raise importlib_metadata.PackageNotFoundError(
+                f"依赖包不符合要求, 请使用以下命令安装: {' '.join(cmd)}")
         else:
             logger.debug(f"依赖包不符合要求, 自动修正, 命令: {' '.join(cmd)}")
             subprocess.check_call(cmd)
@@ -210,18 +273,17 @@ def prepare(
         namespace: dict = None,
         ignore: list = None,
 ):
-    """
-    筛选出函数的相关参数
+    assert callable(func), ValueError(
+        f"func must be callable, but got {type(func)}")
+    prepared = collections.namedtuple("prepared", ["func", "args", "kwargs"])
 
-    :param func: 函数
-    :param args: 位置参数
-    :param kwargs: 关键字参数
-    :param annotations: 类型空间
-    :param namespace: 命名空间
-    :param ignore: 忽略第几个参数
-    :return:
-    """
-    assert callable(func), ValueError(f"func must be callable, but got {type(func)}")
+    args = args or []
+    kwargs = kwargs or {}
+    annotations = annotations or {}
+    namespace = namespace or {}
+    ignore = ignore or []
+    assert callable(func), ValueError(
+        f"func must be callable, but got {type(func)}")
     prepared = collections.namedtuple("prepared", ["func", "args", "kwargs"])
 
     args = args or []
@@ -232,9 +294,13 @@ def prepare(
     annotations = annotations or {}
     namespace = namespace or {}
     ignore = ignore or []
+    # 尝试获取函数签名
     try:
         parameters = inspect.signature(func).parameters
-    except:  # noqa
+    except (ValueError, TypeError):
+        # 检查是否在内置映射表中
+        if func in _BUILTIN_SIGNATURES:
+            return _prepare_builtin(func, args, kwargs, annotations, namespace, ignore)
         parameters = {}
         new_args = [*args]
         kwargs and new_args.append(kwargs)
@@ -297,6 +363,49 @@ def prepare(
             inspect.Parameter.POSITIONAL_OR_KEYWORD,
         ]:
             new_kwargs[name] = value
+
+    return prepared(func=func, args=new_args, kwargs=new_kwargs)
+
+
+def _prepare_builtin(func, args, kwargs, annotations, namespace, ignore):
+    """处理内置函数的参数准备"""
+    prepared = collections.namedtuple("prepared", ["func", "args", "kwargs"])
+
+    param_names, allowed_kwargs, max_args = _BUILTIN_SIGNATURES[func]
+
+    new_args = []
+    new_kwargs = {}
+    index = 0
+
+    for i, name in enumerate(param_names):
+        if i in ignore:
+            continue
+
+        # 达到最大位置参数数量
+        if max_args is not None and len(new_args) >= max_args:
+            break
+
+        if name in kwargs:
+            value = kwargs[name]
+        elif name in namespace:
+            value = namespace[name]
+        elif index < len(args):
+            value = args[index]
+            index += 1
+        else:
+            # 内置函数没有默认值信息，跳过
+            continue
+
+        new_args.append(value)
+
+    # 处理可变位置参数
+    if max_args is None:
+        new_args.extend(args[index:])
+
+    # 过滤允许的 kwargs
+    for k, v in kwargs.items():
+        if k in allowed_kwargs and k not in param_names[:len(new_args)]:
+            new_kwargs[k] = v
 
     return prepared(func=func, args=new_args, kwargs=new_kwargs)
 
@@ -412,7 +521,8 @@ def get_pretty_stack(e: Exception):
 
     """
     return "".join(
-        list(exec_formatter.format_exception(e.__class__, e, sys.exc_info()[2]))
+        list(exec_formatter.format_exception(
+            e.__class__, e, sys.exc_info()[2]))
     )
 
 
@@ -446,7 +556,8 @@ def clean_rows(*rows: dict, **layout):
         for key, func in rule.items():
             if isinstance(func, str):
                 func = load_objects(func)
-            data[key] = invoke(func, args=[data.get(key, None)], kwargs={"row": row})
+            data[key] = invoke(
+                func, args=[data.get(key, None)], kwargs={"row": row})
 
     def _default(rule: dict, data: dict):
         for key, default in rule.items():
@@ -470,7 +581,8 @@ def with_metaclass(
         singleton: bool = False,
         thread_safe: bool = True,
         key_maker: Callable = None,
-        autonomous: Union[Tuple[Union[str, Callable]], List[Union[str, Callable]]]= (),
+        autonomous: Union[Tuple[Union[str, Callable]],
+                          List[Union[str, Callable]]] = (),
         wrappers: Union[dict, str] = None,
         modded: dict = None,
 ):
@@ -487,7 +599,8 @@ def with_metaclass(
     """
     key_maker = key_maker or (
         lambda cls, *args, **kwargs: hash(
-            json.dumps({"cls": cls, "args": args, "kwargs": kwargs}, default=str)
+            json.dumps({"cls": cls, "args": args,
+                       "kwargs": kwargs}, default=str)
         )
     )
 
@@ -508,7 +621,8 @@ def with_metaclass(
                     with _lock:
                         key = key_maker(cls, *args, **kwargs)
                         if key not in _instance:
-                            _instance[key] = type.__call__(cls, *args, **kwargs)
+                            _instance[key] = type.__call__(
+                                cls, *args, **kwargs)
                         else:
                             return _instance[key]
 
@@ -532,7 +646,8 @@ def with_metaclass(
                     if isinstance(wrapper, str):
                         wrapper = getattr(ins, wrapper)
 
-                    raw_method and setattr(ins, raw_method_name, wrapper(raw_method))
+                    raw_method and setattr(
+                        ins, raw_method_name, wrapper(raw_method))
 
                 for func in iterable(autonomous):
                     if isinstance(func, str):

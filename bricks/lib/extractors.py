@@ -345,7 +345,7 @@ class XpathExtractor(Extractor):
     def fmt(cls, obj, parser=None, base_url=None):
         if isinstance(obj, str):
             if obj.strip().startswith("<?xml "):
-                obj = etree.fromstring(obj, parser=parser, base_url=base_url)
+                obj = etree.fromstring(obj.encode(), parser=parser, base_url=base_url)
             else:
                 obj = etree.HTML(obj.encode(), parser=parser,
                                  base_url=base_url)
