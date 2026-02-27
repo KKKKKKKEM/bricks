@@ -100,7 +100,7 @@ class Sqlite:
         )
         with ctx:
             with self as cur:
-                cur.executemany(sql, [tuple(doc.values()) for doc in docs])
+                cur.executemany(sql, [tuple([doc.get(key) for key in keys]) for doc in docs])
 
     def upsert(self, table: str, *docs: dict, with_lock: bool = True):
         sql = (

@@ -6,10 +6,12 @@
 import os
 import sys
 
-from bricks.utils.media_downloader import MediaDownloader
-
 # 确保可以导入 bricks
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from bricks import Request
+from bricks.downloader.cffi import Downloader as CffiDownloader
+from bricks.utils.media_downloader import DownloadTask, MediaDownloader
 
 
 def test_basic_download():
@@ -29,17 +31,17 @@ def test_basic_download():
         else:
             print(f"\r已下载: {downloaded} bytes 速度: {speed:.2f}MB/s", end='')
 
-    success = downloader.download(
+    result = downloader.download_url(
         url="https://httpbin.org/bytes/102400",  # 100KB
-        save_path="./test_downloads",
+        save_dir="./test_downloads",
         filename="test_stream.bin",
-        progress_callback=progress_callback
+        progress_callback=lambda p: progress_callback(p.downloaded, p.total or 0, p.speed_mbps),
     )
 
-    print(f"\n下载结果: {'成功' if success else '失败'}")
+    print(f"\n下载结果: {'成功' if result.ok else '失败'}")
 
     # 验证文件
-    if success:
+    if result.ok:
         file_path = "./test_downloads/test_stream.bin"
         if os.path.exists(file_path):
             size = os.path.getsize(file_path)
@@ -48,36 +50,45 @@ def test_basic_download():
             print("测试文件已清理")
 
     print()
-    return success
+    return result.ok
 
 
-def test_concurrent_download():
-    """测试并发下载"""
+def test_batch_download():
+    """测试批量下载（并发任务）"""
     print("=" * 60)
-    print("测试2: 并发分块下载")
+    print("测试2: 批量下载")
     print("=" * 60)
 
-    downloader = MediaDownloader()
+    downloader = MediaDownloader(chunk_size=256 * 1024)
 
-    success = downloader.download(
-        url="https://httpbin.org/bytes/1048576",  # 1MB
-        save_path="./test_downloads",
-        filename="test_concurrent.bin",
-        chunk_size=256 * 1024,  # 256KB
-        max_workers=4,
-        progress_callback=lambda d, t, s: print(
-            f"\r进度: {d*100//t if t>0 else 0}% 速度: {s:.2f}MB/s", end=''
-        ) if d == t or d % 102400 == 0 else None  # 每100KB更新一次
-    )
+    tasks = [
+        DownloadTask(
+            request=Request(url="https://httpbin.org/bytes/20480"),
+            save_dir="./test_downloads",
+            filename="batch_1.bin",
+        ),
+        DownloadTask(
+            request=Request(url="https://httpbin.org/bytes/30720"),
+            save_dir="./test_downloads",
+            filename="batch_2.bin",
+        ),
+        DownloadTask(
+            request=Request(url="https://httpbin.org/bytes/40960"),
+            save_dir="./test_downloads",
+            filename="batch_3.bin",
+        ),
+    ]
 
-    print(f"\n下载结果: {'成功' if success else '失败'}")
+    report = downloader.download_many(tasks, concurrency=3)
+    success = report.failed == 0
+    print(f"\n批量下载结果: {'成功' if success else '失败'}")
+    for r in report.results:
+        print(f"  {r.url} -> {r.path}: {'成功' if r.ok else '失败'}")
 
     # 清理测试文件
-    if success:
-        file_path = "./test_downloads/test_concurrent.bin"
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            print("测试文件已清理")
+    for task in tasks:
+        if os.path.exists(task.path):
+            os.remove(task.path)
 
     print()
     return success
@@ -89,9 +100,6 @@ def test_stream_interface():
     print("测试3: stream 模式（通过 $options 参数）")
     print("=" * 60)
 
-    from bricks import Request
-    from bricks.downloader.cffi import Downloader as CffiDownloader
-
     downloader = CffiDownloader()
 
     try:
@@ -99,8 +107,8 @@ def test_stream_interface():
             url="https://httpbin.org/bytes/10240",  # 10KB
             method="GET",
         )
-        request.options["stream"] = True
-        request.options["chunk_size"] = 1024
+        request.put_options("stream", True)
+        request.put_options("chunk_size", 1024)
 
         response = downloader.fetch(request)
 
@@ -132,7 +140,7 @@ def main():
 
     results = {
         "基础下载 (cffi + stream)": test_basic_download(),
-        "并发分块下载": test_concurrent_download(),
+        "批量下载": test_batch_download(),
         "stream 模式 ($options)": test_stream_interface(),
     }
 

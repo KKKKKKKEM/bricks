@@ -18,14 +18,13 @@ def example_simple_download():
     downloader = MediaDownloader()
 
     # 简单下载一个文件 - 使用 Lorem Picsum 的示例图片
-    request = Request(url="https://picsum.photos/200/300")
-    success = downloader.download(
-        request=request,
-        save_path="./downloads",
-        filename="test_image.jpg"
+    result = downloader.download_url(
+        url="https://picsum.photos/200/300",
+        save_dir="./downloads",
+        filename="test_image.jpg",
     )
 
-    print(f"下载结果: {'成功' if success else '失败'}")
+    print(f"下载结果: {'成功' if result.ok else '失败'}")
     print()
 
 
@@ -33,27 +32,27 @@ def example_download_with_progress():
     """示例2: 带进度显示的下载"""
     print("=== 示例2: 带进度显示的下载 ===")
 
-    def progress_callback(downloaded, total, speed):
+    def progress_callback(p):
         """进度回调函数"""
-        if total > 0:
-            percent = (downloaded / total) * 100
-            print(
-                f"\r进度: {percent:.1f}% ({downloaded}/{total} bytes) 速度: {speed:.2f} MB/s", end='')
+        if p.total:
+            percent = (p.downloaded / p.total) * 100
+            print(f"\r进度: {percent:.1f}% ({p.downloaded}/{p.total} bytes) 速度: {p.speed_mbps:.2f} MB/s", end="")
         else:
-            print(f"\r已下载: {downloaded} bytes 速度: {speed:.2f} MB/s", end='')
+            print(f"\r已下载: {p.downloaded} bytes 速度: {p.speed_mbps:.2f} MB/s", end="")
 
     downloader = MediaDownloader()
 
     # 下载一个小文件示例 - Python logo
-    request = Request(url="https://www.python.org/static/favicon.ico")
-    success = downloader.download(
-        request=request,
-        save_path="./downloads",
+    task = DownloadTask.from_url(
+        url="https://www.python.org/static/favicon.ico",
+        save_dir="./downloads",
         filename="python_favicon.ico",
-        progress_callback=progress_callback
+        progress_callback=progress_callback,
+        show_progress=False,  # 使用自定义回调，不需要 tqdm
     )
+    result = downloader.download(task)
 
-    print(f"\n下载结果: {'成功' if success else '失败'}")
+    print(f"\n下载结果: {'成功' if result.ok else '失败'}")
     print()
 
 
@@ -71,19 +70,19 @@ def example_resume_download():
     request = Request(url="https://picsum.photos/1500/2000")
     task = DownloadTask(
         request=request,
-        save_path="./downloads",
+        save_dir="./downloads",
         filename="resume_test.jpg",
         resume=True,  # 启用断点续传
     )
 
     # 第一次下载
-    downloader.download_task(task)
+    downloader.download(task)
 
     # 模拟第二次继续下载
     print("\n继续下载...")
-    success = downloader.download_task(task)
+    result = downloader.download(task)
 
-    print(f"下载结果: {'成功' if success else '失败'}")
+    print(f"下载结果: {'成功' if result.ok else '失败'}")
     print()
 
 
@@ -97,27 +96,27 @@ def example_batch_download():
     tasks = [
         DownloadTask(
             request=Request(url="https://picsum.photos/400/300"),
-            save_path="./downloads/batch",
+            save_dir="./downloads/batch",
             filename="image1.jpg"
         ),
         DownloadTask(
             request=Request(url="https://picsum.photos/500/400"),
-            save_path="./downloads/batch",
+            save_dir="./downloads/batch",
             filename="image2.jpg"
         ),
         DownloadTask(
             request=Request(url="https://picsum.photos/600/500"),
-            save_path="./downloads/batch",
+            save_dir="./downloads/batch",
             filename="image3.jpg"
         )
     ]
 
     # 批量下载，最多同时3个任务
-    results = downloader.batch_download(tasks, max_workers=3)
+    report = downloader.download_many(tasks, concurrency=3)
 
     print("批量下载结果:")
-    for task_key, success in results.items():
-        print(f"  {task_key}: {'成功' if success else '失败'}")
+    for r in report.results:
+        print(f"  {r.url} -> {r.path}: {'成功' if r.ok else '失败'}")
     print()
 
 
@@ -136,13 +135,14 @@ def example_custom_headers():
             "Accept": "image/*"
         }
     )
-    success = downloader.download(
+    task = DownloadTask(
         request=request,
-        save_path="./downloads",
-        filename="python_logo.png"
+        save_dir="./downloads",
+        filename="python_logo.png",
     )
+    result = downloader.download(task)
 
-    print(f"下载结果: {'成功' if success else '失败'}")
+    print(f"下载结果: {'成功' if result.ok else '失败'}")
     print()
 
 
@@ -160,15 +160,15 @@ def example_download_video():
         url="https://cdn.pixabay.com/video/2023/04/08/158043-815940653.mp4?download")
     task = DownloadTask(
         request=request,
-        save_path="./downloads/videos",
+        save_dir="./downloads/videos",
         filename="158043.mp4",
         resume=True,
         skip_existing=False,
     )
 
-    success = downloader.download_task(task)
+    result = downloader.download(task)
 
-    print(f"\n视频下载结果: {'成功' if success else '失败'}")
+    print(f"\n视频下载结果: {'成功' if result.ok else '失败'}")
     print()
 
 
