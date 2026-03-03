@@ -104,7 +104,7 @@ def curl2spider(
         curl: str,
         path: str,
         name: str = "MySpider",
-        form: Literal["form", "template"] = "form",
+        form: Literal["air", "form", "template"] = "form",
 ):
     """
     通过 curl 生成爬虫模板文件
