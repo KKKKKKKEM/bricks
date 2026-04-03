@@ -124,9 +124,9 @@ class Context(Flow):
             Response: self.response,
             Items: self.items,
             self.task_queue.__class__: self.task_queue,
-            str: self.queue_name,
             Item: self.seeds,
-            dict: self.seeds,
+            # str: self.queue_name,
+            # dict: self.seeds,
             **super().annotations
         }
 
@@ -215,9 +215,9 @@ class InitContext(Flow):
     def annotations(self):
         return {
             self.task_queue.__class__: self.task_queue,
-            str: self.queue_name,
             Item: self.seeds,
-            dict: self.seeds,
+            # str: self.queue_name,
+            # dict: self.seeds,
             **super().annotations
         }
 
