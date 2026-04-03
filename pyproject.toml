@@ -1,6 +1,6 @@
 [project]
 name = "bricks-py"
-version = "0.1.6"
+version = "0.2.0"
 description = "quickly build your crawler"
 readme = "README.md"
 license = { text = "MIT" }
