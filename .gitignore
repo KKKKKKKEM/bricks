@@ -12,4 +12,3 @@ __pycache__
 .python-version
 .gitignore
 uv.lock
-pyproject.toml

@@ -20,13 +20,13 @@ class RedisQueue(TaskQueue):
     subscribe = True
 
     def __init__(
-            self,
-            host="127.0.0.1",
-            password=None,
-            port=6379,
-            database=0,
-            genre: Literal["list", "set", "zset"] = "set",
-            **kwargs,
+        self,
+        host="127.0.0.1",
+        password=None,
+        port=6379,
+        database=0,
+        genre: Literal["list", "set", "zset"] = "set",
+        **kwargs,
     ):
         self.redis_db = Redis(
             host=host, password=password, port=port, database=database, **kwargs
@@ -328,7 +328,7 @@ class RedisQueue(TaskQueue):
         return self.scripts.remove(keys=keys, args=args)
 
     def clear(
-            self, *names, qtypes=("current", "temp", "lock", "record", "failure"), **kwargs
+        self, *names, qtypes=("current", "temp", "lock", "record", "failure"), **kwargs
     ):
         db_num = kwargs.pop("db_num", self.database)
         keys = [db_num]
@@ -493,11 +493,7 @@ class RedisQueue(TaskQueue):
             """
 
             def heartbeat():
-                _keys = [
-                    self.name2key(name, "record"),
-                    heartbeat_key,
-                    interval
-                ]
+                _keys = [self.name2key(name, "record"), heartbeat_key, interval]
                 while True:
                     try:
                         if not self.scripts.continue_init_heartbeat(keys=_keys):
@@ -542,7 +538,9 @@ class RedisQueue(TaskQueue):
 
                     else:  # 获取心跳锁失败
                         last = ""
-                        while time.time() - start_time < interval * 3:  # 判断 interval*3 秒
+                        while (
+                            time.time() - start_time < interval * 3
+                        ):  # 判断 interval*3 秒
                             heartbeat_value = self.redis_db.get(heartbeat_key)
                             # 锁变为空了, 重新开始所有流程
                             if heartbeat_value == "":
@@ -550,7 +548,10 @@ class RedisQueue(TaskQueue):
 
                             # 锁的内容在变化, 有人在操作, 直接返回
                             if last and last != heartbeat_value:  # 只要在变化, 就不嘻嘻
-                                return {"state": False, "msg": "存在其他活跃的初始化机器"}
+                                return {
+                                    "state": False,
+                                    "msg": "存在其他活跃的初始化机器",
+                                }
 
                             last = heartbeat_value
                             time.sleep(1)
@@ -616,7 +617,14 @@ class RedisQueue(TaskQueue):
             record_ttl = order.get("record_ttl") or 0
 
             ret = self.scripts.release_init(
-                keys=[key, history, db_num, state.MACHINE_ID, history_ttl * 1000, record_ttl]
+                keys=[
+                    key,
+                    history,
+                    db_num,
+                    state.MACHINE_ID,
+                    history_ttl * 1000,
+                    record_ttl,
+                ]
             )
             return bool(ret)
 
@@ -645,7 +653,12 @@ class RedisQueue(TaskQueue):
         }
         action = order["action"]
         if action in actions:
-            return actions[action]()
+            while True:
+                try:
+                    return actions[action]()
+                except Exception as e:
+                    logger.error(f"[command] 执行 {action} 失败: {e}")
+                    time.sleep(5)
 
     def __str__(self):
         return f"<RedisQueue [ HOST: {self.host} | DB: {self.database} ]>"

@@ -5,60 +5,56 @@ on:
     branches:
       - main
     paths:
-      - setup.py  # 每次更改 VERSION 时发布到 TestPyPI
+      - pyproject.toml
   release:
-    types: [ created ]  # 每次创建新标签时发布到 PyPI
+    types: [ created ]
 
 jobs:
 
   deploy-to-test-pypi:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'  && github.repository == 'KKKKKKKEM/bricks'
+    if: github.event_name == 'push' && github.repository == 'KKKKKKKEM/bricks'
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install setuptools wheel twine
+          python-version: '3.12'
 
       - name: Build package
-        run: |
-          python setup.py sdist bdist_wheel
+        run: uv build
 
-      - name: Publish package
+      - name: Publish to TestPyPI
+        run: uv publish --index testpypi
         env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
-        run: |
-          twine upload --repository testpypi dist/* 
+          UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
 
   deploy-to-pypi:
     runs-on: ubuntu-latest
     if: github.event_name == 'release' && github.event.action == 'created' && github.repository == 'KKKKKKKEM/bricks'
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install setuptools wheel twine
+          python-version: '3.12'
 
       - name: Build package
-        run: |
-          python setup.py sdist bdist_wheel
+        run: uv build
 
-      - name: Publish package
+      - name: Publish to PyPI
+        run: uv publish
         env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          twine upload dist/* 
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
