@@ -8,7 +8,7 @@ import sys
 import threading
 import time
 from concurrent.futures import Future
-from typing import Callable, Any
+from typing import Any, Callable
 
 from loguru import logger
 
