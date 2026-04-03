@@ -208,7 +208,7 @@ class Downloader(AbstractDownloader):
             cookie_string = "; ".join(
                 [f"{key}={value}" for key, value in request.cookies.items()]
             )
-            options = {pycurl.COOKIE, cookie_string}
+            options = {pycurl.COOKIE: cookie_string}
         else:
             options = {}
 
