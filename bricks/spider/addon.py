@@ -3,13 +3,13 @@ import collections
 import concurrent.futures
 import math
 import uuid
-from typing import Type, Union, Callable, Optional, List, Any
+from typing import Any, Callable, List, Optional, Type, Union
 
 from loguru import logger
 
-from bricks.core import signals, dispatch
+from bricks.core import dispatch, signals
 from bricks.lib.queues import Item, LocalQueue, TaskQueue
-from bricks.rpc.common import start_rpc_server, MODE
+from bricks.rpc.common import MODE, start_rpc_server
 from bricks.spider.air import Context, Spider
 
 

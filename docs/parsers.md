@@ -10,7 +10,7 @@ Bricks 内置了四种数据提取引擎，并提供了统一的 `Response.extra
 |---|---|---|---|
 | `JsonExtractor` | `"json"` | JSON 响应，使用 JMESPath | [jmespath.org](https://jmespath.org) |
 | `XpathExtractor` | `"xpath"` | HTML/XML 响应 | XPath 1.0 |
-| `JsonpathExtractor` | `"jsonpath"` | JSON 响应，使用 JSONPath | [jsonpath-rw](https://github.com/kennknowles/python-jsonpath-rw) |
+| `JsonpathExtractor` | `"jsonpath"` | JSON 响应，使用 JSONPath | [jsonpath](https://pypi.org/project/jsonpath/) |
 | `RegexExtractor` | `"regex"` | 任意文本，正则匹配 | Python `re` 模块 |
 
 ---

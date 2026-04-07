@@ -3,7 +3,7 @@ import inspect
 import json
 import uuid
 from concurrent import futures
-from typing import Any, Dict, Optional, Callable, Literal, Tuple
+from typing import Any, Callable, Dict, Literal, Optional, Tuple
 
 from loguru import logger
 

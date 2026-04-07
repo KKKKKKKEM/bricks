@@ -269,8 +269,8 @@ from bricks.spider import form
 form.Pipeline(
     func=scripts.is_success,
     kwargs={
-        "rules": [
-            {"expr": "code", "value": 0},  # code 字段必须等于 0
+        "match": [
+            "response.get('code') == 0",  # code 字段必须等于 0
         ]
     },
 )
@@ -285,29 +285,33 @@ from bricks.spider import form
 form.Pipeline(
     func=scripts.turn_page,
     kwargs={
-        "field": "page",      # 翻页的字段名
-        "step": 1,            # 每次递增步长
-        "max_page": 100,      # 最大页码（可选）
+        "match": [
+            "response.get('data.hasNextPage') == 1",  # 有下一页时翻页
+        ],
+        "key": "page",    # 种子里的翻页字段名，默认 "page"
+        "action": "+1",   # 翻页操作，默认 "+1"
     },
 )
 ```
 
-### `scripts.inject()` — 注入字段
+### `scripts.inject()` — 注入代码片段
 
-向 `items` 中的每条记录注入额外字段：
+在 pipeline 中运行任意代码片段（如修改 items、触发信号等）：
 
 ```python
 from bricks.plugins import scripts
 from bricks.spider import form
-import time
+from bricks.utils import codes
 
 form.Pipeline(
     func=scripts.inject,
     kwargs={
-        "data": {
-            "crawl_time": lambda: time.strftime("%Y-%m-%d %H:%M:%S"),
-            "source": "bricks_spider",
-        }
+        "flows": [
+            (codes.Type.code, [
+                "import time",
+                "for item in items: item['crawl_time'] = time.strftime('%Y-%m-%d %H:%M:%S')",
+            ]),
+        ]
     },
 )
 ```
