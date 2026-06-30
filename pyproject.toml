@@ -1,6 +1,6 @@
 [project]
 name = "bricks-py"
-version = "0.2.0"
+version = "0.2.1"
 description = "quickly build your crawler"
 readme = "README.md"
 license = { text = "MIT" }
@@ -19,7 +19,7 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 dependencies = [
     "better-exceptions==0.3.3",
     "curl-cffi==0.15.0",

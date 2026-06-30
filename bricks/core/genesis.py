@@ -20,6 +20,8 @@ class MetaClass(type):
     def __call__(cls, *args, **kwargs):
         instance = type.__call__(cls, *args, **kwargs)
 
+        registed_evets = []
+
         # 加载拦截器
         for method in dir(instance):
             # 修改被拦截的方法
@@ -39,11 +41,13 @@ class MetaClass(type):
                     continue
 
                 if hasattr(func, "__event__"):
-                    instance.use(*func.__event__)
-
+                    registed_evets.append(func.__event__)
 
         else:
             hasattr(instance, "install") and instance.install()  # type: ignore
+
+        for event in registed_evets:
+            instance.use(*event)
 
         return instance
 
