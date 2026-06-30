@@ -10,7 +10,15 @@ from loguru import logger
 
 from bricks.core import dispatch, signals
 from bricks.core.context import Context, Error, Flow
-from bricks.core.events import REGISTERED_EVENTS, EventManager, Register, Task
+from bricks.core.events import (
+    REGISTERED_EVENTS,
+    EventManager,
+    EventSpec,
+    Register,
+    Task,
+    _get_event_legacy,
+    _get_event_specs,
+)
 from bricks.state import const
 from bricks.utils import pandora
 from bricks.utils.scheduler import BaseTrigger, Scheduler
@@ -19,8 +27,6 @@ from bricks.utils.scheduler import BaseTrigger, Scheduler
 class MetaClass(type):
     def __call__(cls, *args, **kwargs):
         instance = type.__call__(cls, *args, **kwargs)
-
-        registed_evets = []
 
         # 加载拦截器
         for method in dir(instance):
@@ -35,19 +41,14 @@ class MetaClass(type):
                 raw_method and setattr(
                     instance, raw_method_name, method_wrapper(raw_method)
                 )  # type: ignore
-            else:
-                func = getattr(instance, method, None)
-                if not func or not callable(func):
-                    continue
 
-                if hasattr(func, "__event__"):
-                    registed_evets.append(func.__event__)
+        # 安装 @events.on 装饰的事件钩子（仅事件能力实例，如 Pangu）
+        if hasattr(instance, "_install_events"):
+            instance._install_events()
 
-        else:
-            hasattr(instance, "install") and instance.install()  # type: ignore
-
-        for event in registed_evets:
-            instance.use(*event)
+        # 运行生命周期 install
+        if hasattr(instance, "install"):
+            instance.install()
 
         return instance
 
@@ -209,6 +210,62 @@ class Pangu(Chaos):
                 max_workers=self.get("concurrency", default=1),  # type: ignore
                 options=self.get("dispatcher.options", default={}),
             )
+
+    def _install_events(self):
+        """扫描 MRO 类层次中 @events.on 装饰的方法并注册为事件钩子。
+
+        处理实例方法、staticmethod 和 classmethod 描述符。
+        继承的钩子只注册一次；如果子类重写了同名方法（无论是否装饰），
+        只使用子类的版本。
+
+        支持单个方法声明多个 @events.on() 装饰器，每个 form 均会独立注册。
+        """
+        seen = set()
+
+        for klass in type(self).__mro__:
+            for name, value in klass.__dict__.items():
+                if name in seen:
+                    continue
+                seen.add(name)
+
+                specs = _get_event_specs(value)
+
+                # 向后兼容：检查旧版 __event__ 格式
+                if not specs:
+                    event_val = _get_event_legacy(value)
+                    if event_val is not None:
+                        try:
+                            old_form, old_task = event_val
+                            specs = [EventSpec(
+                                form=old_form,
+                                index=getattr(old_task, "index", None),
+                                disposable=getattr(old_task, "disposable", False),
+                                args=getattr(old_task, "args", None),
+                                kwargs=getattr(old_task, "kwargs", None),
+                                match=getattr(old_task, "match", None),
+                            )]
+                        except (ValueError, TypeError):
+                            pass
+
+                if not specs:
+                    continue
+
+                # 通过 getattr 获取绑定的可调用对象（自动处理所有描述符类型）
+                try:
+                    bound = getattr(self, name)
+                except AttributeError:
+                    continue
+
+                for spec in specs:
+                    task = Task(
+                        func=bound,
+                        index=spec.index,
+                        disposable=spec.disposable,
+                        args=spec.args,
+                        kwargs=spec.kwargs,
+                        match=spec.match,
+                    )
+                    self.use(spec.form, task)
 
     @property
     def plugins(self) -> List[Register]:

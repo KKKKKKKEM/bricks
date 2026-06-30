@@ -78,9 +78,8 @@ class MySpider(air.Spider):
         # 确认种子爬取完毕后删除, 不删除的话后面又会爬取
         context.success()
 
-    @staticmethod
     @events.on(const.AFTER_REQUEST)
-    def is_success(context: Context):
+    def is_success(self, context: Context):
         """
         判断相应是否成功
 
