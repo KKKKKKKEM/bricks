@@ -5,7 +5,7 @@
 import random
 import re
 import string
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import List, Optional, Union
 
 _re_hash = re.compile(r"#")
@@ -307,6 +307,92 @@ def _weighted_choice(choices):
     values = [c[0] for c in choices]
     weights = [c[1] for c in choices]
     return random.choices(values, weights=weights, k=1)[0]
+
+
+_CHROMIUM_BASE_MAJOR = 120
+_CHROMIUM_BASE_DATE = date(2024, 1, 10)
+_CHROMIUM_RELEASE_DAYS = 28
+_CHROMIUM_VERSION_WINDOW = 10
+_CHROMIUM_VERSION_LAG = 1
+
+_FIREFOX_BASE_MAJOR = 122
+_FIREFOX_BASE_DATE = date(2024, 1, 23)
+_FIREFOX_RELEASE_DAYS = 28
+_FIREFOX_VERSION_WINDOW = 10
+_FIREFOX_VERSION_LAG = 1
+
+
+def _estimated_major_version(base_major, base_date, release_days, lag=1):
+    """按发布时间表保守估算主版本，避免默认 UA 随时间过期。"""
+    elapsed_days = max(0, (date.today() - base_date).days)
+    return max(base_major, base_major + elapsed_days // release_days - lag)
+
+
+def _resolve_major_range(
+    version_from,
+    version_end,
+    *,
+    base_major,
+    base_date,
+    release_days,
+    window,
+    lag,
+):
+    latest = _estimated_major_version(base_major, base_date, release_days, lag=lag)
+    if version_from is None and version_end is None:
+        version_end = latest
+        version_from = max(base_major, version_end - window)
+    elif version_from is None:
+        version_from = max(base_major, version_end - window)
+    elif version_end is None:
+        version_end = max(version_from, latest)
+    if version_from > version_end:
+        raise ValueError("version_from cannot be greater than version_end")
+    return version_from, version_end
+
+
+def _chromium_major_range(version_from=None, version_end=None):
+    return _resolve_major_range(
+        version_from,
+        version_end,
+        base_major=_CHROMIUM_BASE_MAJOR,
+        base_date=_CHROMIUM_BASE_DATE,
+        release_days=_CHROMIUM_RELEASE_DAYS,
+        window=_CHROMIUM_VERSION_WINDOW,
+        lag=_CHROMIUM_VERSION_LAG,
+    )
+
+
+def _firefox_major_range(version_from=None, version_end=None):
+    return _resolve_major_range(
+        version_from,
+        version_end,
+        base_major=_FIREFOX_BASE_MAJOR,
+        base_date=_FIREFOX_BASE_DATE,
+        release_days=_FIREFOX_RELEASE_DAYS,
+        window=_FIREFOX_VERSION_WINDOW,
+        lag=_FIREFOX_VERSION_LAG,
+    )
+
+
+def _chromium_version(version_from=None, version_end=None):
+    dynamic_default = version_from is None and version_end is None
+    version_from, version_end = _chromium_major_range(version_from, version_end)
+    major = random.randint(version_from, version_end)
+    if dynamic_default:
+        return f"{major}.0.0.0"
+    build_num = random.randint(5000, 6999)
+    patch_num = random.randint(0, 200)
+    return f"{major}.0.{build_num}.{patch_num}"
+
+
+def _firefox_version(version_from=None, version_end=None):
+    dynamic_default = version_from is None and version_end is None
+    version_from, version_end = _firefox_major_range(version_from, version_end)
+    major = random.randint(version_from, version_end)
+    if dynamic_default:
+        return f"{major}.0"
+    return f"{major}.{random.randint(0, 3)}.{random.randint(0, 3)}"
 
 
 def randomtimes(start, end, frmt="%Y-%m-%d %H:%M:%S"):
@@ -665,8 +751,8 @@ def opera(
     device="all",
     version_from=100,
     version_end=110,
-    chrome_version_from=120,
-    chrome_version_end=132,
+    chrome_version_from=None,
+    chrome_version_end=None,
 ):
     """
     生成 opera 的 user-agent
@@ -686,11 +772,7 @@ def opera(
     tmp_pc = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) Chrome/{chrome_ver} Safari/{saf_version} OPR/{opera_ver}"
     opera_mobile = f"Opera/{random.randint(9, 12)}.{random.randint(10, 99)} ({_choice([android_platform_token(), ios_platform_token()])}; Opera Mobile/{bld}; U; {locale().replace('_', '-')}) Presto/{opera_version} Version/{random.randint(10, 12)}.02"
     saf_version = f"{random.randint(531, 537)}.{random.randint(0, 36)}"
-    _v = random.randint(chrome_version_from, chrome_version_end)
-    # 优化版本号生成
-    build_num = random.randint(5000, 6999)
-    patch_num = random.randint(0, 200)
-    chrome_version = f"{_v}.0.{build_num}.{patch_num}"
+    chrome_version = _chromium_version(chrome_version_from, chrome_version_end)
 
     # Opera 现在基于 Chromium，不再生成 Presto 引擎的 UA
     platforms_pc = [
@@ -718,17 +800,7 @@ def opera(
     return "Mozilla/5.0 " + _choice(locals()[f"platforms_{device}"])
 
 
-def chrome(device="all", version_from=120, version_end=132, webview=False):
-    """
-    生成 chrome 的 user-agent
-
-    :param version_end:
-    :param version_from: 最小版本号
-    :param device: 设备类型, 可选: all/mobile/pc
-    :param webview: 是否生成 WebView UA (仅 Android)
-    :return:
-    """
-
+def _chrome_user_agent(device, version, webview=False):
     # Android Chrome 可以是普通浏览器或 WebView
     tmp_android = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) Chrome/{version} Mobile Safari/{saf_version}"
     tmp_android_wv = "({platform}; wv) AppleWebKit/{saf_version} (KHTML, like Gecko) Version/4.0 Chrome/{version} Mobile Safari/{saf_version}"
@@ -737,12 +809,6 @@ def chrome(device="all", version_from=120, version_end=132, webview=False):
     saf_version = "537.36"
     bld = _re_qm.sub(lambda x: _choice(
         string.ascii_letters), numerify("##?###"))
-
-    _v = random.randint(version_from, version_end)
-    # 优化算法：第三位为 4位数，第四位为 2-3 位数
-    build_num = random.randint(5000, 6999)  # Chrome 典型的 build 号段
-    patch_num = random.randint(0, 200)       # patch 号通常较小
-    version = f"{_v}.0.{build_num}.{patch_num}"
 
     # 根据 webview 参数或随机选择是否使用 WebView 格式
     use_webview = webview or (
@@ -783,7 +849,21 @@ def chrome(device="all", version_from=120, version_end=132, webview=False):
     return "Mozilla/5.0 " + _choice(locals()[f"platforms_{device}"])
 
 
-def firefox(device="all", version_from=120, version_end=135):
+def chrome(device="all", version_from=None, version_end=None, webview=False):
+    """
+    生成 chrome 的 user-agent
+
+    :param version_end:
+    :param version_from: 最小版本号
+    :param device: 设备类型, 可选: all/mobile/pc
+    :param webview: 是否生成 WebView UA (仅 Android)
+    :return:
+    """
+    version = _chromium_version(version_from, version_end)
+    return _chrome_user_agent(device, version, webview=webview)
+
+
+def firefox(device="all", version_from=None, version_end=None):
     """
     生成 firefox 的 user-agent
 
@@ -808,7 +888,7 @@ def firefox(device="all", version_from=120, version_end=135):
         )
     ).strftime("%Y%m%d")
 
-    version = f"{random.randint(version_from, version_end)}.{random.randint(0, 3)}.{random.randint(0, 3)}"
+    version = _firefox_version(version_from, version_end)
 
     platforms_mobile = [
         tmp_android.format(
@@ -841,7 +921,7 @@ def firefox(device="all", version_from=120, version_end=135):
     return "Mozilla/5.0 " + _choice(locals()[f"platforms_{device}"])
 
 
-def edge(device="all", version_from=120, version_end=132):
+def edge(device="all", version_from=None, version_end=None):
     """
     生成 edge 的 user-agent
 
@@ -850,13 +930,9 @@ def edge(device="all", version_from=120, version_end=132):
     :param device: 设备类型, 可选: all/mobile/pc
     :return:
     """
-    _v = random.randint(version_from, version_end)
-    version = f"{_v}.0.{int(_v * (49 + random.random()))}.{random.randint(0, 100)}"
+    version = _chromium_version(version_from, version_end)
 
-    return (
-        chrome(device=device, version_from=version_from, version_end=version_end)
-        + f" Edg/{version}"
-    )
+    return _chrome_user_agent(device, version) + f" Edg/{version}"
 
 
 def safari(device="all"):
@@ -917,7 +993,7 @@ def safari(device="all"):
     return "Mozilla/5.0 " + _choice(locals()[f"platforms_{device}"])
 
 
-def wechat(device="all", chrome_version_from=120, chrome_version_end=132):
+def wechat(device="all", chrome_version_from=None, chrome_version_end=None):
     """
     生成 wechat 的 user-agent
 
@@ -938,11 +1014,7 @@ def wechat(device="all", chrome_version_from=120, chrome_version_end=132):
         " CriOS/{chrome_ver} Mobile/{bld} Safari/{saf_version}"
     )
     tmp_xcx = "({platform}) AppleWebKit/{saf_version} (KHTML, like Gecko) Mobile/{bld}"
-    _v = random.randint(chrome_version_from, chrome_version_end)
-    # 优化版本号生成
-    build_num = random.randint(5000, 6999)
-    patch_num = random.randint(0, 200)
-    chrome_version = f"{_v}.0.{build_num}.{patch_num}"
+    chrome_version = _chromium_version(chrome_version_from, chrome_version_end)
 
     platforms_pc = [
         tmplt.format(
