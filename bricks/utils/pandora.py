@@ -14,6 +14,7 @@ import json
 import linecache
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -167,8 +168,8 @@ def _build_by_pip(package: str, mirror: str = "", options: Dict[str, str] = None
 
 
 def _build_by_uv(package: str, mirror: str = "", options: Dict[str, str] = None):
-    mirror and options.setdefault("--default-index", mirror)
-    cmd = [sys.executable, "-m", "uv", "add"]
+    mirror and options.setdefault("--index-url", mirror)
+    cmd = ["uv", "pip", "install"]
     for k, v in options.items():
         k and cmd.append(k)
         v and cmd.append(v)
@@ -194,7 +195,7 @@ def require(
     :return: 安装的包版本号
     """
     # 分离包名和版本规范
-    mode = mode or os.environ.get('REQUIRE_MODE', 'pip')
+    mode = mode or os.environ.get('REQUIRE_MODE') or ('uv' if shutil.which('uv') else 'pip')
     package_spec = re.sub(r"\s+", "", package_spec)
     match = PACKAGE_REGEX.match(package_spec)
     mirror_sources = PYPI_MIRROR.get(mirror_sources, mirror_sources)
@@ -205,7 +206,7 @@ def require(
         f"无效的镜像源: {mirror_sources}"
     )
 
-    mode == "uv" and require("uv", action="raise")
+    # uv 已通过 shutil.which 检测，无需额外 require
 
     package, operator, required_version = match.groups()
 

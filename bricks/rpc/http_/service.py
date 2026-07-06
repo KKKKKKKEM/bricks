@@ -3,7 +3,7 @@ import json
 from concurrent import futures
 from typing import Callable
 
-import requests
+from curl_cffi import requests
 from loguru import logger
 
 from bricks.utils import pandora
@@ -12,7 +12,7 @@ pandora.require("aiohttp==3.10.11")
 
 from aiohttp import web
 
-from bricks.rpc.common import BaseRpcService, BaseRpcClient, RpcRequest, RpcResponse
+from bricks.rpc.common import BaseRpcClient, BaseRpcService, RpcRequest, RpcResponse
 
 
 class Service(BaseRpcService):

@@ -3,13 +3,13 @@ import json
 import uuid
 from concurrent import futures
 from typing import Callable, Optional
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, urlparse
 
 import redis
 import redis.asyncio as async_redis
 from loguru import logger
 
-from bricks.rpc.common import BaseRpcService, BaseRpcClient, RpcRequest, RpcResponse
+from bricks.rpc.common import BaseRpcClient, BaseRpcService, RpcRequest, RpcResponse
 
 
 def _parse_redis_endpoint(endpoint: str):
@@ -73,10 +73,9 @@ class Service(BaseRpcService):
         self.input_key = options.get("input_key") or kwargs.pop("input_key", "rpc:request")
         self.output_key = options.get("output_key") or kwargs.pop("output_key", "rpc:response")
         self.key_type = options.get("key_type") or kwargs.pop("key_type", "list")
-        self.server_id = options.get("server_id") or kwargs.pop("server_id", str(uuid.uuid4())) or str(uuid.uuid4())
+        self.server_id = options.get("server_id") or kwargs.pop("server_id", None) or str(uuid.uuid4())
 
         self.redis_config.update(kwargs)
-        self.server_id = options.get("server_id") or str(uuid.uuid4())
         self.redis = async_redis.Redis(**self.redis_config)
         self.input_key = f"{self.input_key}:{self.server_id}"
         self.output_key = f"{self.output_key}:{self.server_id}"
@@ -157,7 +156,9 @@ class Service(BaseRpcService):
         self._running = True
 
         # 为 ident 添加一个 url 参数
-        if "?" in ident:
+        if "server_id=" in ident:
+            identity = ident
+        elif "?" in ident:
             identity = ident + f"&server_id={self.server_id}"
         else:
             identity = ident + f"?server_id={self.server_id}"
@@ -197,16 +198,16 @@ class Client(BaseRpcClient):
         self.input_key = options.get("input_key") or kwargs.pop("input_key", "rpc:request")
         self.output_key = options.get("output_key") or kwargs.pop("output_key", "rpc:response")
 
-        server_id = options.get("server_id") or kwargs.pop("server_id")
+        server_id = options.get("server_id") or kwargs.pop("server_id", None)
         if not server_id:
             raise ValueError("server_id is required in endpoint or as parameter")
 
         self.redis_config.update(kwargs)
         self.redis_config.update(decode_responses=True)
-        self.key_prefix = self.redis_config.pop("key_prefix", "rpc")
 
 
         self.server_id = server_id
+        self.input_key = f"{self.input_key}:{self.server_id}"
         self.output_key = f"{self.output_key}:{self.server_id}"
         self.redis: Optional[redis.Redis] = None
         self._connected = False
@@ -239,14 +240,14 @@ class Client(BaseRpcClient):
         try:
             # 发送请求到服务器队列
             request_data = json.dumps(rpc_request.to_dict())
-            self.redis.rpush(self.output_key, request_data)
+            self.redis.rpush(self.input_key, request_data)
 
             # 等待响应
-            response_key = f"{self.key_prefix}:response:{rpc_request.request_id}"
+            response_key = f"{self.output_key}:{rpc_request.request_id}"
             result = self.redis.blpop([response_key], timeout)
             if result:
-                _, request_data = result
-                return RpcResponse.from_dict(json.loads(str(request_data)))
+                _, response_data = result
+                return RpcResponse.from_dict(json.loads(response_data), decode_response=True)
 
         except Exception as e:
             raise RuntimeError(f"Redis RPC call failed for method '{method}': {e}")
