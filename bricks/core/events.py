@@ -79,6 +79,70 @@ class Task:
 
 
 @dataclass
+class EventSpec:
+    """声明式钩子元数据，由 @events.on() 附加到装饰的方法上。
+
+    与 Task 不同，EventSpec 不引用实际的可调用对象；它只保存 *声明* 参数。
+    可调用对象在实例创建时由 Pangu._install_events() 解析和绑定。
+    """
+    form: str
+    index: Optional[int] = None
+    disposable: bool = False
+    args: Optional[list] = None
+    kwargs: Optional[dict] = None
+    match: Optional[Union[Callable, str]] = None
+
+
+# ------------------------------------------------------------------ #
+# EventSpec helpers - attach / read metadata on functions & descriptors
+# ------------------------------------------------------------------ #
+
+_EVENT_SPEC_ATTR = "__event_spec__"  # Backward-compatible single-spec view.
+_EVENT_SPECS_ATTR = "__event_specs__"
+
+
+def _set_event_spec(func, spec: EventSpec):
+    """将 EventSpec 附加到普通函数上，允许一个方法声明多个 hook。"""
+    specs = list(getattr(func, _EVENT_SPECS_ATTR, ()))
+    legacy_spec = getattr(func, _EVENT_SPEC_ATTR, None)
+    if legacy_spec is not None and legacy_spec not in specs:
+        specs.insert(0, legacy_spec)
+    specs.append(spec)
+    setattr(func, _EVENT_SPECS_ATTR, specs)
+    setattr(func, _EVENT_SPEC_ATTR, spec)
+
+
+def _get_event_spec(obj) -> Optional[EventSpec]:
+    """从函数或描述符 (staticmethod / classmethod) 上读取最后声明的 EventSpec。"""
+    if isinstance(obj, (staticmethod, classmethod)):
+        return getattr(obj.__func__, _EVENT_SPEC_ATTR, None)
+    return getattr(obj, _EVENT_SPEC_ATTR, None)
+
+
+def _get_event_specs(obj) -> List[EventSpec]:
+    """从函数或描述符上读取全部 EventSpec 元数据。"""
+    if isinstance(obj, (staticmethod, classmethod)):
+        obj = obj.__func__
+    specs = getattr(obj, _EVENT_SPECS_ATTR, None)
+    if specs:
+        return list(specs)
+    spec = getattr(obj, _EVENT_SPEC_ATTR, None)
+    return [spec] if spec is not None else []
+
+
+def _has_event_spec(obj) -> bool:
+    """检查函数或描述符是否携带 EventSpec 元数据。"""
+    return bool(_get_event_specs(obj))
+
+
+def _get_event_legacy(obj):
+    """从函数或描述符上读取旧版 __event__ 元数据，用于向后兼容。"""
+    if isinstance(obj, (staticmethod, classmethod)):
+        return getattr(obj.__func__, "__event__", None)
+    return getattr(obj, "__event__", None)
+
+
+@dataclass
 class Register:
     """事件注册信息
 
@@ -417,9 +481,25 @@ def on(
         match: Optional[Union[Callable, str]] = None,
 ):
     """
-    使用装饰器的方式注册事件
+    使用装饰器的方式注册事件 / 声明事件元数据
 
-    注意：如果使用 @staticmethod 等装饰器，@on 应该放在最内层（紧贴函数定义）
+    行为取决于被装饰对象的位置:
+
+    * **模块级 / 局部函数** — 立即以 ``target=None`` 全局注册（行为与旧版一致）。
+    * **类方法 / 静态方法 / 类方法描述符** — 仅附加 ``EventSpec`` 元数据，
+      由 ``Pangu._install_events()`` 在实例化时绑定并注册。
+
+    支持两种装饰器顺序::
+
+        # 推荐：@events.on 在最内层
+        @staticmethod
+        @events.on("my_event")
+        def handler(context): ...
+
+        # 也支持：@events.on 在最外层
+        @events.on("my_event")
+        @staticmethod
+        def handler(context): ...
 
     :param form: 事件类型，可以传入常量属性
     :param index: 事件排序索引，默认按代码顺序递增，索引越大越靠后执行
@@ -434,21 +514,36 @@ def on(
         def my_handler(context):
             print("Request starting")
     """
+    spec = EventSpec(
+        form=form,
+        index=index,
+        disposable=disposable,
+        args=args,
+        kwargs=kwargs,
+        match=match,
+    )
 
     def inner(func):
-        e = Task(
-            func=func,
-            index=index,
-            disposable=disposable,
-            args=args,
-            kwargs=kwargs,
-            match=match,
-        )
+        # 提取底层函数以检查 qualname（兼容 staticmethod / classmethod 描述符）
+        if isinstance(func, (staticmethod, classmethod)):
+            actual_func = func.__func__
+        else:
+            actual_func = func
 
-        if "." not in func.__qualname__ or "<locals>" in func.__qualname__:
+        # 模块级函数或局部函数：立即全局注册
+        if "." not in actual_func.__qualname__ or "<locals>" in actual_func.__qualname__:
+            e = Task(
+                func=actual_func,
+                index=index,
+                disposable=disposable,
+                args=args,
+                kwargs=kwargs,
+                match=match,
+            )
             EventManager.register(Context(form=form, target=None), e)
         else:
-            setattr(func, "__event__", (form, e))
+            # 类方法：仅声明元数据，延迟到实例化时绑定注册
+            _set_event_spec(actual_func, spec)
 
         return func
 
