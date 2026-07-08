@@ -22,7 +22,6 @@ Bricks 提供两层 RPC 能力：
 | `Rpc.wrap(SpiderClass)` | 将爬虫类转化为 RPC 服务对象 |
 | `rpc.serve(mode, ident)` | 同时启动爬虫后台运行 + RPC 服务器监听，**两者合一** |
 | `rpc.execute(seeds)` | **同步**提交种子，阻塞等待返回 Context 结果 |
-| `rpc.submit(seeds)` | **异步**投放种子到队列，不等待结果 |
 
 ---
 
@@ -110,19 +109,6 @@ result = client.rpc("execute", {"id": "12345", "$futureType": "$request"})
 # result.data → {"data": "curl ...", "type": "$request", "seeds": {...}}
 ```
 
----
-
-## `execute` vs `submit`
-
-```python
-# execute：同步等待，返回抓取结果
-result = client.rpc("execute", {"id": "12345"})
-print(result.data)  # 拿到结果后才继续
-
-# submit：异步投放，不等待
-client.rpc("submit", {"id": "12345"})
-# 种子已投入队列，爬虫后台处理，客户端立即返回
-```
 
 ---
 

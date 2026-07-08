@@ -36,16 +36,16 @@ IGNORE_RETRY_PATTERN = re.compile("ProxyError", re.IGNORECASE)
 
 class Context(Flow):
     def __init__(
-            self,
-            target: "Spider",
-            form: str = state.const.ON_CONSUME,
-            division: bool = False,
-            request: Request = None,
-            response: Response = None,
-            seeds: Item = None,
-            items: Items = None,
-            task_queue: TaskQueue = None,
-            **kwargs,
+        self,
+        target: "Spider",
+        form: str = state.const.ON_CONSUME,
+        division: bool = False,
+        request: Request = None,
+        response: Response = None,
+        seeds: Item = None,
+        items: Items = None,
+        task_queue: TaskQueue = None,
+        **kwargs,
     ) -> None:
         self.request: Request = request
         self.response: Response = response
@@ -72,8 +72,7 @@ class Context(Flow):
         super().__setattr__(key, value)
 
     def success(self, shutdown=False):
-        ret = self.task_queue.remove(
-            self.queue_name, *pandora.iterable(self.seeds))
+        ret = self.task_queue.remove(self.queue_name, *pandora.iterable(self.seeds))
         shutdown and self.flow({"next": None})  # type: ignore
         return ret
 
@@ -96,8 +95,7 @@ class Context(Flow):
 
         :return:
         """
-        ret = self.task_queue.replace(
-            self.queue_name, (self.seeds, new), qtypes=qtypes)
+        ret = self.task_queue.replace(self.queue_name, (self.seeds, new), qtypes=qtypes)
         self.seeds = new  # type: ignore
         return ret
 
@@ -114,7 +112,7 @@ class Context(Flow):
             "seeds": self.seeds,
             "task_queue": self.task_queue,
             "queue_name": self.queue_name,
-            "target": self.target
+            "target": self.target,
         }
 
     @property
@@ -127,7 +125,7 @@ class Context(Flow):
             Item: self.seeds,
             # str: self.queue_name,
             # dict: self.seeds,
-            **super().annotations
+            **super().annotations,
         }
 
     def divisive(self, qtypes=("temp",)):
@@ -137,7 +135,7 @@ class Context(Flow):
         return new
 
     def submit(
-            self, *obj: Union[Item, dict], call_later=False, attrs: Optional[dict] = None
+        self, *obj: Union[Item, dict], call_later=False, attrs: Optional[dict] = None
     ) -> List["Context"]:
         """
         专门为新请求分支封装的方法, 会自动将请求放入队列
@@ -156,8 +154,7 @@ class Context(Flow):
             )
 
             if not call_later:
-                stuff = self.branch(
-                    {"seeds": o, "next": self.target.on_seeds, **attrs})
+                stuff = self.branch({"seeds": o, "next": self.target.on_seeds, **attrs})
                 ret.append(stuff)
         else:
             if call_later:
@@ -184,12 +181,14 @@ class Context(Flow):
 
 class InitContext(Flow):
     def __init__(
-            self, target: "Spider", form: str = state.const.ON_INIT,
-            seeds: List[Item] = None,
-            task_queue: TaskQueue = None,
-            maxsize: int = None,
-            priority: bool = False,
-            **kwargs
+        self,
+        target: "Spider",
+        form: str = state.const.ON_INIT,
+        seeds: List[Item] = None,
+        task_queue: TaskQueue = None,
+        maxsize: int = None,
+        priority: bool = False,
+        **kwargs,
     ) -> None:
         self.seeds: List[Item] = seeds
         self.task_queue: TaskQueue = task_queue
@@ -208,7 +207,7 @@ class InitContext(Flow):
             "seeds": self.seeds,
             "task_queue": self.task_queue,
             "queue_name": self.queue_name,
-            "target": self.target
+            "target": self.target,
         }
 
     @property
@@ -218,7 +217,7 @@ class InitContext(Flow):
             Item: self.seeds,
             # str: self.queue_name,
             # dict: self.seeds,
-            **super().annotations
+            **super().annotations,
         }
 
     def success(self, shutdown=False):
@@ -261,7 +260,7 @@ class Spider(Pangu):
         )
         self.proxy: Optional[
             Union[dict, BaseProxy, str, List[Union[dict, BaseProxy, str]]]
-        ] = kwargs.pop("proxy", None) or None
+        ] = (kwargs.pop("proxy", None) or None)
         self.forever = kwargs.pop("forever", False) or False
         super().__init__(**kwargs)
         self.number_of_total_requests = FastWriteCounter()  # 发起请求总数量
@@ -297,13 +296,12 @@ class Spider(Pangu):
         """
 
         task_queue: TaskQueue = self.get(
-            "init.task_queue", self.task_queue)  # type: ignore
-        queue_name: str = self.get(
-            "init.queue_name", self.queue_name)  # type: ignore
+            "init.task_queue", self.task_queue
+        )  # type: ignore
+        queue_name: str = self.get("init.queue_name", self.queue_name)  # type: ignore
         # 判断是否有初始化权限
         permission_info: dict = task_queue.command(
-            queue_name, {
-                "action": task_queue.COMMANDS.GET_PERMISSION, "interval": 10}
+            queue_name, {"action": task_queue.COMMANDS.GET_PERMISSION, "interval": 10}
         )
         if not permission_info["state"]:
             logger.debug(
@@ -322,8 +320,7 @@ class Spider(Pangu):
         # 云端的初始化记录 -> 初始化的时候会存储(如果支持的话)
         remote_init_record = (
             task_queue.command(
-                queue_name, {
-                    "action": task_queue.COMMANDS.GET_RECORD, "filter": 1}
+                queue_name, {"action": task_queue.COMMANDS.GET_RECORD, "filter": 1}
             )
             or {}
         )
@@ -430,7 +427,7 @@ class Spider(Pangu):
         seeds = pandora.iterable(seeds)
 
         seeds = seeds[
-            0: min(
+            0 : min(
                 [
                     settings["count_size"] - settings["count"],
                     settings["total_size"] - settings["total"],
@@ -477,22 +474,22 @@ class Spider(Pangu):
         logger.debug(output)
 
         if (
-                settings["total"] >= settings["total_size"]
-                or settings["count"] >= settings["count_size"]
-                or settings["success"] >= settings["success_size"]
+            settings["total"] >= settings["total_size"]
+            or settings["count"] >= settings["count_size"]
+            or settings["success"] >= settings["success_size"]
         ):
             raise signals.Exit
         else:
             context.flow()
 
     def put_seeds(
-            self,
-            seeds: Union[dict, Item, Iterable[Item], Iterable[dict]],
-            task_queue: Optional[TaskQueue] = ...,
-            queue_name: Optional[str] = ...,
-            maxsize: Optional[int] = None,
-            priority: Optional[bool] = False,
-            **kwargs,
+        self,
+        seeds: Union[dict, Item, Iterable[Item], Iterable[dict]],
+        task_queue: Optional[TaskQueue] = ...,
+        queue_name: Optional[str] = ...,
+        maxsize: Optional[int] = None,
+        priority: Optional[bool] = False,
+        **kwargs,
     ):
         """
         将种子放入容器
@@ -511,8 +508,7 @@ class Spider(Pangu):
         if queue_name is ...:
             queue_name = self.queue_name
         seeds = seeds or {}
-        task_queue.continue_(queue_name, maxsize=maxsize,
-                             interval=1)  # type: ignore
+        task_queue.continue_(queue_name, maxsize=maxsize, interval=1)  # type: ignore
         return task_queue.put(  # type: ignore
             queue_name,  # type: ignore
             *pandora.iterable(seeds),
@@ -523,12 +519,12 @@ class Spider(Pangu):
     def _when_put_seeds(self, raw_method):  # noqa
         @functools.wraps(raw_method)
         def wrapper(
-                seeds: Union[dict, Item, List[Item], List[dict]],
-                task_queue: Optional[TaskQueue] = ...,
-                queue_name: Optional[str] = ...,
-                maxsize: Optional[int] = None,
-                priority: Optional[bool] = False,
-                **kwargs,
+            seeds: Union[dict, Item, List[Item], List[dict]],
+            task_queue: Optional[TaskQueue] = ...,
+            queue_name: Optional[str] = ...,
+            maxsize: Optional[int] = None,
+            priority: Optional[bool] = False,
+            **kwargs,
         ):
             where = kwargs.pop("where", None)
             if where == "init":
@@ -575,19 +571,20 @@ class Spider(Pangu):
         :return:
         """
         task_queue: TaskQueue = self.get(
-            "spider.task_queue", self.task_queue)  # type: ignore
-        queue_name: str = self.get(
-            "spider.queue_name", self.queue_name)  # type: ignore
+            "spider.task_queue", self.task_queue
+        )  # type: ignore
+        queue_name: str = self.get("spider.queue_name", self.queue_name)  # type: ignore
         output = time.time()
 
         while True:
             context: Context = self.make_context(
-                task_queue=task_queue, queue_name=queue_name)  # type: ignore
+                task_queue=task_queue, queue_name=queue_name
+            )  # type: ignore
             with context:
                 prepared = pandora.prepare(
                     func=self.get_seeds,
                     annotations=context.annotations,
-                    namespace=context.namespace
+                    namespace=context.namespace,
                 )
 
                 try:
@@ -620,17 +617,15 @@ class Spider(Pangu):
                     # 判断是否应该停止爬虫
                     #  没有初始化 + 本地没有运行的任务 + 任务队列为空 -> 退出
                     if (
-                            not task_queue.command(
-                                queue_name, {
-                                    "action": task_queue.COMMANDS.IS_INIT}
-                            )
-                            and not self.forever
-                            and self.dispatcher.running == 0
-                            and task_queue.is_empty(
-                                queue_name,
-                                threshold=self.get(
-                                    "spider.threshold", default=0),
-                            )
+                        not task_queue.command(
+                            queue_name, {"action": task_queue.COMMANDS.IS_INIT}
+                        )
+                        and not self.forever
+                        and self.dispatcher.running == 0
+                        and task_queue.is_empty(
+                            queue_name,
+                            threshold=self.get("spider.threshold", default=0),
+                        )
                     ):
                         number_of_seeds_obtained = self.number_of_seeds_obtained.value
                         number_of_new_seeds = self.number_of_new_seeds.value
@@ -652,13 +647,13 @@ class Spider(Pangu):
                             rate_of_success_requests = 0
 
                         logger.debug(
-                            f'[爬取完毕] '
-                            f'队列名称: {queue_name} '
+                            f"[爬取完毕] "
+                            f"队列名称: {queue_name} "
                             f'关闭阈值: {self.get("spider.threshold", default=0)} '
-                            f'已获取的种子数量: {number_of_seeds_obtained} '
-                            f'新增的种子数量: {number_of_new_seeds} '
-                            f'总的请求数量: {number_of_total_requests} '
-                            f'请求成功率: {rate_of_success_requests}% '
+                            f"已获取的种子数量: {number_of_seeds_obtained} "
+                            f"新增的种子数量: {number_of_new_seeds} "
+                            f"总的请求数量: {number_of_total_requests} "
+                            f"请求成功率: {rate_of_success_requests}% "
                         )
 
                         return {
@@ -672,7 +667,7 @@ class Spider(Pangu):
 
                     else:
                         if task_queue.smart_reverse(
-                                queue_name, status=self.dispatcher.running
+                            queue_name, status=self.dispatcher.running
                         ):
                             logger.debug(f"[翻转队列] 队列名称: {queue_name}")
 
@@ -691,8 +686,7 @@ class Spider(Pangu):
                     )
 
                 else:
-                    self.number_of_seeds_pending += len(
-                        pandora.iterable(fettle))
+                    self.number_of_seeds_pending += len(pandora.iterable(fettle))
                     for seeds in pandora.iterable(fettle):
                         stuff = context.copy()
                         stuff.flow({"next": self.on_consume, "seeds": seeds})
@@ -705,9 +699,11 @@ class Spider(Pangu):
         def wrapper(*args, **kwargs):
             with self.dispatcher:
                 task_queue: TaskQueue = self.get(
-                    "spider.task_queue", self.task_queue)  # type: ignore
+                    "spider.task_queue", self.task_queue
+                )  # type: ignore
                 queue_name: str = self.get(
-                    "spider.queue_name", self.queue_name)  # type: ignore
+                    "spider.queue_name", self.queue_name
+                )  # type: ignore
                 server = task_queue.command(
                     queue_name,
                     {
@@ -731,12 +727,12 @@ class Spider(Pangu):
             t1 = int(time.time() * 1000)
             future = self.active(dispatch.Task(func=self.run_init))
             task_queue: TaskQueue = self.get(
-                "init.task_queue", self.task_queue)  # type: ignore
+                "init.task_queue", self.task_queue
+            )  # type: ignore
             # type: ignore # type: ignore
             queue_name: str = self.get("init.queue_name", self.queue_name)
             task_queue.command(
-                queue_name, {
-                    "action": task_queue.COMMANDS.WAIT_INIT, "time": t1}
+                queue_name, {"action": task_queue.COMMANDS.WAIT_INIT, "time": t1}
             )
             return {"spider": self.run_spider(), "init": future.result()}
 
@@ -748,8 +744,7 @@ class Spider(Pangu):
         :return:
         """
         context: Context = Context.get_context()  # type: ignore
-        task_queue: TaskQueue = kwargs.pop(
-            "task_queue", None) or context.task_queue
+        task_queue: TaskQueue = kwargs.pop("task_queue", None) or context.task_queue
         queue_name: str = kwargs.pop("queue_name", None) or context.queue_name
         return task_queue.get(name=queue_name, **kwargs)
 
@@ -845,8 +840,7 @@ class Spider(Pangu):
         :param context:
         :return:
         """
-        downloader = context.request.get_options(
-            "$downloader") or self.downloader
+        downloader = context.request.get_options("$downloader") or self.downloader
         if inspect.isclass(downloader):
             downloader = downloader()
 
@@ -931,8 +925,9 @@ class Spider(Pangu):
                 annotations=context.annotations,
                 namespace=context.namespace,
             )
-            context.flow({"items": context.items},
-                         flag=context.next == self.on_response)
+            context.flow(
+                {"items": context.items}, flag=context.next == self.on_response
+            )
 
         return wrapper
 
@@ -1007,8 +1002,7 @@ class Spider(Pangu):
                 namespace=context.namespace,
             )
             future_max_retry = context.seeds.get("$futureMaxRetry")
-            future_retry: int = context.seeds.get(
-                "$futureRetry") or 0  # type: ignore
+            future_retry: int = context.seeds.get("$futureRetry") or 0  # type: ignore
             request = prepared.func(*prepared.args, **prepared.kwargs)
             if future_max_retry:
                 request.max_retry = future_max_retry
@@ -1056,11 +1050,11 @@ class Spider(Pangu):
 
     @pandora.Method
     def survey(
-            binding,  # noqa
-            *seeds: dict,
-            attrs: dict = None,  # type: ignore
-            modded: dict = None,  # type: ignore
-            extract: list = None,  # type: ignore
+        binding,  # noqa
+        *seeds: dict,
+        attrs: dict = None,  # type: ignore
+        modded: dict = None,  # type: ignore
+        extract: list = None,  # type: ignore
     ) -> List[Context]:
         """
         调查种子, collect 会收集产生的 Context
@@ -1104,8 +1098,7 @@ class Spider(Pangu):
         modded.setdefault("on_request", mock_on_request)
         modded.setdefault("item_pipeline", mock_item_pipeline)
         attrs.setdefault("task_queue", LocalQueue())
-        attrs.setdefault(
-            "queue_name", f"{cls.__module__}.{cls.__name__}:survey")
+        attrs.setdefault("queue_name", f"{cls.__module__}.{cls.__name__}:survey")
         clazz = type("Survey", (cls,), modded)
         survey: Spider = clazz(**attrs)  # type: ignore
         survey.run()
@@ -1116,10 +1109,10 @@ class Spider(Pangu):
         )  # type: ignore
 
     def _make_fetcher(
-            self,
-            downloader: Optional[AbstractDownloader] = None,
-            plugins: Union[dict, None] = ...,
-            **options,
+        self,
+        downloader: Optional[AbstractDownloader] = None,
+        plugins: Union[dict, None] = ...,
+        **options,
     ):
         options.setdefault("downloader", downloader or self.downloader)
         options.setdefault("dispatcher", self.dispatcher)
@@ -1143,12 +1136,12 @@ class Spider(Pangu):
         return spider
 
     def fetch(
-            self,
-            request: Union[Request, dict],
-            downloader: Optional[AbstractDownloader] = None,
-            proxy: Optional[Union[dict, BaseProxy]] = ...,
-            plugins: Union[dict, None] = ...,
-            **options,
+        self,
+        request: Union[Request, dict],
+        downloader: Optional[AbstractDownloader] = None,
+        proxy: Optional[Union[dict, BaseProxy]] = ...,
+        plugins: Union[dict, None] = ...,
+        **options,
     ) -> Response:
         """
         发送请求获取响应
@@ -1177,14 +1170,12 @@ class Spider(Pangu):
             else:
                 pass
 
-
         effective_downloader = downloader or self.downloader
         spider = self._make_fetcher(effective_downloader, plugins, **options)
         context = spider.make_context(
             request=request,
             next=spider.on_request,
-            flows={spider.on_request: None,
-                   spider.on_retry: spider.on_request},
+            flows={spider.on_request: None, spider.on_retry: spider.on_request},
         )
         context.failure = lambda _: context.flow({"next": None})
         spider.on_consume(context=context)
@@ -1199,3 +1190,21 @@ class Spider(Pangu):
         ]
         for count_name in counters:
             self.get(count_name).disable()  # type: ignore
+
+    def listen(
+        self,
+        task_queue: Optional[TaskQueue] = ...,
+        queue_name: Optional[str] = ...,
+    ):
+        """
+        开启监听服务
+        """
+        
+        self.forever = True
+        if task_queue is not ...:
+            self.task_queue = task_queue
+        if queue_name is not ...:
+            self.queue_name = queue_name
+        
+        logger.debug(f"[开启监听] 队列名称: {self.queue_name}, 任务队列: {self.task_queue}")
+        return self.run_spider()

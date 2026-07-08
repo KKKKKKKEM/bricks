@@ -1,12 +1,10 @@
 import asyncio
-import collections
-import concurrent.futures
 import math
-import uuid
 from typing import Any, Callable, List, Optional, Type, Union
 
 from loguru import logger
 
+from bricks import state
 from bricks.core import dispatch, signals
 from bricks.lib.queues import Item, LocalQueue, TaskQueue
 from bricks.rpc.common import MODE, start_rpc_server
@@ -17,13 +15,14 @@ def ctx2json(ctx: Context):
     seeds = ctx.seeds
     future_type = seeds.get("$futureType", "$response")
     if future_type == "$request":
-        return {"data": ctx.request.curl, "type": future_type, "seeds": dict(seeds)}
+        data = ctx.request.curl if ctx.request else ""
     elif future_type == "$response":
-        return {"data": ctx.response.text, "type": future_type, "seeds": dict(seeds)}
+        data = ctx.response.text if ctx.response else ""
     elif future_type == "$items":
-        return {"data": list(ctx.items), "type": future_type, "seeds": dict(seeds)}
+        data = list(ctx.items or [])
     else:
-        return {"data": "", "type": future_type, "seeds": dict(seeds)}
+        data = ""
+    return {"data": data, "type": future_type, "seeds": dict(seeds)}
 
 
 class Mocker:
@@ -32,11 +31,28 @@ class Mocker:
         self.on_finish = on_finish
 
     def create_hooks(self):
+        def get_future_type(ctx: Context) -> str:
+            return ctx.seeds.get("$futureType", "$response")
+
+        def before_request(ctx: Context):
+            if get_future_type(ctx) == "$request":
+                raise signals.Success
+
+        def after_request(ctx: Context):
+            if get_future_type(ctx) == "$response":
+                raise signals.Success
+
+        def before_pipeline(ctx: Context):
+            if get_future_type(ctx) == "$items":
+                raise signals.Success
+
         def failure(ctx: Context, shutdown=False):
             future_max_retry = ctx.seeds.get("$futureMaxRetry") or math.inf
             future_retry = ctx.seeds.get("$futureRetry") or ctx.request.retry
             if future_retry >= future_max_retry:
-                self.on_task_done(ctx, RuntimeError(f"超出最大重试次数: {future_max_retry} 次"))
+                self.on_task_done(
+                    ctx, RuntimeError(f"超出最大重试次数: {future_max_retry} 次")
+                )
                 return ctx.success(shutdown)
             else:
                 return super(ctx.__class__, ctx).retry()
@@ -50,47 +66,36 @@ class Mocker:
 
         def success(ctx: Context, shutdown=False):
             self.on_task_done(ctx, None)
-            return super(ctx.__class__, ctx).success(shutdown)
+            shutdown and ctx.flow({"next": None})  # type: ignore
 
-        def on_request(spider, context: Context):
+        def submit(
+            ctx: Context,
+            *obj: Union[Item, dict],
+            call_later=False,
+            attrs: Optional[dict] = None,
+        ):
+            return super(ctx.__class__, ctx).submit(*obj, call_later=False, attrs=attrs)
 
-            future_type = context.seeds.get("$futureType", "$response")
-            if future_type == "$request":
-                raise signals.Success
-            return super(spider.__class__, spider).on_request(context)
-
-        def on_retry(spider, context: Context):
-            try:
-                return super(spider.__class__, spider).on_retry(context)
-            except signals.Success:
-                self.on_finish(context, RuntimeError("超出最大重试次数"))
-                raise
-
-        def on_response(spider, context: Context):
-            future_type = context.seeds.get("$futureType", "$response")
-
-            if future_type == "$response":
-                raise signals.Success
-
-            context.items = super(spider.__class__, spider).on_response(context)
-
-            if future_type == "$items":
-                raise signals.Success
-
-            return context.items
+        def put_seeds(spider: Spider, seeds: Union[dict, Item], *_, **kwargs):
+            logger.debug("[RPC] put_seeds ignored outside active context")
+            return 0
 
         return {
+            "before_request": before_request,
+            "after_request": after_request,
+            "before_pipeline": before_pipeline,
             "failure": failure,
             "error": error,
             "success": success,
-            "on_request": on_request,
-            "on_response": on_response,
-            "on_retry": on_retry,
+            "submit": submit,
+            "put_seeds": put_seeds,
         }
 
     def on_task_done(self, context: Context, error: Optional[Exception]):
         if not hasattr(context, "$finish"):
             setattr(context, "$finish", True)
+            setattr(context, "$error", error)
+            context.doing.clear()
             self.on_finish(context, error)
 
 
@@ -98,18 +103,36 @@ class Rpc:
     def __init__(self):
         self.spider: Spider = ...
         self.running: bool = False
-        self._futures = collections.defaultdict(concurrent.futures.Future)
+        self._dispatcher_owned: bool = False
+        self._dispatcher_context_depth: int = 0
         self._on_finish: List[Callable[[Context, Optional[Exception]], None]] = []
 
-    def run(self):
-        spider_name = self.spider.__class__.__name__
-        queue_name = self.spider.queue_name
-        queue_type = self.spider.task_queue.__class__.__name__
-        logger.info(f'[开始监听] {spider_name}, queueName: {queue_name}, queueType: {queue_type}')
-        self.spider.run_spider()
+    def _ensure_dispatcher(self):
+        dispatcher = getattr(self.spider, "dispatcher", None)
+        if not dispatcher or dispatcher.is_running():
+            return
+
+        dispatcher.start()
+        self._dispatcher_owned = True
+
+    def __enter__(self):
+        if self._dispatcher_context_depth == 0:
+            self._ensure_dispatcher()
+        self._dispatcher_context_depth += 1
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._dispatcher_context_depth = max(0, self._dispatcher_context_depth - 1)
+        if self._dispatcher_context_depth == 0 and self._dispatcher_owned:
+            self.stop()
 
     def stop(self):
         self.running = False
+        if getattr(self.spider, "dispatcher", None):
+            self.spider.dispatcher.stop()
+        self._dispatcher_owned = False
+        self._dispatcher_context_depth = 0
+
 
     def execute(self, seeds: Union[dict, Item]) -> Context:
         """
@@ -125,41 +148,32 @@ class Rpc:
         :param seeds: 需要消耗的种子
         :return:
         """
-        future_id = f"future-{uuid.uuid4()}"
-        future = self._futures[future_id]
-        seeds.update({"$futureID": future_id})
-        task_queue: TaskQueue = self.spider.get("spider.task_queue") or self.spider.task_queue
+        self._ensure_dispatcher()
+
+        seeds = Item(seeds)
+        task_queue: TaskQueue = (
+            self.spider.get("spider.task_queue") or self.spider.task_queue
+        )
         queue_name: str = self.spider.get("spider.queue_name") or self.spider.queue_name
-        context: Context = self.spider.make_context(task_queue=task_queue, queue_name=queue_name, seeds=seeds)  # noqa
+        context: Context = self.spider.make_context(
+            task_queue=task_queue, queue_name=queue_name, seeds=seeds
+        )  # noqa
         context.flow({"next": self.spider.on_consume, "seeds": seeds})
         self.spider.on_consume(context=context)
-        return future.result()
-
-    def submit(self, seeds: Union[dict, Item]):
-        """
-        给 rpc 一个种子, 然后获取种子的消耗结果
-        种子内特殊键值对说明:
-
-        $futureType 表示需要的类型, 可以自己设置, 默认为 $response
-            $request -> 表示只需要 request, 也就是消耗到了请求之前就会告知结果
-            $response -> 表示只要 response, 也就是消耗到了解析之前就会告知结果
-            $items -> 表示只要 items, 也就是消耗到了存储之前就会告知结果
-
-
-        :param seeds: 需要消耗的种子
-        :return:
-        """
-        self.spider.put_seeds(seeds)
+        error = getattr(context, "$error", None)
+        if error:
+            raise error
+        return context
 
     @classmethod
     def wrap(
-            cls,
-            spider: Type[Spider],
-            attrs: dict = None,
-            modded: dict = None,
-            ctx_modded: dict = None,
-            mocker: Mocker = None,
-            ensure_local: bool = True
+        cls,
+        spider: Type[Spider],
+        attrs: dict = None,
+        modded: dict = None,
+        ctx_modded: dict = None,
+        mocker: Mocker = None,
+        ensure_local: bool = True,
     ):
         """
         将 Spider 转化为 RPC, 等于后台运行爬虫, 支持动态添加种子, 然后获取该种子消耗的结果
@@ -189,9 +203,8 @@ class Rpc:
         mocker = mocker or Mocker(rpc.on_finish)
         hooks = mocker.create_hooks()
 
-        modded.setdefault("on_request", hooks["on_request"])
-        modded.setdefault("on_response", hooks["on_response"])
-        modded.setdefault("on_retry", hooks["on_retry"])
+        modded.setdefault("put_seeds", hooks["put_seeds"])
+        ctx_modded.setdefault("submit", hooks["submit"])
         ctx_modded.setdefault("failure", hooks["failure"])
         ctx_modded.setdefault("error", hooks["error"])
         ctx_modded.setdefault("success", hooks["success"])
@@ -205,14 +218,23 @@ class Rpc:
         default_attrs = {"forever": True}
 
         if ensure_local:
-            default_attrs.update(**{
-                "task_queue": local,
-                "spider.task_queue": local,
-                "queue_name": f"{cls.__module__}.{cls.__name__}:rpc"
-            })
+            default_attrs.update(
+                **{
+                    "task_queue": local,
+                    "spider.task_queue": local,
+                    "queue_name": f"{cls.__module__}.{cls.__name__}:rpc",
+                }
+            )
 
         for k, v in default_attrs.items():
             rpc.spider.set(k, v)
+        for form, name, index in (
+            (state.const.BEFORE_REQUEST, "before_request", math.inf),
+            (state.const.AFTER_REQUEST, "after_request", math.inf),
+            (state.const.BEFORE_PIPELINE, "before_pipeline", -math.inf),
+        ):
+            hook = hooks.get(name)
+            hook and rpc.spider.use(form, {"func": hook, "index": index})
         rpc.spider.disable_statistics()
         return rpc
 
@@ -224,33 +246,23 @@ class Rpc:
         :param ctx:
         :return:
         """
-        future_id: str = ctx.seeds.get("$futureID")
-        try:
-            future: concurrent.futures.Future = self._futures.pop(future_id, None)
-            if error:
-                future and future.set_exception(error)
-            else:
-                future and future.set_result(ctx)
-        except concurrent.futures.InvalidStateError:
-            pass
-
-        except Exception as e:
-            logger.warning(f"[error] 放弃存储: {future_id}, error: {e}")
-
         for on_finish in self._on_finish:
-            on_finish(ctx, error)
+            try:
+                on_finish(ctx, error)
+            except Exception as e:
+                logger.warning(f"[error] 放弃回调: {ctx.seeds}, error: {e}")
 
     def with_callback(self, *on_finish: Callable[[Context, Optional[Exception]], None]):
         self._on_finish.extend(on_finish)
         return self
 
     def serve(
-            self,
-            concurrency: int = 10,
-            ident: Any = 0,
-            on_server_started: Callable[[Any], None] = None,
-            mode: MODE = "http",
-            **kwargs
+        self,
+        concurrency: int = 10,
+        ident: Any = 0,
+        on_server_started: Callable[[Any], None] = None,
+        mode: MODE = "http",
+        **kwargs,
     ):
         """
         启动 RPC 服务器
@@ -267,11 +279,16 @@ class Rpc:
             concurrency=concurrency,
             ident=ident,
             on_server_started=on_server_started,
-            **kwargs
+            **kwargs,
         )
         try:
             with self.spider.dispatcher:
-                asyncio.run_coroutine_threadsafe(rpc_server, loop=self.spider.dispatcher.loop)
-                self.run()
+                self.running = True
+                server = asyncio.run_coroutine_threadsafe(
+                    rpc_server, loop=self.spider.dispatcher.loop
+                )
+                server.result()
         except (KeyboardInterrupt, SystemExit):
             return
+        finally:
+            self.running = False
