@@ -8,7 +8,7 @@ import json
 import threading
 import time
 import urllib.parse
-from typing import Union
+from typing import Any, Union
 
 from loguru import logger
 
@@ -18,8 +18,15 @@ from bricks.lib.response import Response
 
 
 class AbstractDownloader(metaclass=genesis.MetaClass):
-    local = threading.local()
+    reuse_session_by_default = True
     debug = False
+
+    def __new__(cls, *args, **kwargs):
+        instance = super().__new__(cls)
+        # Sessions belong to a downloader instance, while threading.local keeps
+        # clients from being shared concurrently by different worker threads.
+        instance.local = threading.local()
+        return instance
 
     def fetch(self, request: Request) -> Response:
         """
@@ -156,6 +163,10 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
         """
         raise NotImplementedError
 
+    def close_session(self, session):
+        """关闭具体下载器创建的 session。"""
+        raise NotImplementedError
+
     def _when_make_session(self, func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -166,20 +177,14 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
             :param kwargs:
             :return:
             """
-            self.clear_session()
             session = func(*args, **kwargs)
-            setattr(self.local, f"{self.__class__}$session", session)
+            self._store_session(self._session_key(kwargs), session)
             return session
 
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
-            if inspect.iscoroutinefunction(self.clear_session):
-                await self.clear_session()  # noqa
-            else:
-                self.clear_session()
-
             session = await func(*args, **kwargs)
-            setattr(self.local, f"{self.__class__}$session", session)
+            await self._store_async_session(self._session_key(kwargs), session)
             return session
 
         return async_wrapper if inspect.iscoroutinefunction(func) else wrapper
@@ -190,20 +195,76 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
 
         :return:
         """
-        return getattr(
-            self.local, f"{self.__class__}$session", None
-        ) or self.make_session(**options)
+        key = self._session_key(options)
+        sessions = self._sessions()
+        return sessions.get(key) or self.make_session(**options)
+
+    def should_reuse_session(self, request: Request) -> bool:
+        if request.use_session is None:
+            return self.reuse_session_by_default
+        return request.use_session
+
+    def _sessions(self) -> dict:
+        sessions = getattr(self.local, "sessions", None)
+        if sessions is None:
+            sessions = {}
+            self.local.sessions = sessions
+        return sessions
+
+    @classmethod
+    def _freeze_session_option(cls, value: Any):
+        if isinstance(value, dict):
+            return tuple(
+                sorted(
+                    (str(key), cls._freeze_session_option(item))
+                    for key, item in value.items()
+                )
+            )
+        if isinstance(value, (list, tuple)):
+            return tuple(cls._freeze_session_option(item) for item in value)
+        if isinstance(value, set):
+            return tuple(
+                sorted(cls._freeze_session_option(item) for item in value)
+            )
+        try:
+            hash(value)
+        except TypeError:
+            return repr(value)
+        return value
+
+    @classmethod
+    def _session_key(cls, options: dict):
+        return cls._freeze_session_option(options)
+
+    def _store_session(self, key, session):
+        sessions = self._sessions()
+        old_session = sessions.get(key)
+        if old_session is not None and old_session is not session:
+            self.close_session(old_session)
+        sessions[key] = session
+
+    async def _store_async_session(self, key, session):
+        sessions = self._sessions()
+        old_session = sessions.get(key)
+        if old_session is not None and old_session is not session:
+            result = self.close_session(old_session)
+            if inspect.isawaitable(result):
+                await result
+        sessions[key] = session
 
     def clear_session(self):
-        if hasattr(self.local, f"{self.__class__}$session"):
-            try:
-                old_session = getattr(self.local, f"{self.__class__}$session")
-                old_session.close()
-            except Exception as e:
-                logger.error(
-                    f"[清空 session 失败] 失败原因: {str(e) or str(e.__class__.__name__)}",
-                    error=e,
-                )
+        sessions = getattr(self.local, "sessions", None)
+        if sessions:
+            for session in list(sessions.values()):
+                try:
+                    self.close_session(session)
+                except Exception as e:
+                    logger.error(
+                        "[清空 session 失败] "
+                        f"失败原因: {str(e) or str(e.__class__.__name__)}",
+                        error=e,
+                    )
+            sessions.clear()
 
     def exception(self, request: Request, error: Exception):
         """

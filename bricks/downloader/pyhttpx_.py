@@ -4,8 +4,6 @@
 # @Desc    : pyhttpx downloader
 from __future__ import absolute_import
 
-import copy
-import urllib.parse
 import warnings
 from typing import Union
 
@@ -51,15 +49,14 @@ class Downloader(AbstractDownloader):
             "cookies": request.cookies,
             "data": self.parse_data(request)["data"],
             "timeout": 5 if request.timeout is ... else request.timeout,
-            "allow_redirects": False,
+            "allow_redirects": request.allow_redirects,
             "proxies": request.proxies
                        and {"http": request.proxies, "https": request.proxies},  # noqa
             "verify": request.options.get("verify", False),
         }
 
-        next_url = request.real_url
-        _redirect_count = 0
-        if request.use_session:
+        reuse_session = self.should_reuse_session(request)
+        if reuse_session:
             session = request.get_options("$session") or self.get_session(
                 ja3=request.get_options("ja3"),
                 exts_payload=request.get_options("exts_payload"),
@@ -76,59 +73,31 @@ class Downloader(AbstractDownloader):
             )
 
         try:
-            while True:
-                assert _redirect_count < 999, "已经超过最大重定向次数: 999"
-                response = session.request(**{**options, "url": next_url})
-                last_url, next_url = (
-                    next_url,
-                    response.headers.get("location")
-                    or response.headers.get("Location"),
+            response = session.request(**{**options, "url": request.real_url})
+
+            def get_cookies(item):
+                return Cookies.by_jar(
+                    [
+                        {"name": key, "value": value, "domain": ""}
+                        for key, value in item.cookies.items()
+                    ]
                 )
-                if request.allow_redirects and next_url:
-                    next_url = urllib.parse.urljoin(request.real_url, next_url)
-                    _redirect_count += 1
-                    res.history.append(
-                        Response(
-                            content=response.content,
-                            headers=response.headers,
-                            cookies=Cookies.by_jar(
-                                [
-                                    {"name": k, "value": v, "domain": ""}
-                                    for k, v in response.cookies.items()
-                                ]
-                            ),
-                            url=request.real_url,
-                            status_code=response.status_code,
-                            request=Request(
-                                url=last_url,
-                                method=request.method,
-                                headers=copy.deepcopy(options.get("headers")),
-                            ),
-                        )
-                    )
-                    request.options.get("$referer", False) and options[
-                        "headers"
-                    ].update(Referer=request.real_url)
 
-                else:
-                    res.content = response.content
-                    res.headers = response.headers
-                    res.cookies = Cookies.by_jar(
-                        [
-                            {"name": k, "value": v, "domain": ""}
-                            for k, v in response.cookies.items()
-                        ]
-                    )
-                    res.url = request.real_url
-                    res.status_code = response.status_code
-                    res.request = request
-
-                    return res
+            res.content = response.content
+            res.headers = response.headers
+            res.cookies = get_cookies(response)
+            res.url = str(getattr(response, "url", request.real_url))
+            res.status_code = response.status_code
+            res.request = request
+            return res
         finally:
-            not request.use_session and session.close()
+            not reuse_session and session.close()
 
     def make_session(self, **options):
         return pyhttpx.HttpSession(**options)
+
+    def close_session(self, session: pyhttpx.HttpSession):
+        session.close()
 
 
 if __name__ == "__main__":

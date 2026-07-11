@@ -161,7 +161,9 @@ req = Request(
     allow_redirects=True,              # 是否跟随重定向
 
     # 会话
-    use_session=False,   # 是否复用 Session（保持 Cookie）
+    # None：使用下载器默认策略；True/False：显式开启/关闭复用
+    # HTTP 下载器默认复用，浏览器下载器默认隔离
+    use_session=None,
 
     # 下载器专有选项
     options={
@@ -205,7 +207,9 @@ print(req.curl)
 
 ## Session 管理
 
-当 `use_session=True` 时，同一个线程内的请求会共享 Session（保持 Cookie）：
+HTTP 下载器默认在同一个下载器实例、同一个线程内复用 Session。可以显式传入
+`use_session=False` 强制为单次请求创建独立 Session；浏览器下载器默认隔离，需用
+`use_session=True` 显式复用上下文：
 
 ```python
 from bricks import Request

@@ -86,7 +86,7 @@ def cmd_new(args):
                 "PROXIES": None,
                 "PROXY": None,
                 "MAX_RETRY": 5,
-                "USE_SESSION": False,
+                "USE_SESSION": None,
             }
         )
 

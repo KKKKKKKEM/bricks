@@ -5,9 +5,7 @@
 
 from __future__ import absolute_import
 
-import copy
 import re
-import urllib.parse
 from typing import Optional, Union
 
 from bricks.downloader import AbstractDownloader
@@ -67,7 +65,7 @@ class Downloader(AbstractDownloader):
             **self.options,
             "proxy": request.proxies,
             "verify": request.options.get("verify", False),
-            "follow_redirects": False,
+            "follow_redirects": request.allow_redirects,
             "impersonate": request.get_options("impersonate") or self.impersonate,
             "impersonate_os": request.get_options("impersonate_os")
             or self.impersonate_os,
@@ -140,10 +138,8 @@ class Downloader(AbstractDownloader):
 
         client_kwargs = self._build_client_kwargs(request)
 
-        next_url = request.real_url
-        _redirect_count = 0
-
-        if request.use_session:
+        reuse_session = self.should_reuse_session(request)
+        if reuse_session:
             client = request.get_options("$session") or self.get_session(
                 **client_kwargs
             )
@@ -151,58 +147,27 @@ class Downloader(AbstractDownloader):
             client = primp.Client(**client_kwargs)
 
         try:
-            while True:
-                assert _redirect_count < 999, "已经超过最大重定向次数: 999"
-                response = self._do_request(
-                    client, request.method, next_url, req_kwargs
+            response = self._do_request(
+                client, request.method, request.real_url, req_kwargs
+            )
+
+            def get_cookies(item):
+                return Cookies.by_jar(
+                    [
+                        {"name": key, "value": value, "domain": ""}
+                        for key, value in item.cookies.items()
+                    ]
                 )
 
-                last_url, next_url = (
-                    next_url,
-                    response.headers.get("location")
-                    or response.headers.get("Location"),
-                )
-
-                if request.allow_redirects and next_url:
-                    next_url = urllib.parse.urljoin(response.url, next_url)
-                    _redirect_count += 1
-                    res.history.append(
-                        Response(
-                            content=response.content,
-                            headers=dict(response.headers),
-                            cookies=Cookies.by_jar(
-                                [
-                                    {"name": k, "value": v, "domain": ""}
-                                    for k, v in response.cookies.items()
-                                ]
-                            ),
-                            url=response.url,
-                            status_code=response.status_code,
-                            request=Request(
-                                url=last_url,
-                                method=request.method,
-                                headers=copy.deepcopy(req_kwargs.get("headers") or {}),
-                            ),
-                        )
-                    )
-                    request.options.get("$referer", False) and req_kwargs.get(
-                        "headers", {}
-                    ).update(Referer=response.url)
-                else:
-                    res.content = response.content
-                    res.headers = dict(response.headers)
-                    res.cookies = Cookies.by_jar(
-                        [
-                            {"name": k, "value": v, "domain": ""}
-                            for k, v in response.cookies.items()
-                        ]
-                    )
-                    res.url = response.url
-                    res.status_code = response.status_code
-                    res.request = request
-                    return res
+            res.content = response.content
+            res.headers = dict(response.headers)
+            res.cookies = get_cookies(response)
+            res.url = response.url
+            res.status_code = response.status_code
+            res.request = request
+            return res
         finally:
-            if not request.use_session:
+            if not reuse_session:
                 try:
                     client.close()
                 except Exception:
@@ -218,6 +183,9 @@ class Downloader(AbstractDownloader):
         if self.impersonate_os and "impersonate_os" not in _opts:
             _opts["impersonate_os"] = self.impersonate_os
         return primp.Client(**_opts)
+
+    def close_session(self, session: primp.Client):
+        session.close()
 
     def exception(self, request: Request, error: Exception):
         resp = super().exception(request, error)

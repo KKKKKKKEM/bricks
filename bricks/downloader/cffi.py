@@ -3,9 +3,7 @@
 # @Author  : Kem
 # @Desc    :
 import contextlib
-import copy
 import re
-import urllib.parse
 from typing import Optional, Union
 
 from curl_cffi import requests
@@ -61,7 +59,7 @@ class Downloader(AbstractDownloader):
             "files": request.options.get("files"),
             "auth": request.options.get("auth"),
             "timeout": 5 if request.timeout is ... else request.timeout,
-            "allow_redirects": False if not use_stream else request.allow_redirects,
+            "allow_redirects": request.allow_redirects,
             "proxies": request.proxies
                        and {"http": request.proxies, "https": request.proxies},  # noqa
             "verify": request.get_options("verify", False),
@@ -69,10 +67,8 @@ class Downloader(AbstractDownloader):
             "stream": use_stream,
         }
 
-        next_url = request.real_url
-        _redirect_count = 0
-
-        if request.use_session:
+        reuse_session = self.should_reuse_session(request)
+        if reuse_session:
             session = request.get_options("$session") or self.get_session()
             ctx = contextlib.nullcontext()
         else:
@@ -91,50 +87,22 @@ class Downloader(AbstractDownloader):
             res._stream_iterator = response.iter_content(chunk_size=chunk_size)
             return res
 
-        # 普通下载使用 with 管理
+        # 普通下载使用 with 管理；标准重定向交给客户端处理。
         with ctx:
-            while True:
-                assert _redirect_count < 999, "已经超过最大重定向次数: 999"
-                response = session.request(**{**options, "url": next_url})
-                last_url, next_url = (
-                    next_url,
-                    response.headers.get(
-                        "location") or response.headers.get("Location"),
-                )
-                if request.allow_redirects and next_url:
-                    next_url = urllib.parse.urljoin(response.url, next_url)
-                    _redirect_count += 1
-                    res.history.append(
-                        Response(
-                            content=response.content,
-                            headers=response.headers,
-                            cookies=Cookies.by_jar(response.cookies.jar),
-                            url=response.url,
-                            status_code=response.status_code,
-                            request=Request(
-                                url=last_url,
-                                method=request.method,
-                                headers=copy.deepcopy(
-                                    options.get("headers")),  # type: ignore
-                            ),
-                        )
-                    )
-                    request.options.get("$referer", False) and options["headers"].update(
-                        Referer=response.url
-                    )  # type: ignore
-
-                else:
-                    res.content = response.content
-                    res.headers = response.headers  # type: ignore
-                    res.cookies = Cookies.by_jar(response.cookies.jar)
-                    res.url = response.url
-                    res.status_code = response.status_code
-                    res.request = request
-
-                    return res
+            response = session.request(**{**options, "url": request.real_url})
+            res.content = response.content
+            res.headers = response.headers  # type: ignore
+            res.cookies = Cookies.by_jar(response.cookies.jar)
+            res.url = response.url
+            res.status_code = response.status_code
+            res.request = request
+            return res
 
     def make_session(self) -> requests.Session:
         return requests.Session()
+
+    def close_session(self, session: requests.Session):
+        session.close()
 
     def exception(self, request: Request, error: Exception):
         resp = super().exception(request, error)

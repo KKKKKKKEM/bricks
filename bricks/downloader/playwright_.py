@@ -60,6 +60,8 @@ class Downloader(AbstractDownloader):
 
     """
 
+    reuse_session_by_default = False
+
     def __init__(
             self,
             driver: Literal["chromium", "firefox", "webkit"] = "chromium",
@@ -99,6 +101,7 @@ class Downloader(AbstractDownloader):
 
     async def fetch(self, request: Union[Request, dict]) -> Response:
         res = Response.make_response(request=request)
+        reuse_session = self.should_reuse_session(request)
 
         # 获取驱动
         driver: Literal["chromium", "firefox", "webkit"] = (
@@ -160,7 +163,7 @@ class Downloader(AbstractDownloader):
 
         proxies = self.parse_proxies_for_playwright(request.proxies)  # type: ignore
 
-        if self.reuse or request.use_session:
+        if self.reuse or reuse_session:
             self.browser_context.reuse = True
             self.browser_context.options = browser_options
             self.browser_context.driver = driver
@@ -182,7 +185,7 @@ class Downloader(AbstractDownloader):
                     },
                 )
 
-            if request.use_session:
+            if reuse_session:
                 context = request.get_options("$session")
                 if not context:
                     context = await self.get_session(
@@ -315,7 +318,7 @@ class Downloader(AbstractDownloader):
                     return res
 
             finally:
-                not request.use_session and await context.close()  # type: ignore
+                not reuse_session and await context.close()  # type: ignore
 
     @staticmethod
     def on_response(page_url, raw_response: Response):
@@ -400,30 +403,31 @@ class Downloader(AbstractDownloader):
         browser = kwargs.pop("browser")
         return await browser.new_context(**kwargs)
 
+    async def close_session(self, session: async_api.BrowserContext):
+        await session.close()
+
     async def get_session(self, **options):
         """
         获取当前会话
 
         :return:
         """
-        session = getattr(self.local, f"{self.__class__}$session", None)
-        if not session:
-            session = await self.make_session(**options)
-
-        return session
+        key = self._session_key(options)
+        return self._sessions().get(key) or await self.make_session(**options)
 
     async def clear_session(self):
-        if hasattr(self.local, f"{self.__class__}$session"):
-            try:
-                old_session: async_api.BrowserContext = getattr(
-                    self.local, f"{self.__class__}$session"
-                )
-                await old_session.close()
-            except Exception as e:
-                logger.error(
-                    f"[清空 session 失败] 失败原因: {str(e) or str(e.__class__.__name__)}",
-                    error=e,
-                )
+        sessions = getattr(self.local, "sessions", None)
+        if sessions:
+            for session in list(sessions.values()):
+                try:
+                    await self.close_session(session)
+                except Exception as e:
+                    logger.error(
+                        "[清空 session 失败] "
+                        f"失败原因: {str(e) or str(e.__class__.__name__)}",
+                        error=e,
+                    )
+            sessions.clear()
 
 
 if __name__ == "__main__":

@@ -1,6 +1,4 @@
-import copy
 import functools
-import urllib
 from typing import Literal, Union
 from urllib.parse import urlparse
 
@@ -21,6 +19,8 @@ class Downloader(AbstractDownloader):
 
     """
 
+    reuse_session_by_default = False
+
     def __init__(self, mode: Literal["d", "s"] = "s", options: dict = None):
         """ """
         self.mode = mode
@@ -37,8 +37,6 @@ class Downloader(AbstractDownloader):
 
         res = Response.make_response(request=request)
 
-        next_url = request.real_url
-        _redirect_count = 0
         session_or_options = request.get_options("session_or_options") or {}
         options = {
             **self.options,
@@ -49,13 +47,14 @@ class Downloader(AbstractDownloader):
             "files": request.options.get("files"),
             "auth": request.options.get("auth"),
             "timeout": 5 if request.timeout is ... else request.timeout,
-            "allow_redirects": False,
+            "allow_redirects": request.allow_redirects,
             "proxies": request.proxies
                        and {"http": request.proxies, "https": request.proxies},  # noqa
             "verify": request.options.get("verify", False),
         }
 
-        if request.use_session:
+        reuse_session = self.should_reuse_session(request)
+        if reuse_session:
             page = request.get_options("$session") or self.get_session(
                 mode=self.mode, session_or_options=session_or_options
             )
@@ -77,59 +76,37 @@ class Downloader(AbstractDownloader):
             fun = functools.partial(page.session.request, method=request.method.upper())
 
         try:
-            while True:
-                assert _redirect_count < 999, "已经超过最大重定向次数: 999"
-
-                fun(**{**options, "url": next_url})
-                if page.response:
-                    response = page.response
-                else:
-                    response = Response.make_response(
-                        url=page.url,
-                        content=page.raw_data,
-                        cookies=page.cookies(),
-                    )
-
-                last_url, next_url = (
-                    next_url,
-                    response.headers.get("location")
-                    or response.headers.get("Location"),
+            fun(**{**options, "url": request.real_url})
+            if page.response:
+                response = page.response
+            else:
+                response = Response.make_response(
+                    url=page.url,
+                    content=page.raw_data,
+                    cookies=page.cookies(),
                 )
-                if request.allow_redirects and next_url:
-                    next_url = urllib.parse.urljoin(response.url, next_url)
-                    _redirect_count += 1
-                    res.history.append(
-                        Response(
-                            content=response.content,
-                            headers=response.headers,
-                            cookies=Cookies.by_jar(response.cookies),
-                            url=response.url,
-                            status_code=response.status_code,
-                            request=Request(
-                                url=last_url,
-                                method=request.method,
-                                headers=copy.deepcopy(options.get("headers")),
-                            ),
-                        )
-                    )
-                    request.options.get("$referer", False) and options[
-                        "headers"
-                    ].update(Referer=response.url)
 
-                else:
-                    res.content = response.content
-                    res.headers = response.headers
-                    res.cookies = Cookies.by_jar(response.cookies)
-                    res.url = response.url
-                    res.status_code = response.status_code
-                    res.request = request
+            def get_cookies(item):
+                raw_cookies = item.cookies
+                if isinstance(raw_cookies, (dict, Cookies)):
+                    return Cookies(raw_cookies)
+                return Cookies.by_jar(raw_cookies)
 
-                    return res
+            res.content = response.content
+            res.headers = response.headers
+            res.cookies = get_cookies(response)
+            res.url = response.url
+            res.status_code = response.status_code
+            res.request = request
+            return res
         finally:
-            not request.use_session and page.close()
+            not reuse_session and page.close()
 
     def make_session(self, **kwargs):
         return WebPage(**kwargs)
+
+    def close_session(self, session: WebPage):
+        session.close()
 
 
 if __name__ == "__main__":

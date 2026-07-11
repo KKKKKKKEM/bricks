@@ -52,7 +52,7 @@ class Request:
             ] = ...,
             retry: int = 1,
             max_retry: Union[int, float] = 5,
-            use_session: bool = False,
+            use_session: Optional[bool] = None,
             **opts,
     ) -> None:
         """
@@ -75,7 +75,7 @@ class Request:
         :param ok: 判断成功动态脚本, 字符串形式, 如通过 403 状态码可以写为: 200 <= response.status_code < 400 or response.status_code == 403
         :param retry: 当前重试次数
         :param max_retry: 最大重试次数
-        :param use_session: 是否使用下载器的 session 模式
+        :param use_session: 是否复用 session；None 表示使用下载器默认策略
         """
         self.url = url
         self.use_session = use_session

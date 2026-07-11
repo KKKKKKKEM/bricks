@@ -113,8 +113,8 @@ class Download(RenderNode):
     retry: int = 0
     # 最大重试次数
     max_retry: int = 5
-    # 是否使用下载器的 session 模式
-    use_session: bool = False
+    # 是否复用 session；None 表示使用下载器默认策略
+    use_session: Optional[bool] = None
     archive: bool = False
 
     def to_request(self) -> Request:
