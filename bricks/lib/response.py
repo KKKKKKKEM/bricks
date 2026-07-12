@@ -245,6 +245,13 @@ class Response:
                 rules=rule,
             )
 
+    _EXTRACTORS = {
+        "JSON": extractors.JsonExtractor,
+        "XPATH": extractors.XpathExtractor,
+        "JSONPATH": extractors.JsonpathExtractor,
+        "REGEX": extractors.RegexExtractor,
+    }
+
     def extract(
             self,
             engine: Union[str, Callable],
@@ -258,19 +265,14 @@ class Response:
         :return:
         """
 
-        exs = {
-            "JSON": extractors.JsonExtractor,
-            "XPATH": extractors.XpathExtractor,
-            "JSONPATH": extractors.JsonpathExtractor,
-            "REGEX": extractors.RegexExtractor,
-        }
         rules = rules or {}
         if not engine:
             return []
 
         try:
             if isinstance(engine, str):
-                if engine.upper() in exs:
+                if engine.upper() in self._EXTRACTORS:
+                    extractor: extractors.Extractor = self._EXTRACTORS[engine.upper()]
                     extractor: extractors.Extractor = exs[engine.upper()]
                     ret = extractor.match(obj=self.text, rules=rules)
                     return ret
@@ -457,27 +459,27 @@ class Response:
 
         return object.__setattr__(self, key, value)
 
+    _CACHEABLE = frozenset(("text", "html", "json"))
+
     def __getattribute__(self, item):
-        def cache_method(func):
-            def wrapper(*args, **kwargs):
-                # 生成缓存的键
-                cache_key = (args, tuple(kwargs.items()))
-                # 检查缓存
-                if cache_key not in self._cache:
-                    self._cache[cache_key] = func(*args, **kwargs)
-                return self._cache[cache_key]
+        if item in Response._CACHEABLE:
+            cache = object.__getattribute__(self, "_cache")
+            if item in cache:
+                return cache[item]
+            ret = object.__getattribute__(self, item)
+            if callable(ret):
+                _cache = cache
 
-            return wrapper
+                def _cached_call(*args, **kwargs):
+                    key = (args, tuple(kwargs.items()))
+                    if key not in _cache:
+                        _cache[key] = ret(*args, **kwargs)
+                    return _cache[key]
 
-        if item in ["text", "html", "json"]:
-            cache = self._cache
-            if cache and item in cache:
-                cached = cache[item]
-                return cached
+                cache[item] = _cached_call
             else:
-                ret = object.__getattribute__(self, item)
-                self._cache[item] = cache_method(ret) if callable(ret) else ret
-                return self._cache[item]
+                cache[item] = ret
+            return cache[item]
 
         return object.__getattribute__(self, item)
 

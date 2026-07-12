@@ -26,70 +26,109 @@ class Exit(signals.Signal):
         self.target = target
 
 
-class _TaskQueue(queue.Queue):
+class _TaskQueue:
+    """任务队列：每个 Worker 独立 deque + 通用 deque，get 为 O(1)。"""
+
+    def __init__(self):
+        self._general: deque = deque()
+        self._specific: Dict[str, deque] = {}
+        self._specific_conds: Dict[str, threading.Condition] = {}
+        self._general_cond = threading.Condition(threading.Lock())
+        self._unfinished = 0
+
+    def _get_worker_cond(self, worker_name: str) -> threading.Condition:
+        cond = self._specific_conds.get(worker_name)
+        if cond is None:
+            cond = threading.Condition(self._general_cond._lock)
+            self._specific_conds[worker_name] = cond
+        return cond
+
+    def put(self, task: "Task") -> None:
+        with self._general_cond:
+            if task.worker is not None:
+                self._specific.setdefault(task.worker.name, deque()).append(task)
+                self._get_worker_cond(task.worker.name).notify()
+            else:
+                self._general.append(task)
+                self._general_cond.notify_all()
+            self._unfinished += 1
+
+    def task_done(self) -> None:
+        with self._general_cond:
+            self._unfinished -= 1
+            if self._unfinished == 0:
+                self._general_cond.notify_all()
+
     def get(self, block=True, timeout=None, worker: Optional["Worker"] = None) -> "Task":
-        """
-        获取任务，优先获取属于指定worker的任务，其次获取通用任务
-
-        :param block: 是否阻塞等待
-        :param timeout: 超时时间
-        :param worker: 指定的worker，如果为None则获取任何任务
-        :return: 匹配的任务
-        """
-        with self.not_empty:
-            self._wait_for_task(block, timeout)
-
-            item = self._find_and_remove_matching_task(worker)
-            if item is None:
-                raise queue.Empty
-
-            self.not_full.notify()
-            return item
-
-    def _wait_for_task(self, block: bool, timeout: Optional[float]) -> None:
-        """等待队列中有任务可用"""
-        if not block:
-            if not self._qsize():
-                raise queue.Empty
-        elif timeout is None:
-            while not self._qsize():
-                self.not_empty.wait()
-        elif timeout < 0:
-            raise ValueError("'timeout' must be a non-negative number")
-        else:
-            endtime = time.time() + timeout
-            while not self._qsize():
-                remaining = endtime - time.time()
-                if remaining <= 0.0:
+        with self._general_cond:
+            if not block:
+                task = self._get_task(worker)
+                if task is None:
                     raise queue.Empty
-                self.not_empty.wait(remaining)
+                return task
 
-    def _find_and_remove_matching_task(self, worker: Optional["Worker"]) -> Optional["Task"]:
-        """
-        在队列中查找并移除匹配的任务
-        优先级：1. 专属任务(task.worker == worker) 2. 通用任务(task.worker is None)
+            if timeout is None:
+                while True:
+                    task = self._get_task(worker)
+                    if task is not None:
+                        return task
+                    self._general_cond.wait()
 
-        :param worker: 目标worker
-        :return: 匹配的任务或None
-        """
-        if not self.queue:
-            return None
+            elif timeout < 0:
+                raise ValueError("'timeout' must be a non-negative number")
 
-        # 使用生成器表达式优雅地查找任务
-        # 优先查找专属任务，然后查找通用任务
-        task = (
-            next((t for t in self.queue if t.worker == worker),
-                 None) if worker else None
-        ) or next((t for t in self.queue if t.worker is None), None)
+            else:
+                endtime = time.time() + timeout
+                while True:
+                    task = self._get_task(worker)
+                    if task is not None:
+                        return task
+                    remaining = endtime - time.time()
+                    if remaining <= 0.0:
+                        raise queue.Empty
+                    self._general_cond.wait(remaining)
 
-        # 如果都没找到且worker为None，则取第一个任务
-        if task is None and worker is None:
-            return self.queue.popleft() if self.queue else None
+    def _get_task(self, worker: Optional["Worker"] = None) -> Optional["Task"]:
+        if worker is not None:
+            specific = self._specific.get(worker.name)
+            if specific:
+                return specific.popleft()
+        if self._general:
+            return self._general.popleft()
+        return None
 
-        if task:
-            self.queue.remove(task)
+    def get_nowait(self, worker: Optional["Worker"] = None) -> Optional["Task"]:
+        with self._general_cond:
+            return self._get_task(worker)
 
-        return task
+    def qsize(self) -> int:
+        with self._general_cond:
+            size = len(self._general)
+            for d in self._specific.values():
+                size += len(d)
+            return size
+
+    def empty(self) -> bool:
+        return self.qsize() == 0
+
+    @property
+    def unfinished_tasks(self) -> int:
+        with self._general_cond:
+            return self._unfinished
+
+    def cancel_task(self, task: "Task") -> bool:
+        with self._general_cond:
+            if task.worker is not None:
+                specific = self._specific.get(task.worker.name)
+                if specific and task in specific:
+                    specific.remove(task)
+                    self._unfinished -= 1
+                    return True
+            if task in self._general:
+                self._general.remove(task)
+                self._unfinished -= 1
+                return True
+            return False
 
 
 class Task(Future):
@@ -113,13 +152,10 @@ class Task(Future):
         self.dispatcher: Optional["Dispatcher"] = None
         self.worker: Optional["Worker"] = worker
         self.future: Optional["asyncio.Future"] = None
+        self.is_async: bool = asyncio.iscoroutinefunction(func)
         if callback:
             self.add_done_callback(callback)
         super().__init__()
-
-    @property
-    def is_async(self) -> bool:
-        return asyncio.iscoroutinefunction(self.func)
 
     def cancel(self) -> bool:
         if self.dispatcher:
@@ -170,9 +206,7 @@ class Worker(threading.Thread):
                 task.worker = self
 
             except queue.Empty:
-                self.clean()
-                self.dispatcher.stop_worker(self.name)
-                return
+                continue
 
             try:
                 ret = task.func(*task.args, **task.kwargs)
@@ -249,19 +283,16 @@ class Dispatcher:
     """
     Dispatcher: Responsible for task scheduling, assignment and execution
 
-    Outstanding features of this dispatcher:
+    Features:
 
-    1. Supports setting a maximum number of concurrent tasks, and can automatically add or close workers based on the number of currently submitted tasks.
-    2. Workers support manual pause and shutdown.
-    3. The submitted tasks, whether asynchronous or synchronous, are all efficiently managed.
-    4. After submission, a future is returned. To wait for the result, you simply need to call `future.result()`. You can also cancel the task, which simplifies asynchronous programming.
-
-
+    1. Fixed-size worker pool, created once at startup.
+    2. O(1) task dispatch via per-worker + general deque.
+    3. Workers support manual pause and shutdown.
+    4. Async and sync tasks are both managed via Future.
     """
     loop: asyncio.AbstractEventLoop
-    doing: _TaskQueue  # _TaskQueue 在后面定义或导入
+    doing: _TaskQueue
     workers: dict[str, Worker]
-    _remain_workers: queue.Queue
     _running_tasks: threading.Semaphore
     _active_tasks: threading.Semaphore
     _shutdown: Optional[asyncio.Event]
@@ -278,9 +309,6 @@ class Dispatcher:
         self.loop = asyncio.new_event_loop()
         self.doing = _TaskQueue()
         self.workers: Dict[str, Worker] = {}
-        self._remain_workers = queue.Queue()
-        for i in range(self.max_workers):
-            self._remain_workers.put(f"Worker-{i}")
 
         self._running_tasks = threading.Semaphore(self.max_workers)
         self._active_tasks = threading.Semaphore(self.max_workers)
@@ -293,19 +321,20 @@ class Dispatcher:
             target=self.run, name="DisPatch", daemon=True)
         self._lock = threading.Lock()
 
-    def create_worker(self, size: int = 1):
+    def create_worker(self, size: int = 1, name_prefix: str = "Worker"):
         """
         create workers
 
         :param size:
+        :param name_prefix:
         :return:
         """
         options = self.options or {}
+        options.setdefault("trace", False)
+        base = len(self.workers)
 
-        for _ in range(size):
-            ident = self._remain_workers.get()
-            options.setdefault("trace", False)
-            worker = Worker(self, name=ident, **options)
+        for i in range(size):
+            worker = Worker(self, name=f"{name_prefix}-{base + i}", **options)
             self.workers[worker.name] = worker
             worker.start()
 
@@ -320,7 +349,6 @@ class Dispatcher:
         for ident in idents:
             worker = self.workers.pop(ident, None)
             if worker:
-                self._remain_workers.put(worker.name)
                 worker.stop()
                 waiters.append(worker)
 
@@ -362,20 +390,17 @@ class Dispatcher:
         """
         assert self.is_running(), "dispatcher is not running"
 
-        def submit():
-            task.dispatcher = self
-            if task.is_async:
-                self.active_task(task)
-            else:
-                self.doing.put(task)
+        task.dispatcher = self
 
         if timeout != _NO_TIMEOUT:
             self._running_tasks.acquire(timeout=timeout)
             task.add_done_callback(lambda x: self._running_tasks.release())
 
-        submit()
+        if task.is_async:
+            self.active_task(task)
+        else:
+            self.doing.put(task)
 
-        self.adjust_workers()
         return task
 
     def active_task(self, task: Task, timeout: Optional[int] = None) -> Task:
@@ -386,61 +411,49 @@ class Dispatcher:
         :param timeout: timeout in seconds, -1 means no limit
         :return: the activated task
         """
-        def _handle_exception(exc: BaseException) -> None:
-            """统一的异常处理逻辑"""
-            if task.set_running_or_notify_cancel():
-                task.set_exception(exc)
-            raise
-
-        def run_async_task():
-            def callback():
-                try:
-                    futures._chain_future(  # noqa
-                        ensure_future(
-                            task.func(*task.args, **task.kwargs), loop=self.loop
-                        ),
-                        task,
-                    )
-                except (SystemExit, KeyboardInterrupt):
-                    raise
-                except BaseException as exc:
-                    _handle_exception(exc)
-
-            self.loop.call_soon_threadsafe(callback)
-
-        def run_sync_task():
-            def callback():
-                try:
-                    ret = task.func(*task.args, **task.kwargs)
-                    task.set_result(ret)
-                except (SystemExit, KeyboardInterrupt):
-                    raise
-                except BaseException as exc:
-                    _handle_exception(exc)
-
-            threading.Thread(target=callback, daemon=True).start()
-
-        def active():
-            if task.is_async:
-                run_async_task()
-            else:
-                run_sync_task()
-
         assert self.is_running(), "dispatcher is not running"
 
         if timeout != _NO_TIMEOUT:
             self._active_tasks.acquire(timeout=timeout)
             task.add_done_callback(lambda x: self._active_tasks.release())
 
-        active()
+        if task.is_async:
+            self._run_async(task)
+        else:
+            self._run_sync(task)
         return task
 
-    def adjust_workers(self) -> None:
-        """根据任务数量动态调整worker数量"""
-        remain_workers = self._remain_workers.qsize()
-        remain_tasks = self.doing.qsize()
-        if remain_workers > 0 and remain_tasks > 0:
-            self.create_worker(min(remain_workers, remain_tasks))
+    def _run_async(self, task: Task) -> None:
+        def _chain():
+            try:
+                futures._chain_future(  # noqa
+                    ensure_future(
+                        task.func(*task.args, **task.kwargs), loop=self.loop
+                    ),
+                    task,
+                )
+            except (SystemExit, KeyboardInterrupt):
+                raise
+            except BaseException as exc:
+                if task.set_running_or_notify_cancel():
+                    task.set_exception(exc)
+                raise
+
+        self.loop.call_soon_threadsafe(_chain)
+
+    def _run_sync(self, task: Task) -> None:
+        def _execute():
+            try:
+                ret = task.func(*task.args, **task.kwargs)
+                task.set_result(ret)
+            except (SystemExit, KeyboardInterrupt):
+                raise
+            except BaseException as exc:
+                if task.set_running_or_notify_cancel():
+                    task.set_exception(exc)
+                raise
+
+        threading.Thread(target=_execute, daemon=True).start()
 
     def cancel_task(self, task: Task) -> None:
         """
@@ -449,16 +462,12 @@ class Dispatcher:
         :param task: task to cancel
         :return: None
         """
-        with self.doing.not_empty:
-            # If the task is still in the task queue and has not been retrieved for use, it will be deleted from the task queue
-            if task in self.doing.queue:
-                self.doing.queue.remove(task)
-                self.doing.task_done()
-                self.doing.not_full.notify()
-            else:
-                # If there is a worker and the task is running, shut down the worker
-                if task.worker and not task.done():
-                    self.stop_worker(task.worker.name)
+        if self.doing.cancel_task(task):
+            # task was still in queue, removed successfully
+            return
+        # If there is a worker and the task is running, shut down the worker
+        if task.worker and not task.done():
+            self.stop_worker(task.worker.name)
 
     @staticmethod
     def make_task(task: Union[dict, Task]) -> Task:
@@ -552,6 +561,7 @@ class Dispatcher:
 
             self.thread.start()
             self._running.wait()
+            self.create_worker(self.max_workers)
 
     def __enter__(self):
         self.start()

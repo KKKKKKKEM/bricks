@@ -4,7 +4,6 @@
 # @Desc    :
 import contextlib
 import datetime
-import functools
 import inspect
 import json
 import math
@@ -21,6 +20,7 @@ from bricks.core import dispatch, events, signals
 from bricks.core.context import Error, Flow
 from bricks.core.events import EventManager
 from bricks.core.genesis import Pangu
+from bricks.core.intercept import intercept
 from bricks.downloader import AbstractDownloader, cffi
 from bricks.lib.counter import FastWriteCounter
 from bricks.lib.items import Items
@@ -35,6 +35,8 @@ IGNORE_RETRY_PATTERN = re.compile("ProxyError", re.IGNORECASE)
 
 
 class Context(Flow):
+    _CACHE_KEYS = frozenset({"seeds", "items", "request", "response"})
+
     def __init__(
         self,
         target: "Spider",
@@ -47,6 +49,7 @@ class Context(Flow):
         task_queue: TaskQueue = None,
         **kwargs,
     ) -> None:
+        object.__setattr__(self, "_attr_cache", {})
         self.request: Request = request
         self.response: Response = response
         self.seeds: Item = seeds
@@ -69,7 +72,12 @@ class Context(Flow):
         elif key == "items" and type(value) is not Items:
             value = Items(value)
 
+        # 值未变时跳过缓存清理
+        if key in self._CACHE_KEYS and getattr(self, key, None) is value:
+            return
         super().__setattr__(key, value)
+        if key in self._CACHE_KEYS:
+            self._attr_cache.clear()
 
     def success(self, shutdown=False):
         ret = self.task_queue.remove(self.queue_name, *pandora.iterable(self.seeds))
@@ -104,7 +112,11 @@ class Context(Flow):
 
     @property
     def namespace(self):
-        return {
+        cache = self._attr_cache
+        ns = cache.get("namespace")
+        if ns is not None:
+            return ns
+        ns = {
             **super().namespace,
             "request": self.request,
             "response": self.response,
@@ -114,10 +126,16 @@ class Context(Flow):
             "queue_name": self.queue_name,
             "target": self.target,
         }
+        cache["namespace"] = ns
+        return ns
 
     @property
     def annotations(self):
-        return {
+        cache = self._attr_cache
+        ann = cache.get("annotations")
+        if ann is not None:
+            return ann
+        ann = {
             Request: self.request,
             Response: self.response,
             Items: self.items,
@@ -127,6 +145,8 @@ class Context(Flow):
             # dict: self.seeds,
             **super().annotations,
         }
+        cache["annotations"] = ann
+        return ann
 
     def divisive(self, qtypes=("temp",)):
         new = {**self.seeds, "$division": str(uuid.uuid4())}
@@ -180,6 +200,8 @@ class Context(Flow):
 
 
 class InitContext(Flow):
+    _CACHE_KEYS = frozenset({"seeds", "task_queue", "queue_name", "target"})
+
     def __init__(
         self,
         target: "Spider",
@@ -190,6 +212,7 @@ class InitContext(Flow):
         priority: bool = False,
         **kwargs,
     ) -> None:
+        object.__setattr__(self, "_attr_cache", {})
         self.seeds: List[Item] = seeds
         self.task_queue: TaskQueue = task_queue
         self.queue_name: str = kwargs.pop(
@@ -200,25 +223,42 @@ class InitContext(Flow):
         super().__init__(form, target, **kwargs)
         self.target: Spider = target
 
+    def __setattr__(self, key, value):
+        super().__setattr__(key, value)
+        if key in self._CACHE_KEYS:
+            self._attr_cache.clear()
+
     @property
     def namespace(self):
-        return {
+        cache = self._attr_cache
+        ns = cache.get("namespace")
+        if ns is not None:
+            return ns
+        ns = {
             **super().namespace,
             "seeds": self.seeds,
             "task_queue": self.task_queue,
             "queue_name": self.queue_name,
             "target": self.target,
         }
+        cache["namespace"] = ns
+        return ns
 
     @property
     def annotations(self):
-        return {
+        cache = self._attr_cache
+        ann = cache.get("annotations")
+        if ann is not None:
+            return ann
+        ann = {
             self.task_queue.__class__: self.task_queue,
             Item: self.seeds,
             # str: self.queue_name,
             # dict: self.seeds,
             **super().annotations,
         }
+        cache["annotations"] = ann
+        return ann
 
     def success(self, shutdown=False):
         if self.form == state.const.AFTER_PUT_SEEDS:
@@ -516,8 +556,8 @@ class Spider(Pangu):
             **kwargs,  # type: ignore
         )
 
-    def _when_put_seeds(self, raw_method):  # noqa
-        @functools.wraps(raw_method)
+    @intercept("put_seeds")
+    def _intercept_put_seeds(self, raw_method):  # noqa
         def wrapper(
             seeds: Union[dict, Item, List[Item], List[dict]],
             task_queue: Optional[TaskQueue] = ...,
@@ -694,8 +734,8 @@ class Spider(Pangu):
                         self.number_of_seeds_obtained.increment()
                         self.number_of_seeds_pending -= 1
 
-    def _when_run_spider(self, raw_method):
-        @functools.wraps(raw_method)
+    @intercept("run_spider")
+    def _intercept_run_spider(self, raw_method):
         def wrapper(*args, **kwargs):
             with self.dispatcher:
                 task_queue: TaskQueue = self.get(
@@ -748,8 +788,8 @@ class Spider(Pangu):
         queue_name: str = kwargs.pop("queue_name", None) or context.queue_name
         return task_queue.get(name=queue_name, **kwargs)
 
-    def _when_get_seeds(self, raw_method):
-        @functools.wraps(raw_method)
+    @intercept("get_seeds")
+    def _intercept_get_seeds(self, raw_method):
         def wrapper(**kwargs):
             context: Context = Context.get_context()  # type: ignore
             context.form = state.const.BEFORE_GET_SEEDS
@@ -815,8 +855,8 @@ class Spider(Pangu):
             else:
                 raise signals.Failure
 
-    def _when_on_retry(self, raw_method):  # noqa
-        @functools.wraps(raw_method)
+    @intercept("on_retry")
+    def _intercept_on_retry(self, raw_method):  # noqa
         def wrapper(context: Context, *args, **kwargs):
             self.number_of_failure_requests.increment()
             context.form = state.const.BEFORE_RETRY
@@ -854,8 +894,8 @@ class Spider(Pangu):
 
         return response
 
-    def _when_on_request(self, raw_method):  # noqa
-        @functools.wraps(raw_method)
+    @intercept("on_request")
+    def _intercept_on_request(self, raw_method):  # noqa
         def wrapper(context: Context, *args, **kwargs):
             context.form = state.const.BEFORE_REQUEST
             context.response = None
@@ -914,8 +954,8 @@ class Spider(Pangu):
 
         return items
 
-    def _when_on_response(self, raw_method):  # noqa
-        @functools.wraps(raw_method)
+    @intercept("on_response")
+    def _intercept_on_response(self, raw_method):  # noqa
         def wrapper(context: Context, *args, **kwargs):
             context.form = state.const.ON_PARSE
             context.items = pandora.invoke(
@@ -957,8 +997,8 @@ class Spider(Pangu):
         else:
             prepared.func(*prepared.args, **prepared.kwargs)
 
-    def _when_on_pipeline(self, raw_method):  # noqa
-        @functools.wraps(raw_method)
+    @intercept("on_pipeline")
+    def _intercept_on_pipeline(self, raw_method):  # noqa
         def wrapper(context: Context, *args, **kwargs):
             context.form = state.const.BEFORE_PIPELINE
             try:
@@ -990,8 +1030,8 @@ class Spider(Pangu):
     def make_request(self, context: Context) -> Request:
         return pandora.invoke(Request, kwargs=context.seeds)  # type: ignore
 
-    def _when_make_request(self, raw_method):  # noqa
-        @functools.wraps(raw_method)
+    @intercept("make_request")
+    def _intercept_make_request(self, raw_method):  # noqa
         def wrapper(context: Context):
             context.form = state.const.BEFORE_MAKE_REQUEST
             events.EventManager.invoke(context)

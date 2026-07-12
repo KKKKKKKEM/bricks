@@ -7,7 +7,6 @@
 # @Author  : Kem
 # @Desc    :
 import copy
-import functools
 import json
 import time
 from collections import UserDict
@@ -15,6 +14,7 @@ from collections import UserDict
 from loguru import logger
 
 from bricks.core import genesis
+from bricks.core.intercept import intercept
 from bricks.utils import pandora
 
 
@@ -166,8 +166,8 @@ class TaskQueue(metaclass=genesis.MetaClass):
         """
         raise NotImplementedError
 
-    def _when_reverse(self, func):  # noqa
-        @functools.wraps(func)
+    @intercept("reverse")
+    def _intercept_reverse(self, func):  # noqa
         def inner(*args, **kwargs):
             reversible = self.reversible
             if reversible:
@@ -186,7 +186,17 @@ class TaskQueue(metaclass=genesis.MetaClass):
         """
         raise NotImplementedError
 
-    _when_smart_reverse = _when_reverse
+    @intercept("smart_reverse")
+    def _intercept_smart_reverse(self, func):  # noqa
+        def inner(*args, **kwargs):
+            reversible = self.reversible
+            if reversible:
+                return func(*args, **kwargs)
+            else:
+                logger.debug("[翻转失败] reversible 属性为 False")
+                return False
+
+        return inner
 
     def merge(self, dest: str, *queues: str, **kwargs):
         raise NotImplementedError
@@ -199,7 +209,8 @@ class TaskQueue(metaclass=genesis.MetaClass):
         """
         raise NotImplementedError
 
-    def _when_replace(self, func):  # noqa
+    @intercept("replace")
+    def _intercept_replace(self, func):  # noqa
         def inner(name, *values, **kwargs):
             values = [
                 [
@@ -236,7 +247,8 @@ class TaskQueue(metaclass=genesis.MetaClass):
         """
         raise NotImplementedError
 
-    def _when_get(self, func):  # noqa
+    @intercept("get")
+    def _intercept_get(self, func):  # noqa
         def inner(*args, **kwargs):
             ret = func(*args, **kwargs)
             if ret in [None, []]:
@@ -257,7 +269,8 @@ class TaskQueue(metaclass=genesis.MetaClass):
         """
         raise NotImplementedError
 
-    def _when_put(self, func):  # noqa
+    @intercept("put")
+    def _intercept_put(self, func):  # noqa
         def inner(name, *values, **kwargs):
             return func(
                 name,
@@ -280,7 +293,8 @@ class TaskQueue(metaclass=genesis.MetaClass):
         """
         raise NotImplementedError
 
-    def _when_remove(self, func):  # noqa
+    @intercept("remove")
+    def _intercept_remove(self, func):  # noqa
         def inner(name, *values, **kwargs):
             return func(
                 name,

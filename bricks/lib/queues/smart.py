@@ -58,8 +58,8 @@ class SmartQueue(queue.Queue):
 
         count = 0
         unique = self.unique if unique is None else unique
-        for item in items:
-            with self.not_full:
+        with self.not_full:
+            for item in items:
                 if unique:
                     if item in self.queue:
                         continue
@@ -84,7 +84,9 @@ class SmartQueue(queue.Queue):
 
                 self._put(item) if head is False else self._put_head(item)
                 count += 1
-                self.not_empty.notify()
+
+        if count:
+            self.not_empty.notify()
 
         return count
 

@@ -307,48 +307,43 @@ class EventManager:
         else:
             targets = [None, context.target]
 
+        # 锁内只做拷贝和排序，不做遍历和 yield
+        snapshots = []
         with REGISTERED_EVENTS:
-            events_group = [
-                # (group, is_disposable)
+            for group, is_disposable in [
                 (REGISTERED_EVENTS.disposable[context.form], True),
                 (REGISTERED_EVENTS.permanent[context.form], False),
-            ]
-
-            # 收集需要移除的disposable事件
-            to_remove = []
-
-            for group, is_disposable in events_group:
+            ]:
                 for target in targets:
-                    # 获取事件列表
                     if target is ...:
                         events = [e for es in group.values() for e in es]
-                    else:
-                        events = list(group[target])
-
-                    # 延迟排序：仅在需要时排序
-                    if target is ...:
                         events.sort(key=lambda x: x.index if x.index is not None else 0)
                     else:
                         cache_key = (context.form, target)
                         if not REGISTERED_EVENTS._sorted_cache.get(cache_key, False):
-                            events.sort(key=lambda x: x.index if x.index is not None else 0)
-                            group[target] = events
+                            lst = group[target]
+                            lst.sort(key=lambda x: x.index if x.index is not None else 0)
                             REGISTERED_EVENTS._sorted_cache[cache_key] = True
+                        events = list(group[target])
 
-                    # 匹配并yield事件
-                    for event in events:
-                        if cls._match_event(event, context):
-                            # 记录需要移除的disposable事件
-                            if is_disposable and event.box:
-                                to_remove.append((event, event.box))
-                            yield event
+                    snapshots.append((events, is_disposable))
 
-            # 移除disposable事件及其registered引用
-            for event, box in to_remove:
-                if event in box:
-                    box.remove(event)
-                # 清理registered索引
-                cls._cleanup_registered(event)
+        # 锁外遍历、匹配、yield
+        to_remove = []
+        for events, is_disposable in snapshots:
+            for event in events:
+                if cls._match_event(event, context):
+                    if is_disposable and event.box:
+                        to_remove.append((event, event.box))
+                    yield event
+
+        # 清理一次性事件
+        if to_remove:
+            with REGISTERED_EVENTS:
+                for event, box in to_remove:
+                    if event in box:
+                        box.remove(event)
+                    cls._cleanup_registered(event)
 
     @classmethod
     def _match_event(cls, event: Task, context: Context) -> bool:
@@ -399,16 +394,16 @@ class EventManager:
         :return: 事件函数的返回值
         """
         try:
-            # 简化空值处理，避免重复判断
-            merged_annotations = {**context.annotations, **(annotations or {})}
-            merged_namespace = {**context.namespace, **(namespace or {})}
+            # 无额外参数时直接使用 context 的，避免每次合并
+            ann = {**context.annotations, **annotations} if annotations else context.annotations
+            ns = {**context.namespace, **namespace} if namespace else context.namespace
 
             return pandora.invoke(
                 event.func,
                 args=event.args,
-                kwargs=event.kwargs or {},
-                annotations=merged_annotations,
-                namespace=merged_namespace
+                kwargs=event.kwargs if event.kwargs is not None else {},
+                annotations=ann,
+                namespace=ns
             )
         except Exception as e:
             if errors == ErrorMode.RAISE.value or errors == "raise":

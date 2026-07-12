@@ -2,7 +2,6 @@
 # @Time    : 2023-11-15 12:49
 # @Author  : Kem
 # @Desc    :
-import functools
 import time
 from typing import Callable, List, Literal, Type, Union, overload
 
@@ -19,6 +18,7 @@ from bricks.core.events import (
     _get_event_legacy,
     _get_event_specs,
 )
+from bricks.core.intercept import collect_interceptors, intercept
 from bricks.state import const
 from bricks.utils import pandora
 from bricks.utils.scheduler import BaseTrigger, Scheduler
@@ -28,19 +28,13 @@ class MetaClass(type):
     def __call__(cls, *args, **kwargs):
         instance = type.__call__(cls, *args, **kwargs)
 
-        # 加载拦截器
-        for method in dir(instance):
-            # 修改被拦截的方法
-            if method.startswith("_when_"):
-                raw_method_name = method.replace("_when_", "")
-                raw_method = getattr(instance, raw_method_name, None)
-                if not raw_method:
-                    continue
-
-                method_wrapper = getattr(instance, method)
-                raw_method and setattr(
-                    instance, raw_method_name, method_wrapper(raw_method)
-                )  # type: ignore
+        # 加载 @intercept 装饰的拦截器
+        for raw_method_name, wrapper_name in collect_interceptors(instance).items():
+            raw_method = getattr(instance, raw_method_name, None)
+            if not raw_method:
+                continue
+            wrapper = getattr(instance, wrapper_name)
+            setattr(instance, raw_method_name, wrapper(raw_method))
 
         # 安装 @events.on 装饰的事件钩子（仅事件能力实例，如 Pangu）
         if hasattr(instance, "_install_events"):
@@ -133,8 +127,8 @@ class Chaos(metaclass=MetaClass):
         scheduler_.add(form=form, exprs=exprs, **scheduler).do(job)
         scheduler_.run()
 
-    def _when_run(self, raw_method):
-        @functools.wraps(raw_method)
+    @intercept("run")
+    def _intercept_run(self, raw_method):
         def wrapper(*args, **kwargs):
             try:
                 self.before_start()
@@ -163,8 +157,8 @@ class Chaos(metaclass=MetaClass):
         """
         pass
 
-    def _when_before_start(self, raw_method):
-        @functools.wraps(raw_method)
+    @intercept("before_start")
+    def _intercept_before_start(self, raw_method):
         def wrapper(*args, **kwargs):
             context = self.make_context(form=const.BEFORE_START)
 
@@ -181,8 +175,8 @@ class Chaos(metaclass=MetaClass):
         """
         pass
 
-    def _when_before_close(self, raw_method):
-        @functools.wraps(raw_method)
+    @intercept("before_close")
+    def _intercept_before_close(self, raw_method):
         def wrapper(*args, **kwargs):
             context = self.make_context(form=const.BEFORE_CLOSE)
             EventManager.invoke(context)

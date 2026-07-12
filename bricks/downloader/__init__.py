@@ -2,7 +2,6 @@
 # @Time    : 2023-11-15 14:17
 # @Author  : Kem
 # @Desc    :
-import functools
 import inspect
 import json
 import threading
@@ -13,6 +12,7 @@ from typing import Any, Union
 from loguru import logger
 
 from bricks.core import genesis
+from bricks.core.intercept import intercept
 from bricks.lib.request import Request
 from bricks.lib.response import Response
 
@@ -47,8 +47,8 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
         """
         return Request(**attrs)
 
-    def _when_fetch(self, func):  # noqa
-        @functools.wraps(func)
+    @intercept("fetch")
+    def _intercept_fetch(self, func):  # noqa
         def wrapper(request: Union[Request, dict], *args, **kwargs):
             """
             同步下载器的装饰器方法
@@ -79,7 +79,6 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
 
             return response
 
-        @functools.wraps(func)
         async def async_wrapper(request: Union[Request, dict], *args, **kwargs):
             """
             异步下载器的装饰器方法
@@ -167,8 +166,8 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
         """关闭具体下载器创建的 session。"""
         raise NotImplementedError
 
-    def _when_make_session(self, func):
-        @functools.wraps(func)
+    @intercept("make_session")
+    def _intercept_make_session(self, func):
         def wrapper(*args, **kwargs):
             """
             同步下载器的装饰器方法
@@ -181,7 +180,6 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
             self._store_session(self._session_key(kwargs), session)
             return session
 
-        @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
             session = await func(*args, **kwargs)
             await self._store_async_session(self._session_key(kwargs), session)

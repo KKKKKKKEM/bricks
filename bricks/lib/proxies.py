@@ -17,6 +17,7 @@ from typing import Callable, Literal, Optional, Type, Union
 
 from loguru import logger
 
+from bricks.core.intercept import intercept
 from bricks.db.redis_ import Redis
 from bricks.downloader import cffi
 from bricks.utils import pandora
@@ -55,6 +56,7 @@ class Proxy:
         :param threshold: 使用阈值
         """
         self.threshold = threshold
+        self._unlimited = (threshold == math.inf)
         self.counter = itertools.count(1)
         self.proxy = proxy
         self.auth = auth
@@ -69,15 +71,13 @@ class Proxy:
 
         :return:
         """
-        if self.threshold == math.inf:
+        if self._unlimited:
             return True
 
-        value = next(self.counter)
-        if value >= self.threshold:
+        if next(self.counter) >= self.threshold:
             callable(self.recover) and self.recover(self)
             return False
-        else:
-            return True
+        return True
 
     def __bool__(self):
         return bool(self.proxy)
@@ -111,6 +111,10 @@ class BaseProxy:
         if not proxy:
             return ""
 
+        # 已经是正确格式，跳过解析
+        if proxy.startswith(f"{self.scheme}://"):
+            return proxy
+
         parsed = urllib.parse.urlparse(proxy)
         if self.username and self.password:
             prefix = f"{self.username}:{self.password}@"
@@ -141,23 +145,39 @@ class BaseProxy:
     def clear(self, proxy: Proxy):
         pass
 
-    def _when_get(self, raw_method):
+    @intercept("get")
+    def _intercept_get(self, raw_method):
+        # 缓存常用属性，避免每次调用重复构造
+        _auth = self.auth
+        _clear = self.clear
+        _recover = self.recover
+        _threshold = self.threshold
+        _derive = self
+        _fmt = self.fmt
+        _Proxy = Proxy
+
         def inner(*args, **kwargs):
             proxy = raw_method(*args, **kwargs)
             if not isinstance(proxy, Proxy):
-                proxy = Proxy(
+                proxy = _Proxy(
                     proxy,
-                    auth=self.auth,
-                    recover=self.recover,
-                    threshold=self.threshold,
-                    derive=self,
+                    auth=_auth,
+                    recover=_recover,
+                    threshold=_threshold,
+                    derive=_derive,
                 )
-            proxy.proxy = self.fmt(proxy=proxy.proxy)
-            proxy.auth = self.auth
-            proxy.clear = self.clear
-            proxy.recover = self.recover
-            proxy.threshold = self.threshold
-            proxy.derive = self
+            proxy.proxy = _fmt(proxy=proxy.proxy)
+            # 仅在值变化时更新，减少属性赋值开销
+            if proxy.auth is not _auth:
+                proxy.auth = _auth
+            if proxy.clear is not _clear:
+                proxy.clear = _clear
+            if proxy.recover is not _recover:
+                proxy.recover = _recover
+            if proxy.threshold is not _threshold:
+                proxy.threshold = _threshold
+            if proxy.derive is not _derive:
+                proxy.derive = _derive
             return proxy
 
         return inner
@@ -195,7 +215,7 @@ class ApiProxy(BaseProxy):
             lambda res: IP_EXTRACT_RULE.findall(res.text)
         )
         self.container = queue.Queue()
-        self.lock = threading.Lock()
+        self.lock = threading.Condition()
         super().__init__(
             scheme=scheme,
             username=username,
@@ -208,13 +228,21 @@ class ApiProxy(BaseProxy):
         )
 
     def get(self, timeout=None) -> Proxy:
-        # 这个要加锁, 不然多线程会都去提取代理
+        # 快速路径：队列有数据，直接取（不持锁）
+        if not self.container.empty():
+            try:
+                return Proxy(self.container.get_nowait())
+            except queue.Empty:
+                pass
+
+        # 慢速路径：需要等待或拉取
         with self.lock:
             while True:
                 try:
-                    proxy = self.container.get(timeout=1)
+                    proxy = self.container.get_nowait()
                 except queue.Empty:
                     self.fetch(timeout)
+                    self.lock.notify_all()
                 else:
                     return Proxy(proxy)
 
@@ -222,8 +250,7 @@ class ApiProxy(BaseProxy):
         if timeout is None:
             timeout = math.inf
 
-        options = self.options
-        options.setdefault("method", "GET")
+        options = {**self.options, "method": self.options.get("method", "GET")}
         start = time.time()
         while True:
             res = DOWNLOADER.fetch({"url": self.key, **options})
@@ -291,7 +318,7 @@ class ClashProxy(BaseProxy):
         self._configs = None
         self.now = None
         self._proxy: Proxy = Proxy()
-        self.lock = threading.Lock()
+        self.lock = threading.Condition()
 
         super().__init__(scheme=scheme, auth=auth, threshold=threshold, recover=recover)
 
@@ -451,19 +478,27 @@ class ClashProxy(BaseProxy):
             raise RuntimeError(f"[clash 指令执行失败]: uri: {uri}, method: {method}")
 
     def fresh_cache(self, force: bool = False):
-        if force or (self.cache_ttl != -1 and time.time() - self.ts > self.cache_ttl):
-            self._nodes = itertools.repeat(None)
-            del self.configs
+        # TTL 检查（无锁）
+        if not force and self.cache_ttl != -1 and time.time() - self.ts <= self.cache_ttl:
+            if self._configs and not isinstance(self._nodes, itertools.repeat):
+                return
 
-        if not self._configs:
-            _ = self.configs
+        with self.lock:
+            # TTL 检查或强制刷新（持锁）
+            if force or (self.cache_ttl != -1 and time.time() - self.ts > self.cache_ttl):
+                self._nodes = itertools.repeat(None)
+                del self.configs
+                self.ts = time.time()
 
-        if isinstance(self._nodes, itertools.repeat):
-            self.nodes()
+            if not self._configs:
+                _ = self.configs
+
+            if isinstance(self._nodes, itertools.repeat):
+                self.nodes()
 
     def get(self, timeout=None) -> Proxy:
+        self.fresh_cache()
         with self.lock:
-            self.fresh_cache()
             self.now = next(self._nodes)
             return self._proxy
 
@@ -715,6 +750,8 @@ class CustomProxy(BaseProxy):
 
 
 class Manager:
+    _rkey_cache: dict = {}
+
     def __init__(self):
         self._local = threading.local()
         self._context = contextlib.nullcontext()
@@ -826,11 +863,17 @@ class Manager:
     @staticmethod
     def get_rkey(obj: (dict, BaseProxy)):
         if isinstance(obj, BaseProxy):
-            rkey = hash(BaseProxy)
-        else:
-            rkey = hash(json.dumps(obj, default=str))
+            return str(hash(BaseProxy))
 
-        return str(rkey)
+        # id() 做 key + 持有 obj 引用防止 GC 回收导致 id 复用
+        oid = id(obj)
+        cache = Manager._rkey_cache
+        entry = cache.get(oid)
+        if entry is not None and entry[0] is obj:
+            return entry[1]
+        rkey = str(hash(json.dumps(obj, default=str)))
+        cache[oid] = (obj, rkey)
+        return rkey
 
     def set_mode(self, mode: Literal[0, 1] = 0):
         # 线程隔离

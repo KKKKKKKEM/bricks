@@ -2,6 +2,7 @@
 # @Time    : 2023-12-06 14:05
 # @Author  : Kem
 # @Desc    : 针对于 on request 的插件
+import functools
 import inspect
 import threading
 import time
@@ -15,6 +16,12 @@ from bricks.lib import proxies
 from bricks.lib.proxies import BaseProxy
 from bricks.utils import codes, pandora
 from bricks.utils.fake import user_agent
+
+
+@functools.lru_cache(maxsize=256)
+def _compile_ok(expr: str):
+    """缓存 ok 表达式的编译结果，避免每次请求重复编译。"""
+    return compile(expr, "<bricks.ok>", "eval")
 
 
 class Before:
@@ -149,7 +156,7 @@ class After:
             is_pass = response.status_code != -1
 
         elif isinstance(ok, str):
-            is_pass = eval(ok, namespace)
+            is_pass = eval(_compile_ok(ok), namespace)
 
         elif isinstance(ok, dict):
             for match, sig in ok.items():

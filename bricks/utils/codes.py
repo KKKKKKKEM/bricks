@@ -8,6 +8,9 @@ from typing import Any, List, Tuple, Union
 
 from bricks.utils.pandora import iterable
 
+# 缓存编译后的 code 对象，避免每次 exec 重新编译
+_compiled_cache: dict = {}
+
 
 class Type(str, enum.Enum):
     define = "define"  # 变量定义
@@ -57,7 +60,12 @@ class Generator:
         return self.code
 
     def run(self, namespace: dict):
-        exec(self.build(), namespace)
+        code_str = self.build()
+        compiled = _compiled_cache.get(code_str)
+        if compiled is None:
+            compiled = compile(code_str, "<bricks.codes>", "exec")
+            _compiled_cache[code_str] = compiled
+        exec(compiled, namespace)
         return namespace
 
     def __str__(self):

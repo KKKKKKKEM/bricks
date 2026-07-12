@@ -2,7 +2,6 @@
 # @Time    : 2023-12-05 20:18
 # @Author  : Kem
 # @Desc    :
-import copy
 import inspect
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Union
@@ -272,15 +271,17 @@ class Spider(air.Spider):
             if not callable(engine):
                 engine = pandora.load_objects(engine)
 
+            has_layout = any((layout.rename, layout.default, layout.factory, layout.show))
             backup = context.items
             try:
-                context.items = pandora.clean_rows(
-                    *copy.deepcopy(context.items),
-                    rename=layout.rename,
-                    default=layout.default,
-                    factory=layout.factory,
-                    show=layout.show,
-                )
+                if has_layout:
+                    context.items = pandora.clean_rows(
+                        *[row.copy() for row in context.items],
+                        rename=layout.rename,
+                        default=layout.default,
+                        factory=layout.factory,
+                        show=layout.show,
+                    )
                 pandora.invoke(
                     func=engine,
                     args=args,

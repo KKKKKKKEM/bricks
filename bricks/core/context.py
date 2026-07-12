@@ -118,7 +118,11 @@ class Flow(Context):
         if key == "next":
             if isinstance(value, LinkNode):
                 value = value.root
-            value = LinkNode(value, getattr(self, "next", LinkNode()))
+            # 跳过未变化的赋值，避免重复创建 LinkNode
+            prev = getattr(self, "next", None)
+            if prev is not None and prev.root is value:
+                return
+            value = LinkNode(value, prev or LinkNode())
 
         super().__setattr__(key, value)
 
