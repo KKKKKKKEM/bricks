@@ -2,6 +2,7 @@
 # @Time    : 2023-11-18 10:47
 # @Author  : Kem
 # @Desc    :
+import copy
 import inspect
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Union
@@ -349,7 +350,7 @@ class Spider(air.Spider):
         try:
             if has_layout:
                 context.items = pandora.clean_rows(
-                    *[row.copy() for row in context.items],
+                    *copy.deepcopy(context.items),
                     rename=layout.rename,
                     default=layout.default,
                     factory=layout.factory,

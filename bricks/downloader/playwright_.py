@@ -413,21 +413,40 @@ class Downloader(AbstractDownloader):
         :return:
         """
         key = self._session_key(options)
-        return self._sessions().get(key) or await self.make_session(**options)
+        sessions = self._sessions()
+        session = sessions.get(key)
+        if session is not None:
+            sessions.move_to_end(key)
+            return session
+
+        generation = self._session_generation
+        lock = getattr(self.local, "session_creation_lock", None)
+        if (
+            lock is None
+            or getattr(self.local, "session_creation_generation", None) != generation
+        ):
+            lock = asyncio.Lock()
+            self.local.session_creation_lock = lock
+            self.local.session_creation_generation = generation
+
+        async with lock:
+            sessions = self._sessions()
+            session = sessions.get(key)
+            if session is not None:
+                sessions.move_to_end(key)
+                return session
+            return await self.make_session(**options)
 
     async def clear_session(self):
-        sessions = getattr(self.local, "sessions", None)
-        if sessions:
-            for session in list(sessions.values()):
-                try:
-                    await self.close_session(session)
-                except Exception as e:
-                    logger.error(
-                        "[清空 session 失败] "
-                        f"失败原因: {str(e) or str(e.__class__.__name__)}",
-                        error=e,
-                    )
-            sessions.clear()
+        for session in self._take_sessions_for_cleanup():
+            try:
+                await self.close_session(session)
+            except Exception as e:
+                logger.error(
+                    "[清空 session 失败] "
+                    f"失败原因: {str(e) or str(e.__class__.__name__)}",
+                    error=e,
+                )
 
 
 if __name__ == "__main__":

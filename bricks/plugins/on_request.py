@@ -2,7 +2,6 @@
 # @Time    : 2023-12-06 14:05
 # @Author  : Kem
 # @Desc    : 针对于 on request 的插件
-import functools
 import inspect
 import threading
 import time
@@ -16,12 +15,7 @@ from bricks.lib import proxies
 from bricks.lib.proxies import BaseProxy
 from bricks.utils import codes, pandora
 from bricks.utils.fake import user_agent
-
-
-@functools.lru_cache(maxsize=256)
-def _compile_ok(expr: str):
-    """缓存 ok 表达式的编译结果，避免每次请求重复编译。"""
-    return compile(expr, "<bricks.ok>", "eval")
+from bricks.utils.safe_eval import safe_eval_cached
 
 
 class Before:
@@ -74,7 +68,10 @@ class Before:
 
             if not raw.endswith(")"):
                 raw = raw + "()"
-            raw = eval(f"user_agent.{raw[1:]}", {"user_agent": user_agent})
+            expression = raw[1:]
+            function_name = expression.split("(", 1)[0]
+            function = getattr(user_agent, function_name)
+            raw = safe_eval_cached(expression, {function_name: function})
             request.headers["User-Agent"] = raw
 
 
@@ -156,11 +153,11 @@ class After:
             is_pass = response.status_code != -1
 
         elif isinstance(ok, str):
-            is_pass = eval(_compile_ok(ok), namespace)
+            is_pass = safe_eval_cached(ok, namespace)
 
         elif isinstance(ok, dict):
             for match, sig in ok.items():
-                if eval(match, namespace):
+                if safe_eval_cached(match, namespace):
                     if inspect.isclass(sig) and issubclass(sig, signals.Signal):
                         if sig == signals.Pass:
                             return

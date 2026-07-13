@@ -52,12 +52,24 @@ class Downloader(AbstractDownloader):
 
         """
 
+        headers = {}
+        header_blocks = []
+        current_status = None
+
         def with_header(raw_header_line):
+            nonlocal current_status
             # HTTP standard specifies that headers are encoded in iso-8859-1.
             header_line = raw_header_line.decode("iso-8859-1")
 
             if header_line.startswith("HTTP/"):
+                if current_status in (301, 302, 303, 307, 308) and headers:
+                    header_blocks.append((current_status, dict(headers)))
                 headers.clear()
+                parts = header_line.split(None, 2)
+                try:
+                    current_status = int(parts[1])
+                except (IndexError, ValueError):
+                    current_status = None
                 return
 
             # Header lines include the first status line (HTTP/1.x ...).
@@ -124,7 +136,7 @@ class Downloader(AbstractDownloader):
         res = Response.make_response(request=request)
 
         try:
-            body, headers = io.BytesIO(), {}
+            body = io.BytesIO()
             for option, value in options.items():
                 curl.setopt(option, value)
             curl.setopt(pycurl.WRITEFUNCTION, body.write)
@@ -135,11 +147,51 @@ class Downloader(AbstractDownloader):
             res.headers = headers
             res.url = curl.getinfo(pycurl.EFFECTIVE_URL)
             res.cookies = make_cookie()
+            res.history = self._make_history(header_blocks, request)
             res.request = request
             return res
 
         finally:
             not reuse_session and curl.close()
+
+    @staticmethod
+    def _make_history(header_blocks, request: Request):
+        history = []
+        url = request.real_url
+        method = request.method
+        body = request.body
+        headers = dict(request.headers)
+        for status_code, response_headers in header_blocks:
+            history.append(
+                Response(
+                    content=b"",
+                    headers=response_headers,
+                    url=url,
+                    status_code=status_code,
+                    request=Request(
+                        url=url,
+                        method=method,
+                        body=body,
+                        headers=headers,
+                        use_session=request.use_session,
+                    ),
+                )
+            )
+            location = next(
+                (
+                    value
+                    for key, value in response_headers.items()
+                    if key.lower() == "location"
+                ),
+                None,
+            )
+            if location:
+                url = urllib.parse.urljoin(url, location)
+            if status_code == 303 and method != "HEAD":
+                method, body = "GET", None
+            elif status_code in (301, 302) and method == "POST":
+                method, body = "GET", None
+        return history
 
     @property
     def set_cipher(self):

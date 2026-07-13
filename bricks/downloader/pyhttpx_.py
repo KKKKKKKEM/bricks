@@ -88,6 +88,7 @@ class Downloader(AbstractDownloader):
             res.cookies = get_cookies(response)
             res.url = str(getattr(response, "url", request.real_url))
             res.status_code = response.status_code
+            res.history = self.make_response_history(response, request)
             res.request = request
             return res
         finally:

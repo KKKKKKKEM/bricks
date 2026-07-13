@@ -3,6 +3,7 @@
 # @Author  : Kem
 # @Desc    : 安全的表达式求值器，替代 eval/exec，支持算术、比较、逻辑、属性访问、下标、函数调用
 import ast
+import functools
 import operator
 
 # 支持的二元操作符
@@ -42,6 +43,20 @@ _UNARY_OPS = {
     ast.Invert: operator.invert,
 }
 
+_SAFE_BUILTINS = {
+    "len": len,
+    "int": int,
+    "float": float,
+    "str": str,
+    "bool": bool,
+    "abs": abs,
+    "min": min,
+    "max": max,
+    "round": round,
+    "type": type,
+    "isinstance": isinstance,
+}
+
 
 class SafeEvalError(Exception):
     """安全求值过程中的错误"""
@@ -67,7 +82,8 @@ def safe_eval(expr: str, namespace: dict = None) -> object:
       - import, exec, eval, __import__
       - 赋值, global, nonlocal
       - class/def 定义
-      - 任何形式的代码执行副作用
+      - 私有/双下划线属性访问
+      - 方法调用；只允许安全内置函数和 namespace 显式暴露的顶层函数
 
     :param expr: 要求值的表达式字符串
     :param namespace: 变量命名空间
@@ -95,21 +111,20 @@ def _eval_node(node: ast.AST, ns: dict) -> object:
     # 变量名: x, context, response
     elif isinstance(node, ast.Name):
         name = node.id
+        if name.startswith("_"):
+            raise SafeEvalError(f"Private name access is not allowed: {name}")
         if name in ns:
             return ns[name]
-        # 内置安全函数
-        _SAFE_BUILTINS = {
-            "len": len, "int": int, "float": float, "str": str,
-            "bool": bool, "abs": abs, "min": min, "max": max,
-            "round": round, "type": type, "isinstance": isinstance,
-            "True": True, "False": False, "None": None,
-        }
         if name in _SAFE_BUILTINS:
             return _SAFE_BUILTINS[name]
         raise SafeEvalError(f"Undefined variable: {name}")
 
     # 属性访问: x.y
     elif isinstance(node, ast.Attribute):
+        if node.attr.startswith("_"):
+            raise SafeEvalError(
+                f"Private attribute access is not allowed: {node.attr}"
+            )
         obj = _eval_node(node.value, ns)
         return getattr(obj, node.attr)
 
@@ -158,12 +173,21 @@ def _eval_node(node: ast.AST, ns: dict) -> object:
 
     # 逻辑: a and b, a or b
     elif isinstance(node, ast.BoolOp):
-        op_type = type(node.op)
-        if op_type is ast.And:
-            return all(_eval_node(v, ns) for v in node.values)
-        elif op_type is ast.Or:
-            return any(_eval_node(v, ns) for v in node.values)
-        raise SafeEvalError(f"Unsupported bool op: {op_type.__name__}")
+        values = iter(node.values)
+        result = _eval_node(next(values), ns)
+        if isinstance(node.op, ast.And):
+            for value in values:
+                if not result:
+                    return result
+                result = _eval_node(value, ns)
+            return result
+        if isinstance(node.op, ast.Or):
+            for value in values:
+                if result:
+                    return result
+                result = _eval_node(value, ns)
+            return result
+        raise SafeEvalError(f"Unsupported bool op: {type(node.op).__name__}")
 
     # 三元: a if cond else b
     elif isinstance(node, ast.IfExp):
@@ -192,7 +216,13 @@ def _eval_node(node: ast.AST, ns: dict) -> object:
 
     # 函数调用: len(x), int("1")
     elif isinstance(node, ast.Call):
+        if not isinstance(node.func, ast.Name):
+            raise SafeEvalError("Method and indirect calls are not allowed")
         func = _eval_node(node.func, ns)
+        if not callable(func):
+            raise SafeEvalError(f"Object is not callable: {node.func.id}")
+        if any(keyword.arg is None for keyword in node.keywords):
+            raise SafeEvalError("Keyword unpacking is not allowed")
         args = [_eval_node(a, ns) for a in node.args]
         kwargs = {kw.arg: _eval_node(kw.value, ns) for kw in node.keywords}
         return func(*args, **kwargs)
@@ -212,6 +242,8 @@ def _eval_comprehension(node: ast.ListComp, ns: dict):
         raise SafeEvalError("Only single-generator comprehensions are supported")
 
     gen = node.generators[0]
+    if gen.is_async or not isinstance(gen.target, ast.Name):
+        raise SafeEvalError("Only simple synchronous comprehensions are supported")
     iter_val = _eval_node(gen.iter, ns)
 
     for item in iter_val:
@@ -226,8 +258,12 @@ def _eval_comprehension(node: ast.ListComp, ns: dict):
             yield _eval_node(node.elt, local_ns)
 
 
-# 缓存编译后的 AST，避免重复解析
-_ast_cache: dict = {}
+@functools.lru_cache(maxsize=512)
+def _parse_cached(expr: str):
+    try:
+        return ast.parse(expr, mode="eval")
+    except SyntaxError as e:
+        raise SafeEvalError(f"Syntax error in expression: {expr!r}") from e
 
 
 def safe_eval_cached(expr: str, namespace: dict = None) -> object:
@@ -238,10 +274,7 @@ def safe_eval_cached(expr: str, namespace: dict = None) -> object:
     :param namespace: 变量命名空间
     :return: 表达式的值
     """
-    tree = _ast_cache.get(expr)
-    if tree is None:
-        if len(_ast_cache) > 512:
-            _ast_cache.clear()
-        tree = ast.parse(expr, mode="eval")
-        _ast_cache[expr] = tree
+    if not expr or not isinstance(expr, str):
+        raise SafeEvalError(f"expr must be a non-empty string, got {type(expr)}")
+    tree = _parse_cached(expr)
     return _eval_node(tree.body, namespace or {})

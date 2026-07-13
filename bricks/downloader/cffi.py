@@ -95,8 +95,33 @@ class Downloader(AbstractDownloader):
             res.cookies = Cookies.by_jar(response.cookies.jar)
             res.url = response.url
             res.status_code = response.status_code
+            res.history = self._make_history(response, request)
             res.request = request
             return res
+
+    @staticmethod
+    def _make_history(response, request: Request):
+        history = []
+        for item in response.history:
+            prepared = item.request
+            history.append(
+                Response(
+                    content=item.content,
+                    headers=item.headers,
+                    cookies=Cookies.by_jar(item.cookies.jar),
+                    url=item.url,
+                    status_code=item.status_code,
+                    reason=getattr(item, "reason", ""),
+                    request=Request(
+                        url=prepared.url,
+                        method=prepared.method,
+                        body=getattr(prepared, "body", None),
+                        headers=dict(prepared.headers),
+                        use_session=request.use_session,
+                    ),
+                )
+            )
+        return history
 
     def make_session(self) -> requests.Session:
         return requests.Session()

@@ -7,27 +7,31 @@ import json
 import threading
 import time
 import urllib.parse
+from collections import OrderedDict
 from typing import Any, Union
 
 from loguru import logger
 
 from bricks.core import genesis
 from bricks.core.intercept import intercept
+from bricks.lib.cookies import Cookies
 from bricks.lib.request import Request
 from bricks.lib.response import Response
 
 
 class AbstractDownloader(metaclass=genesis.MetaClass):
     reuse_session_by_default = True
+    session_pool_maxsize = 32
     debug = False
-    _all_sessions: set = set()
-    _all_sessions_lock: threading.Lock = threading.Lock()
 
     def __new__(cls, *args, **kwargs):
         instance = super().__new__(cls)
         # Sessions belong to a downloader instance, while threading.local keeps
         # clients from being shared concurrently by different worker threads.
         instance.local = threading.local()
+        instance._all_sessions = {}
+        instance._all_sessions_lock = threading.RLock()
+        instance._session_generation = 0
         return instance
 
     def fetch(self, request: Request) -> Response:
@@ -197,105 +201,175 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
         """
         key = self._session_key(options)
         sessions = self._sessions()
-        return sessions.get(key) or self.make_session(**options)
+        session = sessions.get(key)
+        if session is not None:
+            sessions.move_to_end(key)
+            return session
+        return self.make_session(**options)
 
     def should_reuse_session(self, request: Request) -> bool:
         if request.use_session is None:
             return self.reuse_session_by_default
         return request.use_session
 
-    def _sessions(self) -> dict:
-        sessions = getattr(self.local, "sessions", None)
-        if sessions is None:
-            sessions = {}
-            self.local.sessions = sessions
-        return sessions
+    def _sessions(self) -> OrderedDict:
+        with self._all_sessions_lock:
+            generation = getattr(self.local, "session_generation", None)
+            sessions = getattr(self.local, "sessions", None)
+            if sessions is None or generation != self._session_generation:
+                sessions = OrderedDict()
+                self.local.sessions = sessions
+                self.local.session_generation = self._session_generation
+            return sessions
 
     @classmethod
     def _freeze_session_option(cls, value: Any):
         if isinstance(value, dict):
-            return tuple(
-                sorted(
-                    (str(key), cls._freeze_session_option(item))
-                    for key, item in value.items()
-                )
+            items = (
+                (cls._freeze_session_option(key), cls._freeze_session_option(item))
+                for key, item in value.items()
             )
-        if isinstance(value, (list, tuple)):
-            return tuple(cls._freeze_session_option(item) for item in value)
+            return "dict", tuple(sorted(items, key=repr))
+        if isinstance(value, list):
+            return "list", tuple(cls._freeze_session_option(item) for item in value)
+        if isinstance(value, tuple):
+            return "tuple", tuple(cls._freeze_session_option(item) for item in value)
         if isinstance(value, set):
-            return tuple(
-                sorted(cls._freeze_session_option(item) for item in value)
+            return "set", frozenset(
+                cls._freeze_session_option(item) for item in value
             )
         try:
             hash(value)
         except TypeError:
-            return repr(value)
-        return value
+            return "repr", type(value), repr(value)
+        return "value", type(value), value
 
     @classmethod
     def _session_key(cls, options: dict):
         return cls._freeze_session_option(options)
 
+    @staticmethod
+    def make_response_history(response, request: Request) -> list:
+        history = []
+        for item in getattr(response, "history", None) or []:
+            prepared = getattr(item, "request", None)
+            raw_cookies = getattr(item, "cookies", None)
+            if isinstance(raw_cookies, dict):
+                cookies = Cookies(raw_cookies)
+            else:
+                try:
+                    cookies = Cookies.by_jar(raw_cookies)
+                except (AttributeError, KeyError, TypeError):
+                    cookies = Cookies()
+            history.append(
+                Response(
+                    content=getattr(item, "content", b""),
+                    headers=dict(getattr(item, "headers", {}) or {}),
+                    cookies=cookies,
+                    url=str(getattr(item, "url", "")),
+                    status_code=getattr(item, "status_code", -1),
+                    reason=getattr(
+                        item,
+                        "reason",
+                        getattr(item, "reason_phrase", ""),
+                    ),
+                    request=Request(
+                        url=str(getattr(prepared, "url", "")),
+                        method=getattr(prepared, "method", "GET"),
+                        body=getattr(
+                            prepared,
+                            "body",
+                            getattr(prepared, "content", None),
+                        ),
+                        headers=dict(getattr(prepared, "headers", {}) or {}),
+                        use_session=request.use_session,
+                    ),
+                )
+            )
+        return history
+
     def _store_session(self, key, session):
-        sessions = self._sessions()
-        old_session = sessions.get(key)
-        if old_session is not None and old_session is not session:
-            self._unregister_session(old_session)
+        stale = []
+        with self._all_sessions_lock:
+            sessions = self._sessions()
+            old_session = sessions.pop(key, None)
+            if (
+                old_session is not None
+                and old_session is not session
+                and all(item is not old_session for item in sessions.values())
+            ):
+                self._all_sessions.pop(id(old_session), None)
+                stale.append(old_session)
+            sessions[key] = session
+            self._all_sessions[id(session)] = session
+            stale.extend(self._evict_sessions(sessions))
+
+        for old_session in stale:
             self.close_session(old_session)
-        sessions[key] = session
-        self._register_session(session)
 
     async def _store_async_session(self, key, session):
-        sessions = self._sessions()
-        old_session = sessions.get(key)
-        if old_session is not None and old_session is not session:
-            self._unregister_session(old_session)
+        stale = []
+        with self._all_sessions_lock:
+            sessions = self._sessions()
+            old_session = sessions.pop(key, None)
+            if (
+                old_session is not None
+                and old_session is not session
+                and all(item is not old_session for item in sessions.values())
+            ):
+                self._all_sessions.pop(id(old_session), None)
+                stale.append(old_session)
+            sessions[key] = session
+            self._all_sessions[id(session)] = session
+            stale.extend(self._evict_sessions(sessions))
+
+        for old_session in stale:
             result = self.close_session(old_session)
             if inspect.isawaitable(result):
                 await result
-        sessions[key] = session
-        self._register_session(session)
+
+    def _evict_sessions(self, sessions: OrderedDict) -> list:
+        stale = []
+        maxsize = self.session_pool_maxsize
+        if maxsize is None or maxsize <= 0:
+            return stale
+        while len(sessions) > maxsize:
+            _, old_session = sessions.popitem(last=False)
+            if any(item is old_session for item in sessions.values()):
+                continue
+            self._all_sessions.pop(id(old_session), None)
+            stale.append(old_session)
+        return stale
 
     def _register_session(self, session):
         """Register a session for cross-thread cleanup."""
-        with type(self)._all_sessions_lock:
-            type(self)._all_sessions.add(session)
+        with self._all_sessions_lock:
+            self._all_sessions[id(session)] = session
 
     def _unregister_session(self, session):
         """Unregister a session."""
-        with type(self)._all_sessions_lock:
-            type(self)._all_sessions.discard(session)
+        with self._all_sessions_lock:
+            self._all_sessions.pop(id(session), None)
+
+    def _take_sessions_for_cleanup(self) -> list:
+        with self._all_sessions_lock:
+            self._session_generation += 1
+            sessions = list(self._all_sessions.values())
+            self._all_sessions.clear()
+            self.local.sessions = OrderedDict()
+            self.local.session_generation = self._session_generation
+            return sessions
 
     def clear_session(self):
-        closed = set()
-        # Clear calling thread's local sessions
-        sessions = getattr(self.local, "sessions", None)
-        if sessions:
-            for session in list(sessions.values()):
-                closed.add(session)
-                try:
-                    self.close_session(session)
-                except Exception as e:
-                    logger.error(
-                        "[清空 session 失败] "
-                        f"失败原因: {str(e) or str(e.__class__.__name__)}",
-                        error=e,
-                    )
-            sessions.clear()
-
-        # Close remaining registered sessions across all threads
-        with type(self)._all_sessions_lock:
-            for session in type(self)._all_sessions:
-                if session not in closed:
-                    try:
-                        self.close_session(session)
-                    except Exception as e:
-                        logger.error(
-                            "[清空 session 失败] "
-                            f"失败原因: {str(e) or str(e.__class__.__name__)}",
-                            error=e,
-                        )
-            type(self)._all_sessions.clear()
+        for session in self._take_sessions_for_cleanup():
+            try:
+                self.close_session(session)
+            except Exception as e:
+                logger.error(
+                    "[清空 session 失败] "
+                    f"失败原因: {str(e) or str(e.__class__.__name__)}",
+                    error=e,
+                )
 
     def exception(self, request: Request, error: Exception):
         """

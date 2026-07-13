@@ -86,7 +86,7 @@ class SmartQueue(queue.Queue):
                 count += 1
 
             if count:
-                self.not_empty.notify()
+                self.not_empty.notify_all()
 
         return count
 

@@ -35,7 +35,9 @@ IGNORE_RETRY_PATTERN = re.compile("ProxyError", re.IGNORECASE)
 
 
 class Context(Flow):
-    _CACHE_KEYS = frozenset({"seeds", "items", "request", "response"})
+    _CACHE_KEYS = frozenset(
+        {"seeds", "items", "request", "response", "task_queue", "queue_name", "target"}
+    )
 
     def __init__(
         self,
@@ -758,7 +760,21 @@ class Spider(Pangu):
                 try:
                     return raw_method(*args, **kwargs)
                 finally:
-                    hasattr(server, "stop") and server.stop()  # type: ignore
+                    try:
+                        hasattr(server, "stop") and server.stop()  # type: ignore
+                    finally:
+                        clear_session = getattr(
+                            self.downloader, "clear_session", None
+                        )
+                        if clear_session and not inspect.isclass(self.downloader):
+                            cleanup = clear_session()
+                            if inspect.isawaitable(cleanup):
+                                async def wait_cleanup():
+                                    return await cleanup
+
+                                self.active(
+                                    dispatch.Task(func=wait_cleanup)
+                                ).result()
 
         return wrapper
 
@@ -818,7 +834,7 @@ class Spider(Pangu):
         context.request = self.make_request(context)
         context.flow({"request": context.request})
 
-    def on_retry(self, context: Context):
+    def on_retry(self, context: Context, max_retry=math.inf):
         """
         重试前
 
@@ -826,12 +842,13 @@ class Spider(Pangu):
         """
         request: Request = context.request
         response: Response = context.response
-        error: str = response.error if response else ""
+        error: str = response.error if response is not None else ""
         del context.response
         context.response = None  # type: ignore
 
-        max_retry = request.get_options("$maxRetry", math.inf)
-        if request.retry < min(max_retry, request.max_retry):
+        configured_max_retry = request.get_options("$maxRetry", math.inf)
+        retry_limit = min(configured_max_retry, request.max_retry, max_retry)
+        if request.retry < retry_limit:
             # 如果是代理错误, 则不计算重试次数
             if not IGNORE_RETRY_PATTERN.search(error):
                 request.retry += 1
@@ -849,7 +866,7 @@ class Spider(Pangu):
             msg = f'[超过重试次数] {f"SEEDS: {context.seeds}, " if context.seeds else ""} URL: {request.real_url}'
             logger.warning(msg)
 
-            if request.retry >= max_retry:
+            if request.retry >= configured_max_retry:
                 raise signals.Success
 
             else:
@@ -1153,7 +1170,7 @@ class Spider(Pangu):
         request: Union[Request, dict],
         downloader: Optional[AbstractDownloader] = None,
         proxy: Optional[Union[dict, BaseProxy]] = ...,
-        plugins: Union[dict, None] = ...,
+        plugins: Union[dict, Iterable, None] = ...,
         max_retry: Optional[int] = 5,
     ) -> Response:
         """
@@ -1161,11 +1178,11 @@ class Spider(Pangu):
 
         默认情况下, 只要 response 的状态码不为 -1 (框架内部错误/异常) 就会结束
 
-        :param plugins: 插件, 默认使用 fake_ua 和 set_proxy; 传入 None 表示什么都不用, 自定义则使用自定义的
+        :param plugins: 插件；支持 before/after/retry 字典和旧版 (form, tasks) 序列
         :param proxy: 请求代理 Key(Rules), 不传的时候默认使用 self.proxy
         :param downloader: 下载器, 不传的时候默认使用 self.downloader
         :param request: 需要请求的 request, 可以是字典 (key value 需要对应 request 对象的实例参数)
-        :param max_retry: 最大重试次数, 默认 5 次; 设为 None 表示无限重试直到成功
+        :param max_retry: 此次调用附加的重试上限；None 表示只使用 Request 的限制
         :return:
         """
         if isinstance(request, dict):
@@ -1182,7 +1199,6 @@ class Spider(Pangu):
             else:
                 pass
 
-        dl = downloader or self.downloader
         context = Context(
             target=self,
             request=request,
@@ -1191,67 +1207,168 @@ class Spider(Pangu):
         )
         context.failure = lambda _: context.flow({"next": None})
 
-        # 确定要使用的插件
+        def normalize_hooks(hooks):
+            tasks = []
+            for hook in pandora.iterable(hooks):
+                if isinstance(hook, events.Task):
+                    task = hook
+                elif isinstance(hook, dict):
+                    task = events.Task(**hook)
+                else:
+                    task = events.Task(func=hook)
+                tasks.append(task)
+            return sorted(
+                tasks,
+                key=lambda task: task.index if task.index is not None else 0,
+            )
+
+        retry_hooks = []
         if plugins is ...:
-            before_hooks = [on_request.Before.fake_ua, on_request.Before.set_proxy]
-            after_hooks = [on_request.After.show_response, on_request.After.bypass]
+            before_hooks = normalize_hooks(
+                [on_request.Before.fake_ua, on_request.Before.set_proxy]
+            )
+            after_hooks = normalize_hooks(
+                [
+                    on_request.After.show_response,
+                    on_request.After.conditional_scripts,
+                    on_request.After.bypass,
+                ]
+            )
         elif plugins is None:
             before_hooks = []
             after_hooks = []
+        elif isinstance(plugins, dict):
+            before_hooks = normalize_hooks(plugins.get("before", []))
+            after_hooks = normalize_hooks(plugins.get("after", []))
+            retry_hooks = normalize_hooks(plugins.get("retry", []))
         else:
-            before_hooks = plugins.get("before", [])
-            after_hooks = plugins.get("after", [])
+            hook_groups = {
+                state.const.BEFORE_REQUEST: [],
+                state.const.AFTER_REQUEST: [],
+                state.const.BEFORE_RETRY: [],
+            }
+            for form, hooks in plugins:
+                if form in hook_groups:
+                    hook_groups[form].extend(normalize_hooks(hooks))
+            before_hooks = normalize_hooks(hook_groups[state.const.BEFORE_REQUEST])
+            after_hooks = normalize_hooks(hook_groups[state.const.AFTER_REQUEST])
+            retry_hooks = normalize_hooks(hook_groups[state.const.BEFORE_RETRY])
+
+        invoked_disposable = set()
+
+        def invoke_hooks(hooks):
+            for hook in hooks:
+                if hook.disposable and id(hook) in invoked_disposable:
+                    continue
+                if not EventManager._match_event(hook, context):
+                    continue
+                pandora.invoke(
+                    hook.func,
+                    args=hook.args,
+                    kwargs=hook.kwargs,
+                    annotations=context.annotations,
+                    namespace=context.namespace,
+                )
+                if hook.disposable:
+                    invoked_disposable.add(id(hook))
 
         attempt = 0
-        while max_retry is None or attempt <= max_retry:
+        last_response = None
+        last_error = None
+
+        def prepare_retry(error=None):
+            nonlocal attempt, last_response, last_error
+            attempt += 1
+            if context.response is not None:
+                last_response = context.response
+            last_error = error or last_error
+            context.form = state.const.BEFORE_RETRY
+            invoke_hooks(retry_hooks)
+            local_retry_limit = (
+                -math.inf
+                if max_retry is not None and attempt > max_retry
+                else math.inf
+            )
+            try:
+                self.on_retry(context, max_retry=local_retry_limit)
+            except (signals.Success, signals.Failure):
+                return False
+            return True
+
+        while True:
             try:
                 with context:  # push context onto thread-local stack
                     context.response = None
+                    context.form = state.const.BEFORE_REQUEST
 
-                    # BEFORE_REQUEST — directly call specific plugins, NOT EventManager.invoke
-                    for hook in before_hooks:
-                        pandora.invoke(hook, annotations=context.annotations, namespace=context.namespace)
+                    invoke_hooks(before_hooks)
 
                     # Download (plugin may have injected response)
                     if context.response is None:
+                        dl = (
+                            context.request.get_options("$downloader")
+                            or downloader
+                            or self.downloader
+                        )
+                        if inspect.isclass(dl):
+                            dl = dl()
                         self.number_of_total_requests.increment()
                         if inspect.iscoroutinefunction(dl.fetch):
-                            task = dispatch.Task(func=dl.fetch, args=[request])
+                            task = dispatch.Task(func=dl.fetch, args=[context.request])
                             self.dispatcher.active_task(task)
                             response = task.result()
                         else:
-                            response = dl.fetch(request)
+                            response = dl.fetch(context.request)
                         context.response = response
 
-                    # AFTER_REQUEST — bypass handles ok check (str/dict/None)
-                    for hook in after_hooks:
-                        pandora.invoke(hook, annotations=context.annotations, namespace=context.namespace)
+                    context.form = state.const.AFTER_REQUEST
+                    invoke_hooks(after_hooks)
 
                     return context.response
 
             except signals.Retry:
-                attempt += 1
-                self.number_of_failure_requests.increment()
-                if max_retry is None or attempt <= max_retry:
+                if prepare_retry():
                     logger.warning(f"[fetch] 第 {attempt} 次请求失败, 正在重试...")
-                    context.form = state.const.BEFORE_RETRY
-                    EventManager.invoke(context, errors="output")
                     continue
                 break
+
+            except signals.Success:
+                return context.response if context.response is not None else last_response
+
+            except signals.Failure:
+                if context.response is not None:
+                    last_response = context.response
+                break
+
+            except signals.Signal:
+                raise
 
             except Exception as e:
-                attempt += 1
-                self.number_of_failure_requests.increment()
-                if max_retry is None or attempt <= max_retry:
+                if prepare_retry(e):
                     logger.warning(f"[fetch] 第 {attempt} 次请求失败: {e}, 正在重试...")
-                    context.form = state.const.BEFORE_RETRY
-                    EventManager.invoke(context, errors="output")
                     continue
-                logger.error(f"[fetch] 请求失败, 已达最大重试次数 ({max_retry}): {e}")
+                logger.error(
+                    f"[fetch] 请求失败, 已达最大重试次数 ({max_retry}): {e}"
+                )
                 break
 
-        context.response = Response(status_code=-1)
-        return context.response
+        if last_error is not None:
+            return Response.make_response(
+                status_code=-1,
+                error=last_error.__class__.__name__,
+                reason=str(last_error),
+                url=request.real_url,
+                request=request,
+            )
+        if last_response is not None:
+            return last_response
+        return Response.make_response(
+            status_code=-1,
+            error="RetryError",
+            reason="retry limit reached",
+            url=request.real_url,
+            request=request,
+        )
 
     def disable_statistics(self):
         counters = [

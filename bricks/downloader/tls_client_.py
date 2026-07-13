@@ -73,6 +73,7 @@ class Downloader(AbstractDownloader):
             res.cookies = Cookies.by_jar(response.cookies)
             res.url = response.url  # type: ignore
             res.status_code = response.status_code  # type: ignore
+            res.history = self.make_response_history(response, request)
             res.request = request
             return res
         finally:

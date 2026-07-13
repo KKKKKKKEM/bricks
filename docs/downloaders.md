@@ -209,7 +209,9 @@ print(req.curl)
 
 HTTP 下载器默认在同一个下载器实例、同一个线程内复用 Session。可以显式传入
 `use_session=False` 强制为单次请求创建独立 Session；浏览器下载器默认隔离，需用
-`use_session=True` 显式复用上下文：
+`use_session=True` 显式复用上下文。每个线程默认最多缓存 32 组 Session 配置，
+可以通过下载器的 `session_pool_maxsize` 调整；`clear_session()` 会使该下载器所有
+线程的缓存同时失效，但不会影响其他下载器实例：
 
 ```python
 from bricks import Request

@@ -45,11 +45,15 @@ def collect_interceptors(instance) -> dict:
     返回: {target_method_name: wrapper_method_name}
     """
     interceptors = {}
+    seen = set()
     for cls in type(instance).__mro__:
         for name, obj in cls.__dict__.items():
+            if name in seen:
+                continue
+            seen.add(name)
             # 支持 staticmethod / classmethod 描述符
             if isinstance(obj, (staticmethod, classmethod)):
                 obj = obj.__func__
             if hasattr(obj, "__intercept_target__"):
-                interceptors[obj.__intercept_target__] = name
+                interceptors.setdefault(obj.__intercept_target__, name)
     return interceptors

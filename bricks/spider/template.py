@@ -2,6 +2,7 @@
 # @Time    : 2023-12-05 20:18
 # @Author  : Kem
 # @Desc    :
+import copy
 import inspect
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Union
@@ -15,6 +16,7 @@ from bricks.lib.nodes import RenderNode
 from bricks.lib.queues import Item
 from bricks.spider import air, form
 from bricks.utils import pandora
+from bricks.utils.safe_eval import safe_eval_cached
 
 Init = form.Init
 Layout = form.Layout
@@ -251,7 +253,7 @@ class Spider(air.Spider):
                 )
 
             elif isinstance(node.match, str):
-                ok = eval(
+                ok = safe_eval_cached(
                     node.match,
                     {
                         "context": context,
@@ -276,7 +278,7 @@ class Spider(air.Spider):
             try:
                 if has_layout:
                     context.items = pandora.clean_rows(
-                        *[row.copy() for row in context.items],
+                        *copy.deepcopy(context.items),
                         rename=layout.rename,
                         default=layout.default,
                         factory=layout.factory,

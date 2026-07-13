@@ -14,6 +14,7 @@ from loguru import logger
 
 from bricks.core.context import Context, Flow
 from bricks.utils import pandora
+from bricks.utils.safe_eval import safe_eval_cached
 
 
 class ErrorMode(str, Enum):
@@ -41,7 +42,7 @@ class RegisteredEvents:
         self.registered: Dict[Any, List[Register]] = defaultdict(list)
 
         self._lock = threading.RLock()  # 使用可重入锁，避免死锁
-        self._sorted_cache: Dict[Tuple[str, Any], bool] = {}  # 缓存排序状态
+        self._sorted_cache: Dict[Tuple[str, Any, bool], bool] = {}
 
     def __enter__(self):
         self._lock.acquire()
@@ -52,7 +53,8 @@ class RegisteredEvents:
 
     def mark_unsorted(self, form: str, target: Any):
         """标记指定容器需要重新排序"""
-        self._sorted_cache[(form, target)] = False
+        self._sorted_cache[(form, target, False)] = False
+        self._sorted_cache[(form, target, True)] = False
 
 
 @dataclass
@@ -307,56 +309,47 @@ class EventManager:
         else:
             targets = [None, context.target]
 
-        # 锁内：拷贝永久事件 + 原子认领一次性事件
+        disposable_snapshots = []
         permanent_snapshots = []
-        claimed_disposable = []
         with REGISTERED_EVENTS:
-            for target in targets:
-                # 一次性事件：锁内匹配并移除
-                disp_group = REGISTERED_EVENTS.disposable[context.form]
-                if target is ...:
-                    events = [e for es in disp_group.values() for e in es]
-                    events.sort(key=lambda x: x.index if x.index is not None else 0)
-                else:
-                    cache_key = (context.form, target)
-                    if not REGISTERED_EVENTS._sorted_cache.get(cache_key, False):
-                        lst = disp_group[target]
-                        lst.sort(key=lambda x: x.index if x.index is not None else 0)
-                        REGISTERED_EVENTS._sorted_cache[cache_key] = True
-                    events = list(disp_group[target])
+            for group, disposable, snapshots in (
+                (REGISTERED_EVENTS.disposable[context.form], True, disposable_snapshots),
+                (REGISTERED_EVENTS.permanent[context.form], False, permanent_snapshots),
+            ):
+                for target in targets:
+                    if target is ...:
+                        events = [event for box in group.values() for event in box]
+                        events.sort(
+                            key=lambda item: item.index if item.index is not None else 0
+                        )
+                    else:
+                        cache_key = (context.form, target, disposable)
+                        if not REGISTERED_EVENTS._sorted_cache.get(cache_key, False):
+                            group[target].sort(
+                                key=lambda item: item.index
+                                if item.index is not None
+                                else 0
+                            )
+                            REGISTERED_EVENTS._sorted_cache[cache_key] = True
+                        events = list(group[target])
+                    snapshots.extend(events)
 
-                for event in events:
-                    if cls._match_event(event, context):
-                        # 锁内原子移除
-                        if event.box and event in event.box:
-                            event.box.remove(event)
-                        cls._cleanup_registered(event)
-                        claimed_disposable.append(event)
-
-            # 永久事件：锁内拷贝和排序
-            perm_group = REGISTERED_EVENTS.permanent[context.form]
-            for target in targets:
-                if target is ...:
-                    events = [e for es in perm_group.values() for e in es]
-                    events.sort(key=lambda x: x.index if x.index is not None else 0)
-                else:
-                    cache_key = (context.form, target)
-                    if not REGISTERED_EVENTS._sorted_cache.get(cache_key, False):
-                        lst = perm_group[target]
-                        lst.sort(key=lambda x: x.index if x.index is not None else 0)
-                        REGISTERED_EVENTS._sorted_cache[cache_key] = True
-                    events = list(perm_group[target])
-
-                for event in events:
-                    if cls._match_event(event, context):
-                        permanent_snapshots.append(event)
-
-        # 锁外：yield 已认领的一次性事件 + 永久事件
-        for event in claimed_disposable:
+        # Match callbacks run outside the registry lock. Disposable events are
+        # claimed under the lock immediately before yielding, so only one
+        # concurrent consumer can execute each event.
+        for event in disposable_snapshots:
+            if not cls._match_event(event, context):
+                continue
+            with REGISTERED_EVENTS:
+                if not event.box or event not in event.box:
+                    continue
+                event.box.remove(event)
+                cls._cleanup_registered(event)
             yield event
 
         for event in permanent_snapshots:
-            yield event
+            if cls._match_event(event, context):
+                yield event
 
     @classmethod
     def _match_event(cls, event: Task, context: Context) -> bool:
@@ -372,9 +365,7 @@ class EventManager:
         if callable(match):
             return match(context)
         if isinstance(match, str):
-            if event.match_code is None:
-                event.match_code = compile(match, "<bricks.core.events.match>", "eval")
-            return eval(event.match_code, globals(), {"context": context})
+            return bool(safe_eval_cached(match, {"context": context}))
         return False
 
     @classmethod
