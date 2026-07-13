@@ -91,10 +91,8 @@ class MySpider(air.Spider):
             if context.response.get("code") != 0:
                 # 重试信号
                 raise signals.Retry
-        
-        
 
 
 if __name__ == "__main__":
-    spider = MySpider()
+    spider = MySpider(proxy={"ref": "bricks.lib.proxies.CustomProxy", "key": "127.0.0.1:7890"})
     spider.run()

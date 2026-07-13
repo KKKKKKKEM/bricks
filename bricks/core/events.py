@@ -307,43 +307,56 @@ class EventManager:
         else:
             targets = [None, context.target]
 
-        # 锁内只做拷贝和排序，不做遍历和 yield
-        snapshots = []
+        # 锁内：拷贝永久事件 + 原子认领一次性事件
+        permanent_snapshots = []
+        claimed_disposable = []
         with REGISTERED_EVENTS:
-            for group, is_disposable in [
-                (REGISTERED_EVENTS.disposable[context.form], True),
-                (REGISTERED_EVENTS.permanent[context.form], False),
-            ]:
-                for target in targets:
-                    if target is ...:
-                        events = [e for es in group.values() for e in es]
-                        events.sort(key=lambda x: x.index if x.index is not None else 0)
-                    else:
-                        cache_key = (context.form, target)
-                        if not REGISTERED_EVENTS._sorted_cache.get(cache_key, False):
-                            lst = group[target]
-                            lst.sort(key=lambda x: x.index if x.index is not None else 0)
-                            REGISTERED_EVENTS._sorted_cache[cache_key] = True
-                        events = list(group[target])
+            for target in targets:
+                # 一次性事件：锁内匹配并移除
+                disp_group = REGISTERED_EVENTS.disposable[context.form]
+                if target is ...:
+                    events = [e for es in disp_group.values() for e in es]
+                    events.sort(key=lambda x: x.index if x.index is not None else 0)
+                else:
+                    cache_key = (context.form, target)
+                    if not REGISTERED_EVENTS._sorted_cache.get(cache_key, False):
+                        lst = disp_group[target]
+                        lst.sort(key=lambda x: x.index if x.index is not None else 0)
+                        REGISTERED_EVENTS._sorted_cache[cache_key] = True
+                    events = list(disp_group[target])
 
-                    snapshots.append((events, is_disposable))
+                for event in events:
+                    if cls._match_event(event, context):
+                        # 锁内原子移除
+                        if event.box and event in event.box:
+                            event.box.remove(event)
+                        cls._cleanup_registered(event)
+                        claimed_disposable.append(event)
 
-        # 锁外遍历、匹配、yield
-        to_remove = []
-        for events, is_disposable in snapshots:
-            for event in events:
-                if cls._match_event(event, context):
-                    if is_disposable and event.box:
-                        to_remove.append((event, event.box))
-                    yield event
+            # 永久事件：锁内拷贝和排序
+            perm_group = REGISTERED_EVENTS.permanent[context.form]
+            for target in targets:
+                if target is ...:
+                    events = [e for es in perm_group.values() for e in es]
+                    events.sort(key=lambda x: x.index if x.index is not None else 0)
+                else:
+                    cache_key = (context.form, target)
+                    if not REGISTERED_EVENTS._sorted_cache.get(cache_key, False):
+                        lst = perm_group[target]
+                        lst.sort(key=lambda x: x.index if x.index is not None else 0)
+                        REGISTERED_EVENTS._sorted_cache[cache_key] = True
+                    events = list(perm_group[target])
 
-        # 清理一次性事件
-        if to_remove:
-            with REGISTERED_EVENTS:
-                for event, box in to_remove:
-                    if event in box:
-                        box.remove(event)
-                    cls._cleanup_registered(event)
+                for event in events:
+                    if cls._match_event(event, context):
+                        permanent_snapshots.append(event)
+
+        # 锁外：yield 已认领的一次性事件 + 永久事件
+        for event in claimed_disposable:
+            yield event
+
+        for event in permanent_snapshots:
+            yield event
 
     @classmethod
     def _match_event(cls, event: Task, context: Context) -> bool:

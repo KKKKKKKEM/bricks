@@ -85,8 +85,8 @@ class SmartQueue(queue.Queue):
                 self._put(item) if head is False else self._put_head(item)
                 count += 1
 
-        if count:
-            self.not_empty.notify()
+            if count:
+                self.not_empty.notify()
 
         return count
 

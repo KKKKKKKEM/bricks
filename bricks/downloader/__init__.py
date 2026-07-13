@@ -20,6 +20,8 @@ from bricks.lib.response import Response
 class AbstractDownloader(metaclass=genesis.MetaClass):
     reuse_session_by_default = True
     debug = False
+    _all_sessions: set = set()
+    _all_sessions_lock: threading.Lock = threading.Lock()
 
     def __new__(cls, *args, **kwargs):
         instance = super().__new__(cls)
@@ -238,22 +240,39 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
         sessions = self._sessions()
         old_session = sessions.get(key)
         if old_session is not None and old_session is not session:
+            self._unregister_session(old_session)
             self.close_session(old_session)
         sessions[key] = session
+        self._register_session(session)
 
     async def _store_async_session(self, key, session):
         sessions = self._sessions()
         old_session = sessions.get(key)
         if old_session is not None and old_session is not session:
+            self._unregister_session(old_session)
             result = self.close_session(old_session)
             if inspect.isawaitable(result):
                 await result
         sessions[key] = session
+        self._register_session(session)
+
+    def _register_session(self, session):
+        """Register a session for cross-thread cleanup."""
+        with type(self)._all_sessions_lock:
+            type(self)._all_sessions.add(session)
+
+    def _unregister_session(self, session):
+        """Unregister a session."""
+        with type(self)._all_sessions_lock:
+            type(self)._all_sessions.discard(session)
 
     def clear_session(self):
+        closed = set()
+        # Clear calling thread's local sessions
         sessions = getattr(self.local, "sessions", None)
         if sessions:
             for session in list(sessions.values()):
+                closed.add(session)
                 try:
                     self.close_session(session)
                 except Exception as e:
@@ -263,6 +282,20 @@ class AbstractDownloader(metaclass=genesis.MetaClass):
                         error=e,
                     )
             sessions.clear()
+
+        # Close remaining registered sessions across all threads
+        with type(self)._all_sessions_lock:
+            for session in type(self)._all_sessions:
+                if session not in closed:
+                    try:
+                        self.close_session(session)
+                    except Exception as e:
+                        logger.error(
+                            "[清空 session 失败] "
+                            f"失败原因: {str(e) or str(e.__class__.__name__)}",
+                            error=e,
+                        )
+            type(self)._all_sessions.clear()
 
     def exception(self, request: Request, error: Exception):
         """

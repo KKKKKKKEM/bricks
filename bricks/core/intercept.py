@@ -39,12 +39,17 @@ def collect_interceptors(instance) -> dict:
     """
     从实例上收集所有 @intercept 装饰的拦截器。
 
+    沿 MRO 遍历类字典，直接读取描述符元数据，
+    不对实例做 getattr，避免触发 @property 副作用。
+
     返回: {target_method_name: wrapper_method_name}
     """
     interceptors = {}
-    for name in dir(instance):
-        obj = getattr(instance, name, None)
-        if obj is not None and hasattr(obj, "__intercept_target__"):
-            target = obj.__intercept_target__
-            interceptors[target] = name
+    for cls in type(instance).__mro__:
+        for name, obj in cls.__dict__.items():
+            # 支持 staticmethod / classmethod 描述符
+            if isinstance(obj, (staticmethod, classmethod)):
+                obj = obj.__func__
+            if hasattr(obj, "__intercept_target__"):
+                interceptors[obj.__intercept_target__] = name
     return interceptors

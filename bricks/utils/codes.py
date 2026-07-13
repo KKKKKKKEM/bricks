@@ -63,6 +63,8 @@ class Generator:
         code_str = self.build()
         compiled = _compiled_cache.get(code_str)
         if compiled is None:
+            if len(_compiled_cache) > 512:
+                _compiled_cache.clear()
             compiled = compile(code_str, "<bricks.codes>", "exec")
             _compiled_cache[code_str] = compiled
         exec(compiled, namespace)

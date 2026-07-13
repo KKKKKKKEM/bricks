@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from asyncio import ensure_future, futures
+from collections import deque
 from concurrent.futures import Future
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -47,10 +48,9 @@ class _TaskQueue:
         with self._general_cond:
             if task.worker is not None:
                 self._specific.setdefault(task.worker.name, deque()).append(task)
-                self._get_worker_cond(task.worker.name).notify()
             else:
                 self._general.append(task)
-                self._general_cond.notify_all()
+            self._general_cond.notify_all()
             self._unfinished += 1
 
     def task_done(self) -> None:
@@ -153,15 +153,19 @@ class Task(Future):
         self.worker: Optional["Worker"] = worker
         self.future: Optional["asyncio.Future"] = None
         self.is_async: bool = asyncio.iscoroutinefunction(func)
+        self._cancel_requested = False
         if callback:
             self.add_done_callback(callback)
         super().__init__()
 
     def cancel(self) -> bool:
+        self._cancel_requested = True
+        # Try to remove from queue (no-op if already running)
         if self.dispatcher:
             self.dispatcher.cancel_task(self)
         if self.future:
             self.future.cancel()
+        # super().cancel() works only for PENDING futures
         return super().cancel()
 
 
@@ -208,9 +212,19 @@ class Worker(threading.Thread):
             except queue.Empty:
                 continue
 
+            # Check cancellation flag before executing
+            if task._cancel_requested:
+                task.cancel()
+                self.dispatcher.doing.task_done()
+                continue
+
             try:
                 ret = task.func(*task.args, **task.kwargs)
-                task.set_result(ret)
+                # Check cancellation flag after executing
+                if task._cancel_requested:
+                    task.cancel()
+                else:
+                    task.set_result(ret)
 
             except Exit:
                 self.clean()
@@ -457,17 +471,13 @@ class Dispatcher:
 
     def cancel_task(self, task: Task) -> None:
         """
-        cancel task
+        cancel task — remove from queue if pending, set flag if running.
+        Does NOT kill the worker.
 
         :param task: task to cancel
         :return: None
         """
-        if self.doing.cancel_task(task):
-            # task was still in queue, removed successfully
-            return
-        # If there is a worker and the task is running, shut down the worker
-        if task.worker and not task.done():
-            self.stop_worker(task.worker.name)
+        self.doing.cancel_task(task)
 
     @staticmethod
     def make_task(task: Union[dict, Task]) -> Task:

@@ -56,7 +56,6 @@ class Proxy:
         :param threshold: 使用阈值
         """
         self.threshold = threshold
-        self._unlimited = (threshold == math.inf)
         self.counter = itertools.count(1)
         self.proxy = proxy
         self.auth = auth
@@ -71,7 +70,7 @@ class Proxy:
 
         :return:
         """
-        if self._unlimited:
+        if self.threshold == math.inf:
             return True
 
         if next(self.counter) >= self.threshold:
@@ -215,7 +214,7 @@ class ApiProxy(BaseProxy):
             lambda res: IP_EXTRACT_RULE.findall(res.text)
         )
         self.container = queue.Queue()
-        self.lock = threading.Condition()
+        self.lock = threading.Lock()
         super().__init__(
             scheme=scheme,
             username=username,
@@ -242,7 +241,6 @@ class ApiProxy(BaseProxy):
                     proxy = self.container.get_nowait()
                 except queue.Empty:
                     self.fetch(timeout)
-                    self.lock.notify_all()
                 else:
                     return Proxy(proxy)
 
@@ -750,7 +748,6 @@ class CustomProxy(BaseProxy):
 
 
 class Manager:
-    _rkey_cache: dict = {}
 
     def __init__(self):
         self._local = threading.local()
@@ -861,19 +858,18 @@ class Manager:
             delattr(self._local, proxy.rkey)
 
     @staticmethod
+    def _to_hashable(obj):
+        if isinstance(obj, dict):
+            return tuple(sorted((Manager._to_hashable(k), Manager._to_hashable(v)) for k, v in obj.items()))
+        if isinstance(obj, (list, tuple)):
+            return tuple(Manager._to_hashable(x) for x in obj)
+        return obj
+
+    @staticmethod
     def get_rkey(obj: (dict, BaseProxy)):
         if isinstance(obj, BaseProxy):
             return str(hash(BaseProxy))
-
-        # id() 做 key + 持有 obj 引用防止 GC 回收导致 id 复用
-        oid = id(obj)
-        cache = Manager._rkey_cache
-        entry = cache.get(oid)
-        if entry is not None and entry[0] is obj:
-            return entry[1]
-        rkey = str(hash(json.dumps(obj, default=str)))
-        cache[oid] = (obj, rkey)
-        return rkey
+        return str(hash(Manager._to_hashable(obj)))
 
     def set_mode(self, mode: Literal[0, 1] = 0):
         # 线程隔离

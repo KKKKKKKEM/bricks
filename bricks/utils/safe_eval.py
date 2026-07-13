@@ -240,6 +240,8 @@ def safe_eval_cached(expr: str, namespace: dict = None) -> object:
     """
     tree = _ast_cache.get(expr)
     if tree is None:
+        if len(_ast_cache) > 512:
+            _ast_cache.clear()
         tree = ast.parse(expr, mode="eval")
         _ast_cache[expr] = tree
     return _eval_node(tree.body, namespace or {})

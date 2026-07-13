@@ -86,6 +86,7 @@ class Downloader(AbstractDownloader):
         reuse_session = self.should_reuse_session(request)
         if reuse_session:
             curl = request.get_options("$session") or self.get_session()
+            curl.reset()  # Clear previous request state (method, body, headers, etc.)
         else:
             curl = pycurl.Curl()
         next_url = request.real_url

@@ -72,8 +72,8 @@ class Context(Flow):
         elif key == "items" and type(value) is not Items:
             value = Items(value)
 
-        # 值未变时跳过缓存清理
-        if key in self._CACHE_KEYS and getattr(self, key, None) is value:
+        # 值未变时跳过缓存清理（必须先检查属性是否存在，避免 getattr 默认值造成误判）
+        if key in self._CACHE_KEYS and hasattr(self, key) and getattr(self, key) is value:
             return
         super().__setattr__(key, value)
         if key in self._CACHE_KEYS:
@@ -1148,52 +1148,24 @@ class Spider(Pangu):
             else [{k: getattr(c, k) for k in extract} for c in collect.queue]
         )  # type: ignore
 
-    def _make_fetcher(
-        self,
-        downloader: Optional[AbstractDownloader] = None,
-        plugins: Union[dict, None] = ...,
-        **options,
-    ):
-        options.setdefault("downloader", downloader or self.downloader)
-        options.setdefault("dispatcher", self.dispatcher)
-        spider = Spider(**options)
-
-        # 不需要任何插件
-        if not plugins:
-            for plugin in spider.plugins:
-                plugin.unregister()
-
-        # 使用默认插件
-        elif plugins is ...:
-            pass
-
-        else:
-            for plugin in spider.plugins:
-                plugin.unregister()
-            for form, plugin in plugins:
-                spider.use(form, *pandora.iterable(plugin))
-
-        return spider
-
     def fetch(
         self,
         request: Union[Request, dict],
         downloader: Optional[AbstractDownloader] = None,
         proxy: Optional[Union[dict, BaseProxy]] = ...,
         plugins: Union[dict, None] = ...,
-        **options,
+        max_retry: Optional[int] = 5,
     ) -> Response:
         """
         发送请求获取响应
 
-        默认情况下, 只要response 的状态码不为-1( 框架内部错误/ 异常) 就会结束
-        如果失败五次, 也会结束, 所以需要一定成功可以将 request.max_retry = math.inf
+        默认情况下, 只要 response 的状态码不为 -1 (框架内部错误/异常) 就会结束
 
         :param plugins: 插件, 默认使用 fake_ua 和 set_proxy; 传入 None 表示什么都不用, 自定义则使用自定义的
         :param proxy: 请求代理 Key(Rules), 不传的时候默认使用 self.proxy
-        :param downloader: 下载器, 不传的时候默认使用  self.downloader
-        :param request: 需要请求的 request, 可以是字典(key value 需要对应 request 对象的实例参数)
-        :param options: custom spider 实例化的其他选项
+        :param downloader: 下载器, 不传的时候默认使用 self.downloader
+        :param request: 需要请求的 request, 可以是字典 (key value 需要对应 request 对象的实例参数)
+        :param max_retry: 最大重试次数, 默认 5 次; 设为 None 表示无限重试直到成功
         :return:
         """
         if isinstance(request, dict):
@@ -1206,19 +1178,79 @@ class Spider(Pangu):
             if proxy is ...:
                 request.proxy = self.proxy
             elif proxy:
-                request.proxy = proxy  # type: ignore
+                request.proxy = proxy
             else:
                 pass
 
-        effective_downloader = downloader or self.downloader
-        spider = self._make_fetcher(effective_downloader, plugins, **options)
-        context = spider.make_context(
+        dl = downloader or self.downloader
+        context = Context(
+            target=self,
             request=request,
-            next=spider.on_request,
-            flows={spider.on_request: None, spider.on_retry: spider.on_request},
+            next=self.on_request,
+            flows={self.on_request: None, self.on_retry: self.on_request},
         )
         context.failure = lambda _: context.flow({"next": None})
-        spider.on_consume(context=context)
+
+        # 确定要使用的插件
+        if plugins is ...:
+            before_hooks = [on_request.Before.fake_ua, on_request.Before.set_proxy]
+            after_hooks = [on_request.After.show_response, on_request.After.bypass]
+        elif plugins is None:
+            before_hooks = []
+            after_hooks = []
+        else:
+            before_hooks = plugins.get("before", [])
+            after_hooks = plugins.get("after", [])
+
+        attempt = 0
+        while max_retry is None or attempt <= max_retry:
+            try:
+                with context:  # push context onto thread-local stack
+                    context.response = None
+
+                    # BEFORE_REQUEST — directly call specific plugins, NOT EventManager.invoke
+                    for hook in before_hooks:
+                        pandora.invoke(hook, annotations=context.annotations, namespace=context.namespace)
+
+                    # Download (plugin may have injected response)
+                    if context.response is None:
+                        self.number_of_total_requests.increment()
+                        if inspect.iscoroutinefunction(dl.fetch):
+                            task = dispatch.Task(func=dl.fetch, args=[request])
+                            self.dispatcher.active_task(task)
+                            response = task.result()
+                        else:
+                            response = dl.fetch(request)
+                        context.response = response
+
+                    # AFTER_REQUEST — bypass handles ok check (str/dict/None)
+                    for hook in after_hooks:
+                        pandora.invoke(hook, annotations=context.annotations, namespace=context.namespace)
+
+                    return context.response
+
+            except signals.Retry:
+                attempt += 1
+                self.number_of_failure_requests.increment()
+                if max_retry is None or attempt <= max_retry:
+                    logger.warning(f"[fetch] 第 {attempt} 次请求失败, 正在重试...")
+                    context.form = state.const.BEFORE_RETRY
+                    EventManager.invoke(context, errors="output")
+                    continue
+                break
+
+            except Exception as e:
+                attempt += 1
+                self.number_of_failure_requests.increment()
+                if max_retry is None or attempt <= max_retry:
+                    logger.warning(f"[fetch] 第 {attempt} 次请求失败: {e}, 正在重试...")
+                    context.form = state.const.BEFORE_RETRY
+                    EventManager.invoke(context, errors="output")
+                    continue
+                logger.error(f"[fetch] 请求失败, 已达最大重试次数 ({max_retry}): {e}")
+                break
+
+        context.response = Response(status_code=-1)
         return context.response
 
     def disable_statistics(self):

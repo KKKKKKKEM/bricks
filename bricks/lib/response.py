@@ -273,7 +273,6 @@ class Response:
             if isinstance(engine, str):
                 if engine.upper() in self._EXTRACTORS:
                     extractor: extractors.Extractor = self._EXTRACTORS[engine.upper()]
-                    extractor: extractors.Extractor = exs[engine.upper()]
                     ret = extractor.match(obj=self.text, rules=rules)
                     return ret
                 else:
