@@ -36,14 +36,14 @@ class MetaClass(type):
             wrapper = getattr(instance, wrapper_name)
             setattr(instance, raw_method_name, wrapper(raw_method))
 
-        # 安装 @events.on 装饰的事件钩子（仅事件能力实例，如 Pangu）
-        if hasattr(instance, "_install_events"):
-            instance._install_events()
-
         # 运行生命周期 install
         if hasattr(instance, "install"):
             instance.install()
-
+            
+        # 安装 @events.on 装饰的事件钩子（仅事件能力实例，如 Pangu）
+        if hasattr(instance, "_install_events"):
+            instance._install_events()
+            
         return instance
 
 
@@ -223,23 +223,6 @@ class Pangu(Chaos):
                 seen.add(name)
 
                 specs = _get_event_specs(value)
-
-                # 向后兼容：检查旧版 __event__ 格式
-                if not specs:
-                    event_val = _get_event_legacy(value)
-                    if event_val is not None:
-                        try:
-                            old_form, old_task = event_val
-                            specs = [EventSpec(
-                                form=old_form,
-                                index=getattr(old_task, "index", None),
-                                disposable=getattr(old_task, "disposable", False),
-                                args=getattr(old_task, "args", None),
-                                kwargs=getattr(old_task, "kwargs", None),
-                                match=getattr(old_task, "match", None),
-                            )]
-                        except (ValueError, TypeError):
-                            pass
 
                 if not specs:
                     continue
