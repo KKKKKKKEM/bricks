@@ -169,11 +169,35 @@ class SQLiteQueue(TaskQueue):
             CREATE TABLE IF NOT EXISTS _queue_init_lock (
                 queue_name TEXT PRIMARY KEY,
                 owner TEXT NOT NULL,
+                lease_id TEXT NOT NULL DEFAULT '',
+                fencing_token INTEGER NOT NULL DEFAULT 0,
                 heartbeat REAL NOT NULL,
                 interval REAL NOT NULL
             )
             """
         )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS _queue_init_epoch (
+                queue_name TEXT PRIMARY KEY,
+                fencing_token INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+
+        # Migrate databases created before lease identity was persisted.
+        for column, definition in (
+            ("lease_id", "TEXT NOT NULL DEFAULT ''"),
+            ("fencing_token", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            try:
+                conn.execute(
+                    f"ALTER TABLE _queue_init_lock ADD COLUMN {column} {definition}"
+                )
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
 
     def _cleanup_expired_records(self, conn: sqlite3.Connection, name: str) -> None:
         now = time.time()
@@ -229,12 +253,21 @@ class SQLiteQueue(TaskQueue):
         unique = bool(kwargs.pop("unique", True))
         priority = bool(kwargs.pop("priority", False))
         limit = int(kwargs.pop("limit", 0) or 0)
+        init_lease = kwargs.pop("init_lease", None) or {}
 
         priority_value = 1 if priority else 0
         now = time.time()
 
         with self._connection() as conn:
             with self._tx(conn, "IMMEDIATE"):
+                if init_lease:
+                    lease_row = conn.execute(
+                        "SELECT owner, lease_id, fencing_token FROM _queue_init_lock WHERE queue_name = ?",
+                        (name,),
+                    ).fetchone()
+                    if not self._lease_matches(lease_row, init_lease):
+                        return 0
+
                 table = self._queue_table(name)
                 self._ensure_queue_table(conn, table)
 
@@ -542,7 +575,7 @@ class SQLiteQueue(TaskQueue):
         action = order["action"]
 
         if action == self.COMMANDS.SET_RECORD:
-            return self._cmd_set_record(name, order["record"])
+            return self._cmd_set_record(name, order["record"], order)
         if action == self.COMMANDS.GET_RECORD:
             return self._cmd_get_record(name)
         if action == self.COMMANDS.CONTINUE_RECORD:
@@ -553,18 +586,40 @@ class SQLiteQueue(TaskQueue):
         if action == self.COMMANDS.WAIT_INIT:
             return self._cmd_wait_init(name, order)
         if action == self.COMMANDS.SET_INIT:
-            return self._cmd_set_init(name)
+            return self._cmd_set_init(name, order)
         if action == self.COMMANDS.IS_INIT:
             return self._cmd_is_init(name)
+        if action == self.COMMANDS.VALIDATE_INIT:
+            return self._cmd_validate_init(name, order)
         if action == self.COMMANDS.RELEASE_INIT:
             return self._cmd_release_init(name, order)
         if action == self.COMMANDS.GET_PERMISSION:
             return self._cmd_get_permission(name, order)
 
-    def _cmd_set_record(self, name: str, record: dict) -> None:
+    @staticmethod
+    def _lease_matches(row, order: dict) -> bool:
+        if not order.get("lease_token"):
+            return True
+        if not row:
+            return False
+        owner, lease_id, fencing_token = row
+        return (
+            owner == order.get("owner_id")
+            and lease_id == order.get("lease_id")
+            and str(fencing_token) == str(order.get("fencing_token"))
+        )
+
+    def _cmd_set_record(self, name: str, record: dict, order: dict) -> bool:
         with self._connection() as conn:
             with self._tx(conn, "IMMEDIATE"):
                 self._cleanup_expired_records(conn, name)
+                lease_row = conn.execute(
+                    "SELECT owner, lease_id, fencing_token FROM _queue_init_lock WHERE queue_name = ?",
+                    (name,),
+                ).fetchone()
+                if not self._lease_matches(lease_row, order):
+                    return False
+
                 now = time.time()
                 row = conn.execute(
                     "SELECT record_data FROM _queue_records WHERE queue_name = ?",
@@ -583,6 +638,7 @@ class SQLiteQueue(TaskQueue):
                     """,
                     (name, data, now, name),
                 )
+                return True
 
     def _cmd_get_record(self, name: str) -> dict:
         with self._connection() as conn:
@@ -596,22 +652,43 @@ class SQLiteQueue(TaskQueue):
                     return {}
 
                 record = self._parse_record(row[0])
-                if record.get("status") == 0:
+                if str(record.get("status")) == "0" and record.get("init_state") not in {
+                    self.INIT_FAILED_RETRYABLE,
+                    self.INIT_FAILED_FINAL,
+                }:
                     conn.execute("DELETE FROM _queue_records WHERE queue_name = ?", (name,))
                     return {}
                 return record
 
-    def _cmd_set_init(self, name: str) -> bool:
+    def _cmd_set_init(self, name: str, order: dict) -> bool:
         now_ms = int(time.time() * 1000)
         with self._connection() as conn:
             with self._tx(conn, "IMMEDIATE"):
                 self._cleanup_expired_records(conn, name)
+                lease_row = conn.execute(
+                    "SELECT owner, lease_id, fencing_token FROM _queue_init_lock WHERE queue_name = ?",
+                    (name,),
+                ).fetchone()
+                if not self._lease_matches(lease_row, order):
+                    return False
+
                 row = conn.execute(
                     "SELECT record_data FROM _queue_records WHERE queue_name = ?",
                     (name,),
                 ).fetchone()
                 record = self._parse_record(row[0]) if row else {}
-                record.update({"time": now_ms, "status": 1})
+                record.update(
+                    {
+                        "time": now_ms,
+                        "status": 1,
+                        "init_state": self.INIT_RUNNING,
+                        "owner_id": order.get("owner_id", ""),
+                        "lease_id": order.get("lease_id", ""),
+                        "fencing_token": order.get("fencing_token", ""),
+                    }
+                )
+                record.pop("stop_heartbeat", None)
+                record.pop("init_error", None)
                 now = time.time()
                 conn.execute(
                     """
@@ -629,7 +706,21 @@ class SQLiteQueue(TaskQueue):
         if not self.is_empty(name):
             return True
         record = self._cmd_get_record(name)
-        return bool(record and record.get("status") == 1)
+        return bool(
+            record
+            and (
+                record.get("init_state") == self.INIT_RUNNING
+                or str(record.get("status")) == "1"
+            )
+        )
+
+    def _cmd_validate_init(self, name: str, order: dict) -> bool:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT owner, lease_id, fencing_token FROM _queue_init_lock WHERE queue_name = ?",
+                (name,),
+            ).fetchone()
+            return self._lease_matches(row, order)
 
     def _cmd_wait_init(self, name: str, order: dict) -> None:
         start_time = float(order.get("time") or 0)
@@ -637,6 +728,12 @@ class SQLiteQueue(TaskQueue):
             if not self.is_empty(name):
                 return
             record = self._cmd_get_record(name) or {}
+            if record.get("init_state") in {
+                self.INIT_SUCCEEDED,
+                self.INIT_FAILED_RETRYABLE,
+                self.INIT_FAILED_FINAL,
+            }:
+                return
             if int(record.get("status") or 0) == 1:
                 return
             t2 = record.get("time")
@@ -649,6 +746,13 @@ class SQLiteQueue(TaskQueue):
         record_ttl = float(order.get("record_ttl", -1))
         with self._connection() as conn:
             with self._tx(conn, "IMMEDIATE"):
+                lease_row = conn.execute(
+                    "SELECT owner, lease_id, fencing_token FROM _queue_init_lock WHERE queue_name = ?",
+                    (name,),
+                ).fetchone()
+                if not self._lease_matches(lease_row, order):
+                    return False
+
                 now = time.time()
                 row = conn.execute(
                     "SELECT record_data FROM _queue_records WHERE queue_name = ?",
@@ -657,6 +761,14 @@ class SQLiteQueue(TaskQueue):
                 record = self._parse_record(row[0]) if row else {}
                 record["status"] = 0
                 record["stop_heartbeat"] = 1
+                record["init_state"] = order.get(
+                    "init_state", self.INIT_SUCCEEDED
+                )
+                record["finish"] = order.get("finish", str(now))
+                if order.get("init_error"):
+                    record["init_error"] = order["init_error"]
+                else:
+                    record.pop("init_error", None)
 
                 if record_ttl == 0:
                     conn.execute("DELETE FROM _queue_records WHERE queue_name = ?", (name,))
@@ -676,12 +788,21 @@ class SQLiteQueue(TaskQueue):
                         (name, json.dumps(record, default=str, ensure_ascii=False), now, expires_at),
                     )
 
-                conn.execute("DELETE FROM _queue_init_lock WHERE queue_name = ?", (name,))
+                conn.execute(
+                    "DELETE FROM _queue_init_lock WHERE queue_name = ? AND owner = ? AND lease_id = ? AND fencing_token = ?",
+                    (
+                        name,
+                        order.get("owner_id"),
+                        order.get("lease_id"),
+                        order.get("fencing_token"),
+                    ),
+                )
                 return True
 
     def _cmd_get_permission(self, name: str, order: dict) -> dict:
         interval = float(order.get("interval", 10) or 10)
-        machine_id = getattr(state, "MACHINE_ID", "unknown")
+        owner_id = order.get("owner_id") or getattr(state, "MACHINE_ID", "unknown")
+        lease_id = order.get("lease_id") or owner_id
 
         with self._connection() as conn:
             with self._tx(conn, "IMMEDIATE"):
@@ -693,51 +814,111 @@ class SQLiteQueue(TaskQueue):
                     (name,),
                 ).fetchone()
                 record = self._parse_record(row[0]) if row else {}
-                status = int(record.get("status") or 0)
+                status = str(record.get("status") or "0")
+                init_state = record.get("init_state")
+                init_running = init_state == self.INIT_RUNNING or (
+                    not init_state and status == "1"
+                )
 
-                if status != 1 and queue_size > 0:
+                if init_state == self.INIT_FAILED_FINAL:
+                    return {"state": False, "msg": "初始化失败且不允许重试"}
+
+                if not init_running and queue_size > 0:
                     return {"state": False, "msg": "已投完且存在种子没有消费完毕"}
 
                 now = time.time()
                 row = conn.execute(
-                    "SELECT owner, heartbeat, interval FROM _queue_init_lock WHERE queue_name = ?",
+                    "SELECT owner, lease_id, fencing_token, heartbeat, interval FROM _queue_init_lock WHERE queue_name = ?",
                     (name,),
                 ).fetchone()
 
                 acquired = False
+                fencing_token = None
                 if not row:
                     conn.execute(
-                        "INSERT INTO _queue_init_lock(queue_name, owner, heartbeat, interval) VALUES(?, ?, ?, ?)",
-                        (name, machine_id, now, interval),
+                        """
+                        INSERT INTO _queue_init_epoch(queue_name, fencing_token)
+                        VALUES(?, 1)
+                        ON CONFLICT(queue_name) DO UPDATE SET
+                            fencing_token = fencing_token + 1
+                        """,
+                        (name,),
+                    )
+                    fencing_token = conn.execute(
+                        "SELECT fencing_token FROM _queue_init_epoch WHERE queue_name = ?",
+                        (name,),
+                    ).fetchone()[0]
+                    conn.execute(
+                        "INSERT INTO _queue_init_lock(queue_name, owner, lease_id, fencing_token, heartbeat, interval) VALUES(?, ?, ?, ?, ?, ?)",
+                        (name, owner_id, lease_id, fencing_token, now, interval),
                     )
                     acquired = True
                 else:
-                    owner, heartbeat, last_interval = row
+                    owner, current_lease_id, current_token, heartbeat, last_interval = row
                     expire_before = now - max(float(last_interval), interval) * 3
-                    if owner == machine_id or float(heartbeat) <= expire_before:
+                    if float(heartbeat) <= expire_before:
                         conn.execute(
-                            "UPDATE _queue_init_lock SET owner = ?, heartbeat = ?, interval = ? WHERE queue_name = ?",
-                            (machine_id, now, interval, name),
+                            """
+                            INSERT INTO _queue_init_epoch(queue_name, fencing_token)
+                            VALUES(?, 1)
+                            ON CONFLICT(queue_name) DO UPDATE SET
+                                fencing_token = fencing_token + 1
+                            """,
+                            (name,),
+                        )
+                        fencing_token = conn.execute(
+                            "SELECT fencing_token FROM _queue_init_epoch WHERE queue_name = ?",
+                            (name,),
+                        ).fetchone()[0]
+                        conn.execute(
+                            "UPDATE _queue_init_lock SET owner = ?, lease_id = ?, fencing_token = ?, heartbeat = ?, interval = ? WHERE queue_name = ?",
+                            (owner_id, lease_id, fencing_token, now, interval, name),
                         )
                         acquired = True
 
                 if acquired:
-                    self._start_heartbeat(name, interval=interval, owner=machine_id)
-                    return {"state": True, "msg": "成功获取权限"}
+                    lease_token = f"{owner_id}|{lease_id}|{fencing_token}"
+                    self._start_heartbeat(
+                        name,
+                        interval=interval,
+                        owner=owner_id,
+                        lease_id=lease_id,
+                        fencing_token=fencing_token,
+                    )
+                    return {
+                        "state": True,
+                        "msg": "成功获取权限",
+                        "owner_id": owner_id,
+                        "lease_id": lease_id,
+                        "fencing_token": fencing_token,
+                        "lease_token": lease_token,
+                    }
 
                 return {"state": False, "msg": "存在其他活跃的初始化机器"}
 
-    def _start_heartbeat(self, name: str, interval: float, owner: str) -> None:
+    def _start_heartbeat(
+        self,
+        name: str,
+        interval: float,
+        owner: str,
+        lease_id: str,
+        fencing_token: int,
+    ) -> None:
         def heartbeat():
             while True:
                 try:
                     with self._connection() as conn:
                         with self._tx(conn, "IMMEDIATE"):
                             row = conn.execute(
-                                "SELECT owner FROM _queue_init_lock WHERE queue_name = ?",
+                                "SELECT owner, lease_id, fencing_token FROM _queue_init_lock WHERE queue_name = ?",
                                 (name,),
                             ).fetchone()
-                            if not row or row[0] != owner:
+                            if (
+                                not row
+                                or row[0] != owner
+                                or row[1] != lease_id
+                                or int(row[2]) != int(fencing_token)
+                            ):
                                 return
 
                             record_row = conn.execute(
@@ -759,8 +940,8 @@ class SQLiteQueue(TaskQueue):
                                     return
 
                             conn.execute(
-                                "UPDATE _queue_init_lock SET heartbeat = ?, interval = ? WHERE queue_name = ? AND owner = ?",
-                                (time.time(), interval, name, owner),
+                                "UPDATE _queue_init_lock SET heartbeat = ?, interval = ? WHERE queue_name = ? AND owner = ? AND lease_id = ? AND fencing_token = ?",
+                                (time.time(), interval, name, owner, lease_id, fencing_token),
                             )
                     time.sleep(max(interval - 1, 1))
                 except (KeyboardInterrupt, SystemExit):

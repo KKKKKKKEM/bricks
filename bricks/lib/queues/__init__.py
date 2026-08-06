@@ -62,6 +62,14 @@ class Item(UserDict):
 class TaskQueue(metaclass=genesis.MetaClass):
     subscribe = False
 
+    INIT_RUNNING = "INIT_RUNNING"
+    INIT_SUCCEEDED = "INIT_SUCCEEDED"
+    INIT_FAILED_RETRYABLE = "INIT_FAILED_RETRYABLE"
+    INIT_FAILED_FINAL = "INIT_FAILED_FINAL"
+
+    class InitLeaseLost(RuntimeError):
+        """Raised when an initialization worker no longer owns its lease."""
+
     class COMMANDS:
         GET_PERMISSION = "GET_PERMISSION"
 
@@ -73,6 +81,7 @@ class TaskQueue(metaclass=genesis.MetaClass):
         RESET_INIT = "RESET_INIT"
         RELEASE_INIT = "RELEASE_INIT"
         IS_INIT = "IS_INIT"
+        VALIDATE_INIT = "VALIDATE_INIT"
         SET_INIT = "SET_INIT"
 
         RUN_SUBSCRIBE = "RUN_SUBSCRIBE"

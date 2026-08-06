@@ -59,6 +59,28 @@ class RedisQueue(TaskQueue):
     end
     return success
                     """)
+            put_init = self.lua.register("""
+    local db_num = KEYS[1]
+    local default_type = KEYS[2]
+    local heartbeat_key = KEYS[3]
+    local lease_token = ARGV[1]
+    local values = {}
+
+    changeDataBase(db_num)
+    if redis.call("GET", heartbeat_key) ~= lease_token then
+        return 0
+    end
+
+    for i = 2, #ARGV do
+        table.insert(values, ARGV[i])
+    end
+
+    local success = 0
+    for i = 4, #KEYS do
+        success = success + addItems(KEYS[i], values, default_type)
+    end
+    return success
+                    """)
             replace = self.lua.register("""
     local db_num = KEYS[1]
     local default_type = KEYS[2]
@@ -149,85 +171,162 @@ class RedisQueue(TaskQueue):
     end
                     """)
             get_permission = self.lua.register("""
-    -- get_permission
+    -- Acquire an initialization lease and return its fencing token.
     local db_num = KEYS[1]
     local current_key = KEYS[2]
     local temp_key = KEYS[3]
     local failure_key = KEYS[4]
     local record_key = KEYS[5]
     local heartbeat_key = KEYS[6]
-    local date_str = KEYS[7]
-    local interval = KEYS[8]
-    local default_type = KEYS[9]
+    local epoch_key = KEYS[7]
+    local default_type = KEYS[8]
+    local owner_id = ARGV[1]
+    local lease_id = ARGV[2]
+    local interval = tonumber(ARGV[3])
 
     changeDataBase(db_num)
-        
-    -- 获取队列种子数量
+
     local queue_size = getKeySize(current_key, default_type) + getKeySize(failure_key, default_type) + getKeySize(temp_key, default_type)
-    local is_record_key_exists = redis.call("EXISTS", record_key)
-    -- 获取投放状态
-    local status = '0'
-    if is_record_key_exists == 1 then
-        status = redis.call("HGET", record_key, "status")
+    local init_state = redis.call("HGET", record_key, "init_state")
+    local status = redis.call("HGET", record_key, "status")
+    local init_running = init_state == "INIT_RUNNING" or (not init_state and status == "1")
+
+    if init_state == "INIT_FAILED_FINAL" then
+        return cjson.encode({state=false, msg="初始化失败且不允许重试"})
     end
 
-    if status ~= '1' and queue_size > 0 then
-        return "已投完且存在种子没有消费完毕"
-        
-    else
-        -- 先拿锁, 拿不到了就返回没有权限
-        local ok = redis.call("SETNX", heartbeat_key, date_str)
-        if ok ~= 1 then
-           return "获取心跳锁失败"
-        end
-        -- 拿到了锁
-        -- 设置过期时间
-        redis.call("EXPIRE", heartbeat_key, interval)
-        return "成功获取权限"
+    if not init_running and queue_size > 0 then
+        return cjson.encode({state=false, msg="已投完且存在种子没有消费完毕"})
     end
+
+    local lease_value = redis.call("GET", heartbeat_key)
+    if lease_value then
+        return cjson.encode({state=false, msg="存在其他活跃的初始化机器"})
+    end
+
+    local fencing_token = redis.call("INCR", epoch_key)
+    lease_value = owner_id .. "|" .. lease_id .. "|" .. fencing_token
+    local ok = redis.call("SET", heartbeat_key, lease_value, "NX", "EX", interval)
+    if not ok then
+        return cjson.encode({state=false, msg="存在其他活跃的初始化机器"})
+    end
+
+    return cjson.encode({
+        state=true,
+        msg="成功获取权限",
+        owner_id=owner_id,
+        lease_id=lease_id,
+        fencing_token=fencing_token,
+        lease_token=lease_value
+    })
+                    """)
+            set_init = self.lua.register("""
+    local db_num = KEYS[1]
+    local record_key = KEYS[2]
+    local heartbeat_key = KEYS[3]
+    local lease_token = ARGV[1]
+    local now_ms = ARGV[2]
+    local owner_id = ARGV[3]
+    local lease_id = ARGV[4]
+    local fencing_token = ARGV[5]
+
+    changeDataBase(db_num)
+    if redis.call("GET", heartbeat_key) ~= lease_token then
+        return 0
+    end
+
+    redis.call("HSET", record_key,
+        "time", now_ms,
+        "status", 1,
+        "init_state", "INIT_RUNNING",
+        "owner_id", owner_id,
+        "lease_id", lease_id,
+        "fencing_token", fencing_token)
+    redis.call("HDEL", record_key, "stop_heartbeat", "init_error")
+    return 1
+                    """)
+            set_record = self.lua.register("""
+    local db_num = KEYS[1]
+    local record_key = KEYS[2]
+    local heartbeat_key = KEYS[3]
+    local lease_token = ARGV[1]
+
+    changeDataBase(db_num)
+    if redis.call("GET", heartbeat_key) ~= lease_token then
+        return 0
+    end
+
+    for i = 2, #ARGV, 2 do
+        redis.call("HSET", record_key, ARGV[i], ARGV[i + 1])
+    end
+    return 1
+                    """)
+            validate_init = self.lua.register("""
+    local db_num = KEYS[1]
+    local heartbeat_key = KEYS[2]
+    local lease_token = ARGV[1]
+    changeDataBase(db_num)
+    return redis.call("GET", heartbeat_key) == lease_token
                     """)
             release_init = self.lua.register("""
-    local record_key = KEYS[1]
-    local history_key = KEYS[2]
-    local db_num = KEYS[3]
-    local machine_id = KEYS[4]
-    local history_ttl = tonumber(KEYS[5])
-    local record_ttl = tonumber(KEYS[6])
+    local db_num = KEYS[1]
+    local record_key = KEYS[2]
+    local history_key = KEYS[3]
+    local heartbeat_key = KEYS[4]
+    local lease_token = ARGV[1]
+    local init_state = ARGV[2]
+    local init_error = ARGV[3]
+    local finish_time = ARGV[4]
+    local history_ttl = tonumber(ARGV[5])
+    local record_ttl = tonumber(ARGV[6])
 
     changeDataBase(db_num)
-    redis.call("HSET", record_key, "status", 0)
+    if redis.call("GET", heartbeat_key) ~= lease_token then
+        return 0
+    end
+
+    redis.call("HSET", record_key,
+        "status", 0,
+        "init_state", init_state,
+        "finish", finish_time)
+    if init_error and init_error ~= "" then
+        redis.call("HSET", record_key, "init_error", init_error)
+    else
+        redis.call("HDEL", record_key, "init_error")
+    end
     redis.call("HSET", record_key, "stop_heartbeat", 1)
     redis.call("DEL", history_key)
     local dump = redis.call('DUMP', record_key)
-    
+
     if history_ttl ~= 0 then
         if history_ttl < 0 then
             history_ttl = 0
         end
-        
         redis.call('RESTORE', history_key, history_ttl, dump)
-        
-    else
-       redis.call('DEL', history_key)
     end
-    
+
     if record_ttl >= 0 then
         redis.call('EXPIRE', record_key, record_ttl)
-    end 
-    
-    return record_ttl
+    end
+    redis.call("DEL", heartbeat_key)
+    return 1
                     """)
 
             continue_init_heartbeat = self.lua.register("""
-    local record_key = KEYS[1]
-    local heartbeat_key = KEYS[2]
-    local interval = KEYS[3]
-    local stop_heartbeat = redis.call("HGET", record_key, "stop_heartbeat")
-    if stop_heartbeat == "1" then
-        redis.call("HDEL", record_key, "stop_heartbeat")
+    local db_num = KEYS[1]
+    local record_key = KEYS[2]
+    local heartbeat_key = KEYS[3]
+    local lease_token = ARGV[1]
+    local interval = tonumber(ARGV[2])
+
+    changeDataBase(db_num)
+    if redis.call("GET", heartbeat_key) ~= lease_token then
         return false
     end
-    redis.call("SETEX", heartbeat_key, interval, redis.call("TIME")[1])
+    if redis.call("HGET", record_key, "stop_heartbeat") == "1" then
+        return false
+    end
+    redis.call("SETEX", heartbeat_key, interval, lease_token)
     return true
             """)
 
@@ -262,16 +361,27 @@ class RedisQueue(TaskQueue):
         db_num = kwargs.get("db_num", self.database)
         genre = kwargs.get("genre", self.genre)
         qtypes = kwargs.get("qtypes", ["current"])
+        init_lease = kwargs.get("init_lease") or {}
 
         if not name or not values:
             return 0
 
         values = self.py2str(*values)
-        keys = [
-            db_num,
-            genre,
-            *[self.name2key(name, qtype) for qtype in pandora.iterable(qtypes)],
-        ]
+        queue_keys = [self.name2key(name, qtype) for qtype in pandora.iterable(qtypes)]
+        if init_lease:
+            lease_token = init_lease.get("lease_token")
+            if not lease_token:
+                return 0
+            keys = [
+                db_num,
+                genre,
+                self.name2key(name, "heartbeat"),
+                *queue_keys,
+            ]
+            args = [lease_token, *values]
+            return self.scripts.put_init(keys=keys, args=args)
+
+        keys = [db_num, genre, *queue_keys]
         args = [*values]
         count = self.scripts.put(keys=keys, args=args)
         return count
@@ -477,28 +587,15 @@ class RedisQueue(TaskQueue):
             return pubsub.run_in_thread(sleep_time=0.001, daemon=True)
 
         def get_permission():
-            """
-            判断是否有初始化权限
-            判断依据:
-                1. 已投完且存在种子没有消费完毕 -> false
-                2. 成功获取权限 -> true
-                3. 获取心跳锁失败
-                    3.1 检测心跳锁的内容
-                        3.1.1 在变化 -> false
-                        3.1.2 变为空了/ 没有变化, 重新所有流程
-
-
-            :return:
-            :rtype:
-            """
-
             def heartbeat():
-                _keys = [self.name2key(name, "record"), heartbeat_key, interval]
                 while True:
                     try:
-                        if not self.scripts.continue_init_heartbeat(keys=_keys):
+                        if not self.scripts.continue_init_heartbeat(
+                            keys=[db_num, self.name2key(name, "record"), heartbeat_key],
+                            args=[lease_token, interval],
+                        ):
                             break
-                        time.sleep(interval - 1)
+                        time.sleep(max(interval - 1, 1))
                     except (KeyboardInterrupt, SystemExit):
                         raise
 
@@ -508,7 +605,10 @@ class RedisQueue(TaskQueue):
 
             db_num = order.get("db_num", self.database)
             genre = order.get("genre", self.genre)
-            interval = order.get("interval", 5)
+            interval = max(int(float(order.get("interval", 5) or 5)), 2)
+            owner_id = order.get("owner_id") or state.MACHINE_ID
+            lease_id = order.get("lease_id") or state.MACHINE_ID
+            epoch_key = self.name2key(name, "init_epoch")
 
             heartbeat_key = self.name2key(name, "heartbeat")
             keys = [
@@ -518,53 +618,53 @@ class RedisQueue(TaskQueue):
                     for i in ["current", "temp", "failure", "record"]
                 ],
                 heartbeat_key,
-                str(datetime.datetime.now()),
-                interval,
+                epoch_key,
                 genre,
             ]
 
             while True:
                 try:
-                    msg = self.scripts.get_permission(keys=keys)
-                    start_time = time.time()
+                    msg = self.scripts.get_permission(
+                        keys=keys,
+                        args=[owner_id, lease_id, interval],
+                    )
+                    if isinstance(msg, bytes):
+                        msg = msg.decode()
+                    result = json.loads(msg) if isinstance(msg, str) else msg
 
-                    if msg == "成功获取权限":
-                        # 拿到了权限, 开启心跳任务, 去更新 heartbeat 锁的时间
-                        threading.Thread(target=heartbeat, daemon=True).start()
-                        return {"state": True, "msg": msg}
-
-                    elif msg == "已投完且存在种子没有消费完毕":
-                        return {"state": False, "msg": msg}
-
-                    else:  # 获取心跳锁失败
-                        last = ""
-                        while (
-                            time.time() - start_time < interval * 3
-                        ):  # 判断 interval*3 秒
-                            heartbeat_value = self.redis_db.get(heartbeat_key)
-                            # 锁变为空了, 重新开始所有流程
-                            if heartbeat_value == "":
-                                break
-
-                            # 锁的内容在变化, 有人在操作, 直接返回
-                            if last and last != heartbeat_value:  # 只要在变化, 就不嘻嘻
-                                return {
-                                    "state": False,
-                                    "msg": "存在其他活跃的初始化机器",
-                                }
-
-                            last = heartbeat_value
-                            time.sleep(1)
-
-                        # 锁没动过, 也重新开始所有流程
+                    if result.get("state"):
+                        lease_token = result["lease_token"]
+                        threading.Thread(
+                            target=heartbeat,
+                            daemon=True,
+                            name=f"RedisQueueHeartbeat:{name}",
+                        ).start()
+                    return result
                 except Exception as permission_e:
                     logger.error(f"[get_permission] {permission_e}")
                     time.sleep(30)
 
         def set_record():
-            self.redis_db.hset(
-                self.name2key(name, "record"),
-                mapping=json.loads(json.dumps(order["record"], default=str)),
+            record = json.loads(json.dumps(order["record"], default=str))
+            lease_token = order.get("lease_token")
+            if not lease_token:
+                return self.redis_db.hset(
+                    self.name2key(name, "record"),
+                    mapping=record,
+                )
+
+            values = []
+            for field, value in record.items():
+                values.extend([field, json.dumps(value, default=str) if isinstance(value, (dict, list)) else str(value)])
+            return bool(
+                self.scripts.set_record(
+                    keys=[
+                        order.get("db_num", self.database),
+                        self.name2key(name, "record"),
+                        self.name2key(name, "heartbeat"),
+                    ],
+                    args=[lease_token, *values],
+                )
             )
 
         def wait_init():
@@ -579,7 +679,15 @@ class RedisQueue(TaskQueue):
 
                 # 初始化爬虫设置的开始初始化时间
                 t2 = self.redis_db.hget(key, "time")
-                # 当前初始化状态: 1 为开始, 0 为未开始 / 结束
+                init_state = self.redis_db.hget(key, "init_state")
+                if init_state in {
+                    TaskQueue.INIT_SUCCEEDED,
+                    TaskQueue.INIT_FAILED_RETRYABLE,
+                    TaskQueue.INIT_FAILED_FINAL,
+                }:
+                    return
+
+                # 兼容旧记录: status=1 表示初始化已开始
                 status = int(self.redis_db.hget(key, "status") or "0")
                 if status == 1:
                     return
@@ -592,9 +700,28 @@ class RedisQueue(TaskQueue):
                 time.sleep(1)
 
         def set_init():
-            key = self.name2key(name, "record")
-            self.redis_db.hset(
-                key, mapping={"time": int(time.time() * 1000), "status": 1}
+            lease_token = order.get("lease_token")
+            if not lease_token:
+                key = self.name2key(name, "record")
+                return self.redis_db.hset(
+                    key, mapping={"time": int(time.time() * 1000), "status": 1}
+                )
+
+            return bool(
+                self.scripts.set_init(
+                    keys=[
+                        order.get("db_num", self.database),
+                        self.name2key(name, "record"),
+                        self.name2key(name, "heartbeat"),
+                    ],
+                    args=[
+                        lease_token,
+                        int(time.time() * 1000),
+                        order.get("owner_id", ""),
+                        order.get("lease_id", ""),
+                        order.get("fencing_token", ""),
+                    ],
+                )
             )
 
         def is_init():
@@ -603,35 +730,64 @@ class RedisQueue(TaskQueue):
             if not self.is_empty(name):
                 return True
 
-            # record 存在, 并且 status 为 1 -> true
-            if self.redis_db.exists(key) and self.redis_db.hget(key, "status") == "1":
+            # record 存在, 并且初始化仍在运行 -> true
+            if self.redis_db.exists(key) and (
+                self.redis_db.hget(key, "init_state") == TaskQueue.INIT_RUNNING
+                or self.redis_db.hget(key, "status") == "1"
+            ):
                 return True
 
             return False
 
+        def validate_init():
+            lease_token = order.get("lease_token")
+            if not lease_token:
+                return False
+            return bool(
+                self.scripts.validate_init(
+                    keys=[
+                        order.get("db_num", self.database),
+                        self.name2key(name, "heartbeat"),
+                    ],
+                    args=[lease_token],
+                )
+            )
+
         def release_init():
-            key = self.name2key(name, "record")
             history = self.name2key(name, "history")
             db_num = order.get("db_num", self.database)
             history_ttl = order.get("history_ttl") or 0
             record_ttl = order.get("record_ttl") or 0
+            lease_token = order.get("lease_token")
+
+            if not lease_token:
+                return False
 
             ret = self.scripts.release_init(
                 keys=[
-                    key,
-                    history,
                     db_num,
-                    state.MACHINE_ID,
+                    self.name2key(name, "record"),
+                    history,
+                    self.name2key(name, "heartbeat"),
+                ],
+                args=[
+                    lease_token,
+                    order.get("init_state", TaskQueue.INIT_SUCCEEDED),
+                    order.get("init_error", ""),
+                    order.get("finish", str(datetime.datetime.now())),
                     history_ttl * 1000,
                     record_ttl,
-                ]
+                ],
             )
             return bool(ret)
 
         def get_record():
             key = self.name2key(name, "record")
             record = self.redis_db.hgetall(key) or {}
-            if record.get("status") == "0":
+            if record.get("status") == "0" and record.get("init_state") not in {
+                TaskQueue.INIT_FAILED_RETRYABLE,
+                TaskQueue.INIT_FAILED_FINAL,
+            }:
                 self.redis_db.delete(key)
                 return {}
             else:
@@ -649,6 +805,7 @@ class RedisQueue(TaskQueue):
             self.COMMANDS.RESET_INIT: lambda: self.clear(name),
             self.COMMANDS.RELEASE_INIT: release_init,
             self.COMMANDS.IS_INIT: is_init,
+            self.COMMANDS.VALIDATE_INIT: validate_init,
             self.COMMANDS.SET_INIT: set_init,
         }
         action = order["action"]

@@ -4,11 +4,14 @@
 # @Desc    :
 import contextlib
 import datetime
+import asyncio
 import inspect
 import json
 import math
 import queue
+import random
 import re
+import threading
 import time
 import uuid
 from typing import Callable, Iterable, List, Optional, Union
@@ -319,6 +322,17 @@ class Spider(Pangu):
         fdel=lambda self: setattr(self, "$isMaster", False),
     )
 
+    # A developer may opt into retrying an initialization business failure.
+    init_failure_retryable = False
+
+    # Queue errors use bounded exponential backoff by default. These settings
+    # can be overridden on a spider subclass when a different service policy is needed.
+    spider_error_backoff = 1.0
+    spider_error_backoff_max = 60.0
+    spider_error_jitter = 0.2
+    spider_max_failures = 5
+    spider_fail_fast = False
+
     @property
     def flows(self):
         return {
@@ -341,120 +355,159 @@ class Spider(Pangu):
             "init.task_queue", self.task_queue
         )  # type: ignore
         queue_name: str = self.get("init.queue_name", self.queue_name)  # type: ignore
-        # 判断是否有初始化权限
+        owner_id = f"{state.MACHINE_ID}:{uuid.uuid4().hex}"
+        lease_id = uuid.uuid4().hex
+
         permission_info: dict = task_queue.command(
-            queue_name, {"action": task_queue.COMMANDS.GET_PERMISSION, "interval": 10}
+            queue_name,
+            {
+                "action": task_queue.COMMANDS.GET_PERMISSION,
+                "interval": 10,
+                "owner_id": owner_id,
+                "lease_id": lease_id,
+            },
         )
         if not permission_info["state"]:
             logger.debug(
                 f"[停止投放] 当前机器 ID: {state.MACHINE_ID}, 原因: {permission_info['msg']}"
             )
-            return
+            return {
+                "init_state": "INIT_SKIPPED",
+                "message": permission_info["msg"],
+            }
 
-        self.is_master = True
-        task_queue.command(
-            queue_name, {"action": task_queue.COMMANDS.SET_INIT, "interval": 5}
-        )
-
-        logger.debug(f"[开始投放] 获取初始化权限成功, MACHINE_ID: {state.MACHINE_ID}")
-        # 本地的初始化记录 -> 启动传入的
-        local_init_record: dict = self.get("init.record") or {}
-        # 云端的初始化记录 -> 初始化的时候会存储(如果支持的话)
-        remote_init_record = (
-            task_queue.command(
-                queue_name, {"action": task_queue.COMMANDS.GET_RECORD, "filter": 1}
-            )
-            or {}
-        )
-
-        # 初始化记录信息
-        record: dict = {
-            **local_init_record,
-            **remote_init_record,
-            "queue_name": queue_name,
-            "task_queue": task_queue,
-            "identifier": state.MACHINE_ID,
+        lease = {
+            key: permission_info[key]
+            for key in ("owner_id", "lease_id", "fencing_token", "lease_token")
+            if key in permission_info
         }
-
-        # 设置一个启动时间, 防止被覆盖
-        record.setdefault("start", str(datetime.datetime.now()))
-
-        # 获取已经初始化的总量
-        total = int(record.setdefault("total", 0))
-        # 获取已经初始化的去重数量
-        success = int(record.setdefault("success", 0))
-
-        # 初始化总数量阈值 -> 大于这个数量停止初始化
-        total_size = self.get("init.total.size", math.inf)
-        # 当前初始化总量阈值 -> 大于这个数量停止初始化
-        count_size = self.get("init.count.size", math.inf)
-        # 初始化成功数量阈值 (去重) -> 大于这个数量停止初始化
-        success_size = self.get("init.success.size", math.inf)
-        # 初始化队列最大数量 -> 大于这个数量暂停初始化
-        queue_size: int = self.get("init.queue.size", 100000)  # type: ignore
-        is_continue: bool = self.get("init.continue", False)  # type: ignore
-
-        # 历史记录的 TTL时间, 默认为 -1, 0->立即删除, -1->不过期, 其他->过期时间
+        init_state = TaskQueue.INIT_SUCCEEDED
+        init_error = ""
+        record = {}
         history_ttl = self.get("init.history.ttl", -1)  # type: ignore
-
-        # record 的 TTL时间, 默认为 -1, 0->立即删除, -1->不过期, 其他->过期时间
         record_ttl = self.get("init.record.ttl", -1)  # type: ignore
 
-        settings = {
-            "total": total,
-            "success": success,
-            "count": 0,
-            "record": record,
-            "queue_size": queue_size,
-            "total_size": total_size,
-            "success_size": success_size,
-            "count_size": count_size,
-        }
+        self.is_master = True
+        try:
+            if not task_queue.command(
+                queue_name,
+                {"action": task_queue.COMMANDS.SET_INIT, **lease},
+            ):
+                raise task_queue.InitLeaseLost("初始化租约已失效")
 
-        context = self.make_context(
-            self.InitContext,
-            task_queue=task_queue,
-            queue_name=queue_name,
-            settings=settings,
-        )
-        record: dict = settings.get("record") or {}  # type: ignore
+            logger.debug(f"[开始投放] 获取初始化权限成功, MACHINE_ID: {state.MACHINE_ID}")
+            local_init_record: dict = self.get("init.record") or {}
+            remote_init_record = (
+                task_queue.command(
+                    queue_name, {"action": task_queue.COMMANDS.GET_RECORD, "filter": 1}
+                )
+                or {}
+            )
 
-        gen = pandora.invoke(
-            func=self.make_seeds,
-            kwargs={"record": record},
-            annotations=context.annotations,
-            namespace=context.namespace,
-        )
+            record = {
+                **local_init_record,
+                **remote_init_record,
+                "queue_name": queue_name,
+                "task_queue": task_queue,
+                "identifier": state.MACHINE_ID,
+                "init_state": TaskQueue.INIT_RUNNING,
+                "owner_id": lease.get("owner_id", ""),
+                "lease_id": lease.get("lease_id", ""),
+                "fencing_token": lease.get("fencing_token", ""),
+            }
+            record.setdefault("start", str(datetime.datetime.now()))
 
-        if not inspect.isgenerator(gen):
-            gen = [gen]
+            total = int(record.setdefault("total", 0))
+            success = int(record.setdefault("success", 0))
+            total_size = self.get("init.total.size", math.inf)
+            count_size = self.get("init.count.size", math.inf)
+            success_size = self.get("init.success.size", math.inf)
+            queue_size: int = self.get("init.queue.size", 100000)  # type: ignore
+            is_continue: bool = self.get("init.continue", False)  # type: ignore
 
-        need_skip = min(success, total)
-        for seeds in gen:
-            if is_continue and need_skip > 0:
-                seeds = pandora.iterable(seeds)
-                raw_size = len(seeds)
-                seeds = seeds[need_skip:]
-                need_skip -= raw_size - len(seeds)
+            settings = {
+                "total": total,
+                "success": success,
+                "count": 0,
+                "record": record,
+                "init_lease": lease,
+                "queue_size": queue_size,
+                "total_size": total_size,
+                "success_size": success_size,
+                "count_size": count_size,
+            }
 
-            if not seeds:
-                continue
+            context = self.make_context(
+                self.InitContext,
+                task_queue=task_queue,
+                queue_name=queue_name,
+                settings=settings,
+            )
 
-            ctx = context.copy()
-            ctx.flow({"next": self.produce_seeds, "seeds": seeds})
-            self.on_consume(ctx)
+            gen = pandora.invoke(
+                func=self.make_seeds,
+                kwargs={"record": record},
+                annotations=context.annotations,
+                namespace=context.namespace,
+            )
 
-        record.update(finish=str(datetime.datetime.now()))
-        task_queue.command(
-            queue_name,
-            {
-                "action": task_queue.COMMANDS.RELEASE_INIT,
-                "time": int(time.time() * 1000),
-                "history_ttl": history_ttl,
-                "record_ttl": record_ttl,
-            },
-        )
-        return record
+            if not inspect.isgenerator(gen):
+                gen = [gen]
+
+            need_skip = min(success, total)
+            for seeds in gen:
+                if is_continue and need_skip > 0:
+                    seeds = pandora.iterable(seeds)
+                    raw_size = len(seeds)
+                    seeds = seeds[need_skip:]
+                    need_skip -= raw_size - len(seeds)
+
+                if not seeds:
+                    continue
+
+                ctx = context.copy()
+                ctx.flow({"next": self.produce_seeds, "seeds": seeds})
+                self.on_consume(ctx)
+
+            record.update(
+                finish=str(datetime.datetime.now()),
+                init_state=TaskQueue.INIT_SUCCEEDED,
+            )
+            return record
+        except (KeyboardInterrupt, SystemExit):
+            init_state = TaskQueue.INIT_FAILED_RETRYABLE
+            init_error = "初始化进程被终止"
+            raise
+        except BaseException as exc:
+            retryable = bool(self.get("init_failure_retryable", False))
+            init_state = (
+                TaskQueue.INIT_FAILED_RETRYABLE
+                if retryable
+                else TaskQueue.INIT_FAILED_FINAL
+            )
+            init_error = repr(exc)
+            logger.exception(f"[初始化失败] queue={queue_name}, state={init_state}")
+            raise
+        finally:
+            try:
+                release_result = task_queue.command(
+                    queue_name,
+                    {
+                        "action": task_queue.COMMANDS.RELEASE_INIT,
+                        **lease,
+                        "init_state": init_state,
+                        "init_error": init_error,
+                        "finish": record.get("finish", str(datetime.datetime.now())),
+                        "history_ttl": history_ttl,
+                        "record_ttl": record_ttl,
+                    },
+                )
+                if not release_result:
+                    logger.warning("[初始化租约] 释放失败，可能已被其他实例接管")
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as release_error:
+                logger.error(f"[初始化租约] 释放异常: {release_error}")
 
     def produce_seeds(self, context: InitContext):
         """
@@ -484,6 +537,16 @@ class Spider(Pangu):
                 "seeds": seeds,
             }
         )
+        init_lease = settings.get("init_lease") or {}
+        if init_lease and not context.task_queue.command(
+            context.queue_name,
+            {
+                "action": context.task_queue.COMMANDS.VALIDATE_INIT,
+                **init_lease,
+            },
+        ):
+            raise context.task_queue.InitLeaseLost("初始化租约已失效")
+
         fettle = pandora.invoke(
             func=self.put_seeds,
             args=[context.seeds],
@@ -506,13 +569,16 @@ class Spider(Pangu):
             }
         )
 
-        context.task_queue.command(
+        record_saved = context.task_queue.command(
             context.queue_name,
             {
                 "action": context.task_queue.COMMANDS.SET_RECORD,
                 "record": settings["record"],
+                **(settings.get("init_lease") or {}),
             },
         )
+        if record_saved is False:
+            raise context.task_queue.InitLeaseLost("初始化租约已失效")
         logger.debug(output)
 
         if (
@@ -579,6 +645,7 @@ class Spider(Pangu):
                     "queue_name": context.queue_name,
                     "maxsize": context.maxsize,
                     "priority": context.priority,
+                    "init_lease": (context.obtain("settings") or {}).get("init_lease"),
                     **kwargs,
                 }
             else:
@@ -617,6 +684,118 @@ class Spider(Pangu):
         )  # type: ignore
         queue_name: str = self.get("spider.queue_name", self.queue_name)  # type: ignore
         output = time.time()
+        consecutive_failures = 0
+
+        def setting(name, default):
+            return self.get(name, self.get(name.replace(".", "_"), default))
+
+        def spider_result(error=None):
+            number_of_seeds_obtained = self.number_of_seeds_obtained.value
+            number_of_new_seeds = self.number_of_new_seeds.value
+            number_of_total_requests = self.number_of_total_requests.value
+            number_of_failure_requests = self.number_of_failure_requests.value
+            number_of_success_requests = (
+                number_of_total_requests - number_of_failure_requests
+            )
+            rate_of_success_requests = (
+                round(number_of_success_requests / number_of_total_requests * 100, 2)
+                if number_of_total_requests
+                else 0
+            )
+            result = {
+                "number_of_seeds_obtained": number_of_seeds_obtained,
+                "number_of_new_seeds": number_of_new_seeds,
+                "number_of_total_requests": number_of_total_requests,
+                "number_of_failure_requests": number_of_failure_requests,
+                "number_of_success_requests": number_of_success_requests,
+                "request_success_rate": rate_of_success_requests,
+            }
+            if error:
+                result.update(error)
+            return result
+
+        def classify_error(error):
+            module = error.__class__.__module__.lower()
+            name = error.__class__.__name__.lower()
+            if (
+                isinstance(error, (ConnectionError, TimeoutError, OSError))
+                or module.startswith(("redis", "sqlite3"))
+                or any(
+                    token in name
+                    for token in ("connection", "timeout", "operational", "interface")
+                )
+            ):
+                return "backend"
+            if isinstance(error, (TypeError, ValueError, KeyError, AttributeError)):
+                return "configuration"
+            return "business"
+
+        def handle_error(error, context):
+            nonlocal consecutive_failures
+            consecutive_failures += 1
+            category = classify_error(error)
+            EventManager.invoke(
+                Error(context=context, error=error), errors="output"
+            )
+
+            try:
+                base = max(float(setting("spider.error.backoff", 1.0)), 0.0)
+                maximum = max(
+                    float(setting("spider.error.backoff.max", 60.0)), base
+                )
+                jitter_ratio = max(
+                    float(setting("spider.error.jitter", 0.2)), 0.0
+                )
+                max_failures = int(setting("spider.max.failures", 5) or 0)
+                fail_fast = bool(setting("spider.fail.fast", False))
+                stop_on_max = bool(
+                    setting("spider.stop.on.max.failures", not self.forever)
+                )
+            except (TypeError, ValueError, KeyError, AttributeError) as config_error:
+                logger.error(f"[爬虫停止] 异常退避配置无效: {config_error}")
+                return spider_result(
+                    {
+                        "stopped_by_error": True,
+                        "error_category": "configuration",
+                        "error": repr(config_error),
+                        "consecutive_failures": consecutive_failures,
+                    }
+                )
+
+            delay = min(
+                maximum,
+                base * (2 ** max(consecutive_failures - 1, 0)),
+            )
+            delay = min(maximum, delay + delay * jitter_ratio * random.random())
+
+            should_stop = category == "configuration" or fail_fast
+            should_stop = should_stop or (
+                max_failures > 0
+                and consecutive_failures >= max_failures
+                and stop_on_max
+            )
+
+            if should_stop:
+                logger.error(
+                    f"[爬虫停止] 队列异常类别: {category}, "
+                    f"连续失败: {consecutive_failures}, 原因: {error}"
+                )
+                return spider_result(
+                    {
+                        "stopped_by_error": True,
+                        "error_category": category,
+                        "error": repr(error),
+                        "consecutive_failures": consecutive_failures,
+                    }
+                )
+
+            logger.warning(
+                f"[爬虫退避] 队列异常类别: {category}, "
+                f"连续失败: {consecutive_failures}, "
+                f"{delay:.2f}s 后重试"
+            )
+            time.sleep(delay)
+            return None
 
         while True:
             context: Context = self.make_context(
@@ -633,9 +812,11 @@ class Spider(Pangu):
                     fettle = prepared.func(*prepared.args, **prepared.kwargs)
 
                 except signals.Wait as sig:
+                    consecutive_failures = 0
                     time.sleep(sig.duration)
 
                 except signals.Success:
+                    consecutive_failures = 0
                     if context.form == state.const.BEFORE_GET_SEEDS:
                         time.sleep(1)
 
@@ -646,6 +827,7 @@ class Spider(Pangu):
                         raise
 
                 except signals.Failure:
+                    consecutive_failures = 0
                     if context.form == state.const.BEFORE_GET_SEEDS:
                         time.sleep(1)
 
@@ -656,78 +838,52 @@ class Spider(Pangu):
                         raise
 
                 except signals.Empty:
-                    # 判断是否应该停止爬虫
-                    #  没有初始化 + 本地没有运行的任务 + 任务队列为空 -> 退出
-                    if (
-                        not task_queue.command(
-                            queue_name, {"action": task_queue.COMMANDS.IS_INIT}
-                        )
-                        and not self.forever
-                        and self.dispatcher.running == 0
-                        and task_queue.is_empty(
-                            queue_name,
-                            threshold=self.get("spider.threshold", default=0),
-                        )
-                    ):
-                        number_of_seeds_obtained = self.number_of_seeds_obtained.value
-                        number_of_new_seeds = self.number_of_new_seeds.value
-                        number_of_total_requests = self.number_of_total_requests.value
-                        number_of_failure_requests = (
-                            self.number_of_failure_requests.value
-                        )
-                        number_of_success_requests = (
-                            number_of_total_requests - number_of_failure_requests
-                        )
-                        if number_of_total_requests:
-                            rate_of_success_requests = round(
-                                number_of_success_requests
-                                / number_of_total_requests
-                                * 100,
-                                2,
+                    try:
+                        # 没有初始化、本地没有运行任务且队列为空时退出。
+                        if (
+                            not task_queue.command(
+                                queue_name, {"action": task_queue.COMMANDS.IS_INIT}
                             )
-                        else:
-                            rate_of_success_requests = 0
+                            and not self.forever
+                            and self.dispatcher.running == 0
+                            and task_queue.is_empty(
+                                queue_name,
+                                threshold=self.get("spider.threshold", default=0),
+                            )
+                        ):
+                            logger.debug(
+                                f"[爬取完毕] 队列名称: {queue_name} "
+                                f'关闭阈值: {self.get("spider.threshold", default=0)} '
+                                f"已获取的种子数量: {self.number_of_seeds_obtained.value} "
+                                f"新增的种子数量: {self.number_of_new_seeds.value} "
+                                f"总的请求数量: {self.number_of_total_requests.value} "
+                            )
+                            return spider_result()
 
-                        logger.debug(
-                            f"[爬取完毕] "
-                            f"队列名称: {queue_name} "
-                            f'关闭阈值: {self.get("spider.threshold", default=0)} '
-                            f"已获取的种子数量: {number_of_seeds_obtained} "
-                            f"新增的种子数量: {number_of_new_seeds} "
-                            f"总的请求数量: {number_of_total_requests} "
-                            f"请求成功率: {rate_of_success_requests}% "
-                        )
-
-                        return {
-                            "number_of_seeds_obtained": number_of_seeds_obtained,
-                            "number_of_new_seeds": number_of_new_seeds,
-                            "number_of_total_requests": number_of_total_requests,
-                            "number_of_failure_requests": number_of_failure_requests,
-                            "number_of_success_requests": number_of_success_requests,
-                            "request_success_rate": rate_of_success_requests,
-                        }
-
-                    else:
                         if task_queue.smart_reverse(
                             queue_name, status=self.dispatcher.running
                         ):
                             logger.debug(f"[翻转队列] 队列名称: {queue_name}")
-
                         else:
                             if time.time() - output > 3600:
                                 logger.debug(f"[等待任务] 队列名称: {queue_name}")
                                 output = time.time()
-
                             time.sleep(1)
+                        consecutive_failures = 0
+                    except Exception as error:
+                        result = handle_error(error, context)
+                        if result is not None:
+                            return result
 
                 except (KeyboardInterrupt, SystemExit):
                     raise
                 except Exception as e:
-                    EventManager.invoke(
-                        Error(context=context, error=e), errors="output"
-                    )
+                    result = handle_error(e, context)
+                    if result is not None:
+                        return result
 
                 else:
+                    consecutive_failures = 0
                     self.number_of_seeds_pending += len(pandora.iterable(fettle))
                     for seeds in pandora.iterable(fettle):
                         stuff = context.copy()
@@ -736,8 +892,43 @@ class Spider(Pangu):
                         self.number_of_seeds_obtained.increment()
                         self.number_of_seeds_pending -= 1
 
+    def _cleanup_downloader(self):
+        if getattr(self, "_downloader_cleaned", False):
+            return
+        self._downloader_cleaned = True
+
+        clear_session = getattr(self.downloader, "clear_session", None)
+        if not clear_session or inspect.isclass(self.downloader):
+            return
+
+        try:
+            cleanup = clear_session()
+            if not inspect.isawaitable(cleanup):
+                return
+
+            if self.dispatcher.is_running():
+                async def wait_cleanup():
+                    return await cleanup
+
+                if threading.current_thread() is self.dispatcher.thread:
+                    # The dispatcher loop cannot synchronously wait on itself.
+                    asyncio.ensure_future(cleanup, loop=self.dispatcher.loop)
+                else:
+                    self.active(dispatch.Task(func=wait_cleanup)).result()
+                return
+
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.run(cleanup)
+            else:
+                asyncio.ensure_future(cleanup, loop=loop)
+        except Exception as exc:
+            logger.exception(f"[downloader] clear_session failed: {exc}")
+
     @intercept("run_spider")
     def _intercept_run_spider(self, raw_method):
+
         def wrapper(*args, **kwargs):
             with self.dispatcher:
                 task_queue: TaskQueue = self.get(
@@ -763,20 +954,18 @@ class Spider(Pangu):
                     try:
                         hasattr(server, "stop") and server.stop()  # type: ignore
                     finally:
-                        clear_session = getattr(
-                            self.downloader, "clear_session", None
-                        )
-                        if clear_session and not inspect.isclass(self.downloader):
-                            cleanup = clear_session()
-                            if inspect.isawaitable(cleanup):
-                                async def wait_cleanup():
-                                    return await cleanup
-
-                                self.active(
-                                    dispatch.Task(func=wait_cleanup)
-                                ).result()
+                        self._cleanup_downloader()
 
         return wrapper
+
+    def close(self):
+        """Stop spider resources and unregister all instance events."""
+        if getattr(self, "_closed", False):
+            return
+        cleanup = getattr(self, "_cleanup_downloader", None)
+        if cleanup is not None:
+            cleanup()
+        super().close()
 
     def run_all(self):
         with self.dispatcher:
@@ -790,7 +979,24 @@ class Spider(Pangu):
             task_queue.command(
                 queue_name, {"action": task_queue.COMMANDS.WAIT_INIT, "time": t1}
             )
-            return {"spider": self.run_spider(), "init": future.result()}
+            spider_result = self.run_spider()
+            try:
+                init_result = future.result()
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as exc:
+                # Initialization is a producer service; do not turn its failure
+                # into a failure of consumers that can drain existing tasks.
+                init_result = {
+                    "init_state": (
+                        TaskQueue.INIT_FAILED_RETRYABLE
+                        if bool(getattr(self, "init_failure_retryable", False))
+                        else TaskQueue.INIT_FAILED_FINAL
+                    ),
+                    "init_error": repr(exc),
+                }
+                logger.error(f"[初始化任务] 已结束但不影响消费服务: {exc}")
+            return {"spider": spider_result, "init": init_result}
 
     @staticmethod
     def get_seeds(**kwargs) -> Union[Iterable[Item], Item]:
@@ -1158,7 +1364,10 @@ class Spider(Pangu):
         attrs.setdefault("queue_name", f"{cls.__module__}.{cls.__name__}:survey")
         clazz = type("Survey", (cls,), modded)
         survey: Spider = clazz(**attrs)  # type: ignore
-        survey.run()
+        try:
+            survey.run()
+        finally:
+            survey.close()
         return (
             list(collect.queue)
             if not extract

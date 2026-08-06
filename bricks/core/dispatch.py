@@ -366,7 +366,10 @@ class Dispatcher:
                 waiters.append(worker)
 
         for waiter in waiters:
-            waiter.wait()
+            # A task may close its own dispatcher. Waiting for that worker
+            # here would deadlock until the worker can process its shutdown task.
+            if waiter is not threading.current_thread():
+                waiter.wait()
 
     def pause_worker(self, *idents: str) -> None:
         """

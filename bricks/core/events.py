@@ -166,12 +166,21 @@ class Register:
         with REGISTERED_EVENTS:
             if self.task.box and self.task in self.task.box:
                 self.task.box.remove(self.task)
+            self.task.box = None
 
             # 清理registered索引，避免内存泄漏
-            if self.target in REGISTERED_EVENTS.registered:
-                registered_list = REGISTERED_EVENTS.registered[self.target]
+            registered_list = REGISTERED_EVENTS.registered.get(self.target)
+            if registered_list is not None:
                 if self in registered_list:
                     registered_list.remove(self)
+                if not registered_list:
+                    REGISTERED_EVENTS.registered.pop(self.target, None)
+
+            EventManager._cleanup_registered(self.task)
+            if self.target not in REGISTERED_EVENTS.registered:
+                for cache_key in list(REGISTERED_EVENTS._sorted_cache):
+                    if cache_key[1] is self.target:
+                        REGISTERED_EVENTS._sorted_cache.pop(cache_key, None)
 
     def reindex(self, index: int):
         """
@@ -375,9 +384,56 @@ class EventManager:
         :param event: 要清理的事件任务
         """
         for target, registers in list(REGISTERED_EVENTS.registered.items()):
-            REGISTERED_EVENTS.registered[target] = [
-                reg for reg in registers if reg.task is not event
-            ]
+            remaining = [reg for reg in registers if reg.task is not event]
+            if remaining:
+                REGISTERED_EVENTS.registered[target] = remaining
+            else:
+                REGISTERED_EVENTS.registered.pop(target, None)
+
+        for group in (
+            REGISTERED_EVENTS.permanent,
+            REGISTERED_EVENTS.disposable,
+        ):
+            for form, targets in list(group.items()):
+                for target, box in list(targets.items()):
+                    if event in box:
+                        box.remove(event)
+                    if not box:
+                        targets.pop(target, None)
+                if not targets:
+                    group.pop(form, None)
+
+        event.box = None
+        for cache_key in list(REGISTERED_EVENTS._sorted_cache):
+            if cache_key[1] not in REGISTERED_EVENTS.registered:
+                REGISTERED_EVENTS._sorted_cache.pop(cache_key, None)
+
+    @classmethod
+    def unregister(cls, target: Any) -> int:
+        """Remove every event owned by one target instance."""
+        removed = 0
+        with REGISTERED_EVENTS:
+            registered = list(REGISTERED_EVENTS.registered.pop(target, []))
+            for register in registered:
+                if register.task.box and register.task in register.task.box:
+                    register.task.box.remove(register.task)
+                    removed += 1
+                register.task.box = None
+
+            for group in (
+                REGISTERED_EVENTS.permanent,
+                REGISTERED_EVENTS.disposable,
+            ):
+                for form, targets in list(group.items()):
+                    targets.pop(target, None)
+                    if not targets:
+                        group.pop(form, None)
+
+            for cache_key in list(REGISTERED_EVENTS._sorted_cache):
+                if cache_key[1] is target:
+                    REGISTERED_EVENTS._sorted_cache.pop(cache_key, None)
+
+        return removed
 
     @classmethod
     def _call(

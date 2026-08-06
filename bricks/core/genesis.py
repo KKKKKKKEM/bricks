@@ -135,19 +135,16 @@ class Chaos(metaclass=MetaClass):
 
             except (signals.Failure, signals.Success):
                 logger.debug(f"[{const.BEFORE_START}] 任务被中断")
+                self.close()
                 return None
 
             except signals.Signal as e:
                 logger.warning(f"[{const.BEFORE_START}] 无法处理的信号类型: {e}")
 
-            ret = raw_method(*args, **kwargs)
-
             try:
-                self.before_close()
-            except signals.Signal as e:
-                logger.warning(f"[{const.BEFORE_CLOSE}] 无法处理的信号类型: {e}")
-
-            return ret
+                return raw_method(*args, **kwargs)
+            finally:
+                self.close()
 
         return wrapper
 
@@ -193,6 +190,7 @@ class Pangu(Chaos):
     Context = Flow
 
     def __init__(self, **kwargs) -> None:
+        self._closed = False
         for k, v in kwargs.items():
             self.set(k, v, nx=True)
 
@@ -244,9 +242,31 @@ class Pangu(Chaos):
                     )
                     self.use(spec.form, task)
 
+    def close(self):
+        """Close the instance and release event/dispatcher resources."""
+        if self._closed:
+            return
+        self._closed = True
+
+        try:
+            self.before_close()
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except signals.Signal as exc:
+            logger.warning(f"[{const.BEFORE_CLOSE}] 无法处理的信号类型: {exc}")
+        except Exception as exc:
+            logger.exception(f"[close] before_close failed: {exc}")
+        finally:
+            EventManager.unregister(self)
+            dispatcher = getattr(self, "dispatcher", None)
+            if dispatcher is not None:
+                dispatcher.stop()
+
+    dispose = close
+
     @property
     def plugins(self) -> List[Register]:
-        return REGISTERED_EVENTS.registered[self]  # type: ignore
+        return REGISTERED_EVENTS.registered.get(self, [])  # type: ignore
 
     def on_consume(self, context: Flow):  # type: ignore
         context.doing.appendleft(context)
