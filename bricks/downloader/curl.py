@@ -3,7 +3,6 @@
 # @Author  : Kem
 # @Desc    : pycurl 下载器
 
-import copy
 import io
 import os
 import random
@@ -53,9 +52,25 @@ class Downloader(AbstractDownloader):
 
         """
 
+        headers = {}
+        header_blocks = []
+        current_status = None
+
         def with_header(raw_header_line):
+            nonlocal current_status
             # HTTP standard specifies that headers are encoded in iso-8859-1.
             header_line = raw_header_line.decode("iso-8859-1")
+
+            if header_line.startswith("HTTP/"):
+                if current_status in (301, 302, 303, 307, 308) and headers:
+                    header_blocks.append((current_status, dict(headers)))
+                headers.clear()
+                parts = header_line.split(None, 2)
+                try:
+                    current_status = int(parts[1])
+                except (IndexError, ValueError):
+                    current_status = None
+                return
 
             # Header lines include the first status line (HTTP/1.x ...).
             # We are going to ignore all lines that don't have a colon in them.
@@ -80,8 +95,10 @@ class Downloader(AbstractDownloader):
                 )
             return cookies
 
-        if request.use_session:
+        reuse_session = self.should_reuse_session(request)
+        if reuse_session:
             curl = request.get_options("$session") or self.get_session()
+            curl.reset()  # Clear previous request state (method, body, headers, etc.)
         else:
             curl = pycurl.Curl()
         next_url = request.real_url
@@ -92,7 +109,7 @@ class Downloader(AbstractDownloader):
             pycurl.SSL_CIPHER_LIST: self.set_cipher,
             pycurl.AUTOREFERER: 1,
             pycurl.VERBOSE: 0,
-            pycurl.FOLLOWLOCATION: 0,
+            pycurl.FOLLOWLOCATION: int(request.allow_redirects),
             pycurl.HEADERFUNCTION: with_header,
             pycurl.URL: next_url,
             pycurl.COOKIEFILE: "",
@@ -108,61 +125,73 @@ class Downloader(AbstractDownloader):
         options.update(self.build_cert_options(request))
         options.update(self.build_proxy_options(request))
         options.update(self.build_version_options(request))
-        _referer = request.options.pop("$referer", False)
-        options.update(request.options)
+        options.update(
+            {
+                key: value
+                for key, value in request.options.items()
+                if isinstance(key, int)
+            }
+        )
 
         res = Response.make_response(request=request)
 
-        _redirect_count = 0
-
         try:
+            body = io.BytesIO()
             for option, value in options.items():
                 curl.setopt(option, value)
+            curl.setopt(pycurl.WRITEFUNCTION, body.write)
+            curl.perform()
 
-            while True:
-                assert _redirect_count < 999, "已经超过最大重定向次数: 999"
-                body, headers = io.BytesIO(), {}
-                curl.setopt(pycurl.URL, next_url)
-                curl.setopt(pycurl.WRITEFUNCTION, body.write)
-                curl.setopt(
-                    pycurl.HTTPHEADER,
-                    self.build_headers_options(request.headers)[pycurl.HTTPHEADER],
-                )
-                curl.perform()
-
-                next_url = headers.get("Location") or headers.get("location")
-
-                if request.allow_redirects and next_url:
-                    next_url = urllib.parse.urljoin(options[pycurl.URL], next_url)
-                    _redirect_count += 1
-                    res.history.append(
-                        Response(
-                            content=body.getvalue(),
-                            status_code=curl.getinfo(pycurl.HTTP_CODE),
-                            headers=headers,
-                            url=options[pycurl.URL],
-                            request=Request(
-                                url=curl.getinfo(pycurl.EFFECTIVE_URL),
-                                method=request.method,
-                                headers=copy.deepcopy(request.headers),
-                            ),
-                            cookies=make_cookie(),
-                        )
-                    )
-                    _referer and request.headers.update(Referer=options[pycurl.URL])
-                    options[pycurl.URL] = next_url
-
-                else:
-                    res.content = body.getvalue()
-                    res.status_code = curl.getinfo(pycurl.HTTP_CODE)
-                    res.headers = headers
-                    res.url = curl.getinfo(pycurl.EFFECTIVE_URL)
-                    res.cookies = make_cookie()
-                    res.request = request
-                    return res
+            res.content = body.getvalue()
+            res.status_code = curl.getinfo(pycurl.HTTP_CODE)
+            res.headers = headers
+            res.url = curl.getinfo(pycurl.EFFECTIVE_URL)
+            res.cookies = make_cookie()
+            res.history = self._make_history(header_blocks, request)
+            res.request = request
+            return res
 
         finally:
-            not request.use_session and curl.close()
+            not reuse_session and curl.close()
+
+    @staticmethod
+    def _make_history(header_blocks, request: Request):
+        history = []
+        url = request.real_url
+        method = request.method
+        body = request.body
+        headers = dict(request.headers)
+        for status_code, response_headers in header_blocks:
+            history.append(
+                Response(
+                    content=b"",
+                    headers=response_headers,
+                    url=url,
+                    status_code=status_code,
+                    request=Request(
+                        url=url,
+                        method=method,
+                        body=body,
+                        headers=headers,
+                        use_session=request.use_session,
+                    ),
+                )
+            )
+            location = next(
+                (
+                    value
+                    for key, value in response_headers.items()
+                    if key.lower() == "location"
+                ),
+                None,
+            )
+            if location:
+                url = urllib.parse.urljoin(url, location)
+            if status_code == 303 and method != "HEAD":
+                method, body = "GET", None
+            elif status_code in (301, 302) and method == "POST":
+                method, body = "GET", None
+        return history
 
     @property
     def set_cipher(self):
@@ -375,6 +404,9 @@ class Downloader(AbstractDownloader):
 
     def make_session(self):
         return pycurl.Curl()
+
+    def close_session(self, session: pycurl.Curl):
+        session.close()
 
 
 if __name__ == "__main__":

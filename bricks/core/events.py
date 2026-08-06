@@ -14,6 +14,7 @@ from loguru import logger
 
 from bricks.core.context import Context, Flow
 from bricks.utils import pandora
+from bricks.utils.safe_eval import safe_eval_cached
 
 
 class ErrorMode(str, Enum):
@@ -41,7 +42,7 @@ class RegisteredEvents:
         self.registered: Dict[Any, List[Register]] = defaultdict(list)
 
         self._lock = threading.RLock()  # 使用可重入锁，避免死锁
-        self._sorted_cache: Dict[Tuple[str, Any], bool] = {}  # 缓存排序状态
+        self._sorted_cache: Dict[Tuple[str, Any, bool], bool] = {}
 
     def __enter__(self):
         self._lock.acquire()
@@ -52,7 +53,8 @@ class RegisteredEvents:
 
     def mark_unsorted(self, form: str, target: Any):
         """标记指定容器需要重新排序"""
-        self._sorted_cache[(form, target)] = False
+        self._sorted_cache[(form, target, False)] = False
+        self._sorted_cache[(form, target, True)] = False
 
 
 @dataclass
@@ -307,48 +309,47 @@ class EventManager:
         else:
             targets = [None, context.target]
 
+        disposable_snapshots = []
+        permanent_snapshots = []
         with REGISTERED_EVENTS:
-            events_group = [
-                # (group, is_disposable)
-                (REGISTERED_EVENTS.disposable[context.form], True),
-                (REGISTERED_EVENTS.permanent[context.form], False),
-            ]
-
-            # 收集需要移除的disposable事件
-            to_remove = []
-
-            for group, is_disposable in events_group:
+            for group, disposable, snapshots in (
+                (REGISTERED_EVENTS.disposable[context.form], True, disposable_snapshots),
+                (REGISTERED_EVENTS.permanent[context.form], False, permanent_snapshots),
+            ):
                 for target in targets:
-                    # 获取事件列表
                     if target is ...:
-                        events = [e for es in group.values() for e in es]
+                        events = [event for box in group.values() for event in box]
+                        events.sort(
+                            key=lambda item: item.index if item.index is not None else 0
+                        )
                     else:
-                        events = list(group[target])
-
-                    # 延迟排序：仅在需要时排序
-                    if target is ...:
-                        events.sort(key=lambda x: x.index if x.index is not None else 0)
-                    else:
-                        cache_key = (context.form, target)
+                        cache_key = (context.form, target, disposable)
                         if not REGISTERED_EVENTS._sorted_cache.get(cache_key, False):
-                            events.sort(key=lambda x: x.index if x.index is not None else 0)
-                            group[target] = events
+                            group[target].sort(
+                                key=lambda item: item.index
+                                if item.index is not None
+                                else 0
+                            )
                             REGISTERED_EVENTS._sorted_cache[cache_key] = True
+                        events = list(group[target])
+                    snapshots.extend(events)
 
-                    # 匹配并yield事件
-                    for event in events:
-                        if cls._match_event(event, context):
-                            # 记录需要移除的disposable事件
-                            if is_disposable and event.box:
-                                to_remove.append((event, event.box))
-                            yield event
-
-            # 移除disposable事件及其registered引用
-            for event, box in to_remove:
-                if event in box:
-                    box.remove(event)
-                # 清理registered索引
+        # Match callbacks run outside the registry lock. Disposable events are
+        # claimed under the lock immediately before yielding, so only one
+        # concurrent consumer can execute each event.
+        for event in disposable_snapshots:
+            if not cls._match_event(event, context):
+                continue
+            with REGISTERED_EVENTS:
+                if not event.box or event not in event.box:
+                    continue
+                event.box.remove(event)
                 cls._cleanup_registered(event)
+            yield event
+
+        for event in permanent_snapshots:
+            if cls._match_event(event, context):
+                yield event
 
     @classmethod
     def _match_event(cls, event: Task, context: Context) -> bool:
@@ -364,9 +365,7 @@ class EventManager:
         if callable(match):
             return match(context)
         if isinstance(match, str):
-            if event.match_code is None:
-                event.match_code = compile(match, "<bricks.core.events.match>", "eval")
-            return eval(event.match_code, globals(), {"context": context})
+            return bool(safe_eval_cached(match, {"context": context}))
         return False
 
     @classmethod
@@ -399,16 +398,16 @@ class EventManager:
         :return: 事件函数的返回值
         """
         try:
-            # 简化空值处理，避免重复判断
-            merged_annotations = {**context.annotations, **(annotations or {})}
-            merged_namespace = {**context.namespace, **(namespace or {})}
+            # 无额外参数时直接使用 context 的，避免每次合并
+            ann = {**context.annotations, **annotations} if annotations else context.annotations
+            ns = {**context.namespace, **namespace} if namespace else context.namespace
 
             return pandora.invoke(
                 event.func,
                 args=event.args,
-                kwargs=event.kwargs or {},
-                annotations=merged_annotations,
-                namespace=merged_namespace
+                kwargs=event.kwargs if event.kwargs is not None else {},
+                annotations=ann,
+                namespace=ns
             )
         except Exception as e:
             if errors == ErrorMode.RAISE.value or errors == "raise":

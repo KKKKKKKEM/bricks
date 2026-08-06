@@ -5,10 +5,8 @@
 from __future__ import absolute_import
 
 import contextlib
-import copy
 import http.client
 import re
-import urllib.parse
 import warnings
 from typing import Optional, Union
 
@@ -65,34 +63,32 @@ class Downloader(AbstractDownloader):
             "files": request.options.get("files"),
             "auth": request.options.get("auth"),
             "timeout": 5 if request.timeout is ... else request.timeout,
-            "follow_redirects": False if not use_stream else request.allow_redirects,
+            "follow_redirects": request.allow_redirects,
             "proxy": request.proxies,  # noqa
             "verify": request.options.get("verify", False),
         }
 
-        next_url = request.real_url
-        _redirect_count = 0
         httpversion: str = request.get_options("httpversion", "1.1")
         if httpversion.startswith("1"):
             http1, http2 = True, False
         else:
             http1, http2 = False, True
 
-        if request.use_session:
+        client_options = {
+            "proxy": options.pop("proxy", None),
+            "verify": options.pop("verify", False),
+            "timeout": options.pop("timeout", 5),
+            "http1": http1,
+            "http2": http2,
+        }
+        reuse_session = self.should_reuse_session(request)
+        if reuse_session:
             session = request.get_options("$session") or self.get_session(
-                proxy=options.pop("proxy", None),
-                verify=options.pop("verify", False),
-                timeout=options.pop("timeout", 5),
-                http1=http1,
-                http2=http2,
+                **client_options,
             )
         else:
             session = httpx.Client(
-                proxy=options.pop("proxy", None),
-                verify=options.pop("verify", False),
-                timeout=options.pop("timeout", 5),
-                http1=http1,
-                http2=http2,
+                **client_options,
             )
         # 流式下载不使用 with 自动关闭
         if use_stream:
@@ -107,53 +103,49 @@ class Downloader(AbstractDownloader):
             res._stream_iterator = response.iter_bytes(chunk_size=chunk_size)
             return res
 
-        # 普通下载使用 try-finally 管理
+        # 普通下载使用 try-finally 管理；标准重定向交给客户端处理。
         try:
-            while True:
-                assert _redirect_count < 999, "已经超过最大重定向次数: 999"
-                response = session.request(**{**options, "url": next_url})
-                last_url, next_url = (
-                    next_url,
-                    response.headers.get("location")
-                    or response.headers.get("Location"),
-                )
-                if request.allow_redirects and next_url:
-                    next_url = urllib.parse.urljoin(
-                        str(response.url), next_url)
-                    _redirect_count += 1
-                    res.history.append(
-                        Response(
-                            content=response.content,
-                            headers=dict(response.headers),
-                            cookies=Cookies.by_jar(response.cookies.jar),
-                            url=str(response.url),
-                            status_code=response.status_code,
-                            request=Request(
-                                url=last_url,
-                                method=request.method,
-                                headers=copy.deepcopy(
-                                    options.get("headers") or {}),
-                            ),
-                        )
-                    )
-                    request.options.get("$referer", False) and options[
-                        "headers"
-                    ].update(Referer=str(response.url))  # type: ignore
-
-                else:
-                    res.content = response.content
-                    res.headers = Header(response.headers)
-                    res.cookies = Cookies.by_jar(session.cookies.jar)
-                    res.url = str(response.url)
-                    res.status_code = response.status_code
-                    res.request = request
-
-                    return res
+            response = session.request(**{**options, "url": request.real_url})
+            res.content = response.content
+            res.headers = Header(response.headers)
+            res.cookies = Cookies.by_jar(session.cookies.jar)
+            res.url = str(response.url)
+            res.status_code = response.status_code
+            res.history = self._make_history(response, request)
+            res.request = request
+            return res
         finally:
-            not request.use_session and session.close()  # type: ignore
+            not reuse_session and session.close()  # type: ignore
+
+    @staticmethod
+    def _make_history(response, request: Request):
+        history = []
+        for item in response.history:
+            sent = item.request
+            history.append(
+                Response(
+                    content=item.content,
+                    headers=dict(item.headers),
+                    cookies=Cookies.by_jar(item.cookies.jar),
+                    url=str(item.url),
+                    status_code=item.status_code,
+                    reason=item.reason_phrase,
+                    request=Request(
+                        url=str(sent.url),
+                        method=sent.method,
+                        body=sent.content,
+                        headers=dict(sent.headers),
+                        use_session=request.use_session,
+                    ),
+                )
+            )
+        return history
 
     def make_session(self, **options):
         return httpx.Client(**options)
+
+    def close_session(self, session: httpx.Client):
+        session.close()
 
     def stream_fetch(self, request: Union[Request, dict], chunk_size: int = 8192):
         """
@@ -183,22 +175,22 @@ class Downloader(AbstractDownloader):
             **request.options.get("$options", {}),
         }
 
-        if request.use_session:
+        client_options = {
+            "proxy": options.pop("proxy", None),
+            "verify": options.pop("verify", False),
+            "timeout": options.pop("timeout", 5),
+            "http1": http1,
+            "http2": http2,
+        }
+        reuse_session = self.should_reuse_session(request)
+        if reuse_session:
             session = request.get_options("$session") or self.get_session(
-                proxy=options.pop("proxy", None),
-                verify=options.pop("verify", False),
-                timeout=options.pop("timeout", 5),
-                http1=http1,
-                http2=http2,
+                **client_options,
             )
             ctx = contextlib.nullcontext()
         else:
             session = httpx.Client(
-                proxy=options.pop("proxy", None),
-                verify=options.pop("verify", False),
-                timeout=options.pop("timeout", 5),
-                http1=http1,
-                http2=http2,
+                **client_options,
             )
             ctx = session
 
@@ -219,7 +211,7 @@ class Downloader(AbstractDownloader):
                     # 返回响应对象和内容迭代器
                     return res, response.iter_bytes(chunk_size=chunk_size)
         finally:
-            if not request.use_session and isinstance(session, httpx.Client):
+            if not reuse_session and isinstance(session, httpx.Client):
                 session.close()
 
     def exception(self, request: Request, error: Exception):

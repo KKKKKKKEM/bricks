@@ -111,14 +111,21 @@ class RenderNode:
 
     def render(self, data: (dict, Mapping, UserDict) = None):
         # 创建一个新的实例，避免修改原始实例
-        data = data or {}
-        node = copy.deepcopy(self)
+        # 使用浅拷贝代替 deepcopy，因为 format() 总是返回新对象，不会修改原字段
+        data = data.copy() if data else {}
+        skip = frozenset(["adapters", "miss", "un_rendered", *self.un_rendered])
+        node = copy.copy(self)
         for field in dataclasses.fields(node):
-            if field.name in [*["adapters", "miss", "un_rendered"], *node.un_rendered]:
+            if field.name in skip:
                 continue
             value = getattr(node, field.name)
+            # 浅拷贝可变容器，防止 format 过程中引用污染
+            if isinstance(value, dict):
+                value = value.copy()
+            elif isinstance(value, list):
+                value = value.copy()
             new_value = node.format(value, data, ident=field.name)
-            setattr(node, field.name, new_value)
+            object.__setattr__(node, field.name, new_value)
         return node
 
     def register_adapter(self, form: Any, action: Callable):

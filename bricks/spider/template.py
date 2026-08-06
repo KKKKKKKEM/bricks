@@ -16,6 +16,7 @@ from bricks.lib.nodes import RenderNode
 from bricks.lib.queues import Item
 from bricks.spider import air, form
 from bricks.utils import pandora
+from bricks.utils.safe_eval import safe_eval_cached
 
 Init = form.Init
 Layout = form.Layout
@@ -88,8 +89,8 @@ class Download(RenderNode):
     retry: int = 0
     # 最大重试次数
     max_retry: int = 5
-    # 是否使用下载器的 session 模式
-    use_session: bool = False
+    # 是否复用 session；None 表示使用下载器默认策略
+    use_session: Optional[bool] = None
 
     def to_request(self) -> Request:
         return Request(
@@ -252,7 +253,7 @@ class Spider(air.Spider):
                 )
 
             elif isinstance(node.match, str):
-                ok = eval(
+                ok = safe_eval_cached(
                     node.match,
                     {
                         "context": context,
@@ -272,15 +273,17 @@ class Spider(air.Spider):
             if not callable(engine):
                 engine = pandora.load_objects(engine)
 
+            has_layout = any((layout.rename, layout.default, layout.factory, layout.show))
             backup = context.items
             try:
-                context.items = pandora.clean_rows(
-                    *copy.deepcopy(context.items),
-                    rename=layout.rename,
-                    default=layout.default,
-                    factory=layout.factory,
-                    show=layout.show,
-                )
+                if has_layout:
+                    context.items = pandora.clean_rows(
+                        *copy.deepcopy(context.items),
+                        rename=layout.rename,
+                        default=layout.default,
+                        factory=layout.factory,
+                        show=layout.show,
+                    )
                 pandora.invoke(
                     func=engine,
                     args=args,

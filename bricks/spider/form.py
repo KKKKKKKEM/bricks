@@ -113,8 +113,8 @@ class Download(RenderNode):
     retry: int = 0
     # 最大重试次数
     max_retry: int = 5
-    # 是否使用下载器的 session 模式
-    use_session: bool = False
+    # 是否复用 session；None 表示使用下载器默认策略
+    use_session: Optional[bool] = None
     archive: bool = False
 
     def to_request(self) -> Request:
@@ -207,46 +207,45 @@ class Spider(air.Spider):
                 )
             except IndexError:
                 context.flow({"next": None})
+                return
 
-                raise signals.Switch()
-            else:
-                context.seeds["$signpost"] += 1
+            context.seeds["$signpost"] += 1
 
-                # 种子 -> Request
-                if isinstance(node, Download):
-                    if context.next.prev and context.next.prev.root == self.on_retry:
-                        # 从重试请求那边过来的
-                        context.flow({"next": self.on_request})
-                    else:
-                        # 将种子 -> request -> 发送请求
-                        context.seeds["$bookmark"] = signpost
-                        node.archive and context.archive(signpost)
-                        context.flow({"next": self.make_request})
-                    raise signals.Switch()
-
-                # Request -> Response
-                elif isinstance(node, Parse):
-                    node.archive and context.archive(signpost)
-                    context.flow({"next": self.on_response})
-                    raise signals.Switch()
-
-                elif isinstance(node, Pipeline):
-                    node.archive and context.archive(signpost)
-                    context.flow({"next": self.on_pipeline})
-                    raise signals.Switch()
-
-                elif isinstance(node, Task):
-                    node.archive and context.archive(signpost)
-                    pandora.invoke(
-                        func=node.func,
-                        args=node.args,
-                        kwargs=node.kwargs,
-                        annotations=context.annotations,
-                        namespace=context.namespace,
-                    )
-
+            # 种子 -> Request
+            if isinstance(node, Download):
+                if context.next.prev and context.next.prev.root == self.on_retry:
+                    # 从重试请求那边过来的
+                    context.flow({"next": self.on_request})
                 else:
-                    raise TypeError(f"Unknown node type: {type(node)}")
+                    # 将种子 -> request -> 发送请求
+                    context.seeds["$bookmark"] = signpost
+                    node.archive and context.archive(signpost)
+                    context.flow({"next": self.make_request})
+                return
+
+            # Request -> Response
+            elif isinstance(node, Parse):
+                node.archive and context.archive(signpost)
+                context.flow({"next": self.on_response})
+                return
+
+            elif isinstance(node, Pipeline):
+                node.archive and context.archive(signpost)
+                context.flow({"next": self.on_pipeline})
+                return
+
+            elif isinstance(node, Task):
+                node.archive and context.archive(signpost)
+                pandora.invoke(
+                    func=node.func,
+                    args=node.args,
+                    kwargs=node.kwargs,
+                    annotations=context.annotations,
+                    namespace=context.namespace,
+                )
+
+            else:
+                raise TypeError(f"Unknown node type: {type(node)}")
 
     def make_seeds(self, context: Context, **kwargs):
         if not self.config.init:
@@ -346,16 +345,17 @@ class Spider(air.Spider):
         if not callable(engine):
             engine = pandora.load_objects(engine)
 
+        has_layout = any((layout.rename, layout.default, layout.factory, layout.show))
         backup = context.items
         try:
-            context.items = pandora.clean_rows(
-                *copy.deepcopy(context.items),
-                rename=layout.rename,
-                default=layout.default,
-                factory=layout.factory,
-                show=layout.show,
-            )
-
+            if has_layout:
+                context.items = pandora.clean_rows(
+                    *copy.deepcopy(context.items),
+                    rename=layout.rename,
+                    default=layout.default,
+                    factory=layout.factory,
+                    show=layout.show,
+                )
             pandora.invoke(
                 func=engine,
                 args=args,

@@ -1,14 +1,46 @@
-venv
-/.svn
-/.idea
-__pycache__
-/logs
-/Files
-/test
-/venv
-/no_views
-.vscode/launch.json
-.gitignore
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+eggs/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite3
+
+# uv
 .python-version
-.gitignore
-uv.lock
+
+# Project specific

@@ -243,6 +243,9 @@ def require(
             return importlib_metadata.version(package)
 
 
+_Prepared = collections.namedtuple("prepared", ["func", "args", "kwargs"])
+
+
 def invoke(
         func,
         args=None,
@@ -266,6 +269,15 @@ def invoke(
     return prepared.func(*prepared.args, **prepared.kwargs)
 
 
+@functools.lru_cache(maxsize=1024)
+def _get_signature(func):
+    """缓存 inspect.signature() 结果，避免每次调用的反射开销。"""
+    try:
+        return inspect.signature(func).parameters
+    except (ValueError, TypeError):
+        return None
+
+
 def prepare(
         func: Callable,
         args=None,
@@ -276,16 +288,6 @@ def prepare(
 ):
     assert callable(func), ValueError(
         f"func must be callable, but got {type(func)}")
-    prepared = collections.namedtuple("prepared", ["func", "args", "kwargs"])
-
-    args = args or []
-    kwargs = kwargs or {}
-    annotations = annotations or {}
-    namespace = namespace or {}
-    ignore = ignore or []
-    assert callable(func), ValueError(
-        f"func must be callable, but got {type(func)}")
-    prepared = collections.namedtuple("prepared", ["func", "args", "kwargs"])
 
     args = args or []
     kwargs = kwargs or {}
@@ -295,11 +297,9 @@ def prepare(
     annotations = annotations or {}
     namespace = namespace or {}
     ignore = ignore or []
-    # 尝试获取函数签名
-    try:
-        parameters = inspect.signature(func).parameters
-    except (ValueError, TypeError):
-        # 检查是否在内置映射表中
+    # 尝试获取函数签名（带缓存）
+    parameters = _get_signature(func)
+    if parameters is None:
         if func in _BUILTIN_SIGNATURES:
             return _prepare_builtin(func, args, kwargs, annotations, namespace, ignore)
         parameters = {}
@@ -365,12 +365,11 @@ def prepare(
         ]:
             new_kwargs[name] = value
 
-    return prepared(func=func, args=new_args, kwargs=new_kwargs)
+    return _Prepared(func=func, args=new_args, kwargs=new_kwargs)
 
 
 def _prepare_builtin(func, args, kwargs, annotations, namespace, ignore):
     """处理内置函数的参数准备"""
-    prepared = collections.namedtuple("prepared", ["func", "args", "kwargs"])
 
     param_names, allowed_kwargs, max_args = _BUILTIN_SIGNATURES[func]
 
@@ -408,7 +407,7 @@ def _prepare_builtin(func, args, kwargs, annotations, namespace, ignore):
         if k in allowed_kwargs and k not in param_names[:len(new_args)]:
             new_kwargs[k] = v
 
-    return prepared(func=func, args=new_args, kwargs=new_kwargs)
+    return _Prepared(func=func, args=new_args, kwargs=new_kwargs)
 
 
 def iterable(
@@ -593,11 +592,13 @@ def with_metaclass(
     :param modded: 魔改属性 / 方法
     :param key_maker: 单例模式的 key 创建器, 接受参数为: cls, *args, **kwargs
     :param thread_safe: 单例模式是否线程安全
-    :param wrappers: 装饰器, 用于动态修改实例的方法, 不写的时候, 默认会使用实例的 _when_xxx 作为 xxx 的装饰器
+    :param wrappers: 装饰器, 用于动态修改实例的方法, 不写的时候, 默认会使用 @intercept 装饰的拦截器
     :param autonomous: 自执行函数, 在实例化后自动执行
     :param singleton: 单例模式
     :return:
     """
+    from bricks.core.intercept import collect_interceptors
+
     key_maker = key_maker or (
         lambda cls, *args, **kwargs: hash(
             json.dumps({"cls": cls, "args": args,
@@ -632,10 +633,7 @@ def with_metaclass(
                     ins = type.__call__(cls, *args, **kwargs)
 
                 if wrappers is None:
-                    interceptors = {
-                        i.replace("_when_", ""): i
-                        for i in filter(lambda x: x.startswith("_when_"), dir(ins))
-                    }
+                    interceptors = collect_interceptors(ins)
                 else:
                     interceptors = wrappers
 

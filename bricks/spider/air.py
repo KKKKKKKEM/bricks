@@ -4,7 +4,6 @@
 # @Desc    :
 import contextlib
 import datetime
-import functools
 import inspect
 import json
 import math
@@ -21,6 +20,7 @@ from bricks.core import dispatch, events, signals
 from bricks.core.context import Error, Flow
 from bricks.core.events import EventManager
 from bricks.core.genesis import Pangu
+from bricks.core.intercept import intercept
 from bricks.downloader import AbstractDownloader, cffi
 from bricks.lib.counter import FastWriteCounter
 from bricks.lib.items import Items
@@ -35,6 +35,10 @@ IGNORE_RETRY_PATTERN = re.compile("ProxyError", re.IGNORECASE)
 
 
 class Context(Flow):
+    _CACHE_KEYS = frozenset(
+        {"seeds", "items", "request", "response", "task_queue", "queue_name", "target"}
+    )
+
     def __init__(
         self,
         target: "Spider",
@@ -47,6 +51,7 @@ class Context(Flow):
         task_queue: TaskQueue = None,
         **kwargs,
     ) -> None:
+        object.__setattr__(self, "_attr_cache", {})
         self.request: Request = request
         self.response: Response = response
         self.seeds: Item = seeds
@@ -69,7 +74,12 @@ class Context(Flow):
         elif key == "items" and type(value) is not Items:
             value = Items(value)
 
+        # 值未变时跳过缓存清理（必须先检查属性是否存在，避免 getattr 默认值造成误判）
+        if key in self._CACHE_KEYS and hasattr(self, key) and getattr(self, key) is value:
+            return
         super().__setattr__(key, value)
+        if key in self._CACHE_KEYS:
+            self._attr_cache.clear()
 
     def success(self, shutdown=False):
         ret = self.task_queue.remove(self.queue_name, *pandora.iterable(self.seeds))
@@ -104,7 +114,11 @@ class Context(Flow):
 
     @property
     def namespace(self):
-        return {
+        cache = self._attr_cache
+        ns = cache.get("namespace")
+        if ns is not None:
+            return ns
+        ns = {
             **super().namespace,
             "request": self.request,
             "response": self.response,
@@ -114,10 +128,16 @@ class Context(Flow):
             "queue_name": self.queue_name,
             "target": self.target,
         }
+        cache["namespace"] = ns
+        return ns
 
     @property
     def annotations(self):
-        return {
+        cache = self._attr_cache
+        ann = cache.get("annotations")
+        if ann is not None:
+            return ann
+        ann = {
             Request: self.request,
             Response: self.response,
             Items: self.items,
@@ -127,6 +147,8 @@ class Context(Flow):
             # dict: self.seeds,
             **super().annotations,
         }
+        cache["annotations"] = ann
+        return ann
 
     def divisive(self, qtypes=("temp",)):
         new = {**self.seeds, "$division": str(uuid.uuid4())}
@@ -180,6 +202,8 @@ class Context(Flow):
 
 
 class InitContext(Flow):
+    _CACHE_KEYS = frozenset({"seeds", "task_queue", "queue_name", "target"})
+
     def __init__(
         self,
         target: "Spider",
@@ -190,6 +214,7 @@ class InitContext(Flow):
         priority: bool = False,
         **kwargs,
     ) -> None:
+        object.__setattr__(self, "_attr_cache", {})
         self.seeds: List[Item] = seeds
         self.task_queue: TaskQueue = task_queue
         self.queue_name: str = kwargs.pop(
@@ -200,25 +225,42 @@ class InitContext(Flow):
         super().__init__(form, target, **kwargs)
         self.target: Spider = target
 
+    def __setattr__(self, key, value):
+        super().__setattr__(key, value)
+        if key in self._CACHE_KEYS:
+            self._attr_cache.clear()
+
     @property
     def namespace(self):
-        return {
+        cache = self._attr_cache
+        ns = cache.get("namespace")
+        if ns is not None:
+            return ns
+        ns = {
             **super().namespace,
             "seeds": self.seeds,
             "task_queue": self.task_queue,
             "queue_name": self.queue_name,
             "target": self.target,
         }
+        cache["namespace"] = ns
+        return ns
 
     @property
     def annotations(self):
-        return {
+        cache = self._attr_cache
+        ann = cache.get("annotations")
+        if ann is not None:
+            return ann
+        ann = {
             self.task_queue.__class__: self.task_queue,
             Item: self.seeds,
             # str: self.queue_name,
             # dict: self.seeds,
             **super().annotations,
         }
+        cache["annotations"] = ann
+        return ann
 
     def success(self, shutdown=False):
         if self.form == state.const.AFTER_PUT_SEEDS:
@@ -516,8 +558,8 @@ class Spider(Pangu):
             **kwargs,  # type: ignore
         )
 
-    def _when_put_seeds(self, raw_method):  # noqa
-        @functools.wraps(raw_method)
+    @intercept("put_seeds")
+    def _intercept_put_seeds(self, raw_method):  # noqa
         def wrapper(
             seeds: Union[dict, Item, List[Item], List[dict]],
             task_queue: Optional[TaskQueue] = ...,
@@ -694,8 +736,8 @@ class Spider(Pangu):
                         self.number_of_seeds_obtained.increment()
                         self.number_of_seeds_pending -= 1
 
-    def _when_run_spider(self, raw_method):
-        @functools.wraps(raw_method)
+    @intercept("run_spider")
+    def _intercept_run_spider(self, raw_method):
         def wrapper(*args, **kwargs):
             with self.dispatcher:
                 task_queue: TaskQueue = self.get(
@@ -718,7 +760,21 @@ class Spider(Pangu):
                 try:
                     return raw_method(*args, **kwargs)
                 finally:
-                    hasattr(server, "stop") and server.stop()  # type: ignore
+                    try:
+                        hasattr(server, "stop") and server.stop()  # type: ignore
+                    finally:
+                        clear_session = getattr(
+                            self.downloader, "clear_session", None
+                        )
+                        if clear_session and not inspect.isclass(self.downloader):
+                            cleanup = clear_session()
+                            if inspect.isawaitable(cleanup):
+                                async def wait_cleanup():
+                                    return await cleanup
+
+                                self.active(
+                                    dispatch.Task(func=wait_cleanup)
+                                ).result()
 
         return wrapper
 
@@ -748,8 +804,8 @@ class Spider(Pangu):
         queue_name: str = kwargs.pop("queue_name", None) or context.queue_name
         return task_queue.get(name=queue_name, **kwargs)
 
-    def _when_get_seeds(self, raw_method):
-        @functools.wraps(raw_method)
+    @intercept("get_seeds")
+    def _intercept_get_seeds(self, raw_method):
         def wrapper(**kwargs):
             context: Context = Context.get_context()  # type: ignore
             context.form = state.const.BEFORE_GET_SEEDS
@@ -778,7 +834,7 @@ class Spider(Pangu):
         context.request = self.make_request(context)
         context.flow({"request": context.request})
 
-    def on_retry(self, context: Context):
+    def on_retry(self, context: Context, max_retry=math.inf):
         """
         重试前
 
@@ -786,12 +842,13 @@ class Spider(Pangu):
         """
         request: Request = context.request
         response: Response = context.response
-        error: str = response.error if response else ""
+        error: str = response.error if response is not None else ""
         del context.response
         context.response = None  # type: ignore
 
-        max_retry = request.get_options("$maxRetry", math.inf)
-        if request.retry < min(max_retry, request.max_retry):
+        configured_max_retry = request.get_options("$maxRetry", math.inf)
+        retry_limit = min(configured_max_retry, request.max_retry, max_retry)
+        if request.retry < retry_limit:
             # 如果是代理错误, 则不计算重试次数
             if not IGNORE_RETRY_PATTERN.search(error):
                 request.retry += 1
@@ -809,14 +866,14 @@ class Spider(Pangu):
             msg = f'[超过重试次数] {f"SEEDS: {context.seeds}, " if context.seeds else ""} URL: {request.real_url}'
             logger.warning(msg)
 
-            if request.retry >= max_retry:
+            if request.retry >= configured_max_retry:
                 raise signals.Success
 
             else:
                 raise signals.Failure
 
-    def _when_on_retry(self, raw_method):  # noqa
-        @functools.wraps(raw_method)
+    @intercept("on_retry")
+    def _intercept_on_retry(self, raw_method):  # noqa
         def wrapper(context: Context, *args, **kwargs):
             self.number_of_failure_requests.increment()
             context.form = state.const.BEFORE_RETRY
@@ -854,8 +911,8 @@ class Spider(Pangu):
 
         return response
 
-    def _when_on_request(self, raw_method):  # noqa
-        @functools.wraps(raw_method)
+    @intercept("on_request")
+    def _intercept_on_request(self, raw_method):  # noqa
         def wrapper(context: Context, *args, **kwargs):
             context.form = state.const.BEFORE_REQUEST
             context.response = None
@@ -914,8 +971,8 @@ class Spider(Pangu):
 
         return items
 
-    def _when_on_response(self, raw_method):  # noqa
-        @functools.wraps(raw_method)
+    @intercept("on_response")
+    def _intercept_on_response(self, raw_method):  # noqa
         def wrapper(context: Context, *args, **kwargs):
             context.form = state.const.ON_PARSE
             context.items = pandora.invoke(
@@ -957,8 +1014,8 @@ class Spider(Pangu):
         else:
             prepared.func(*prepared.args, **prepared.kwargs)
 
-    def _when_on_pipeline(self, raw_method):  # noqa
-        @functools.wraps(raw_method)
+    @intercept("on_pipeline")
+    def _intercept_on_pipeline(self, raw_method):  # noqa
         def wrapper(context: Context, *args, **kwargs):
             context.form = state.const.BEFORE_PIPELINE
             try:
@@ -990,8 +1047,8 @@ class Spider(Pangu):
     def make_request(self, context: Context) -> Request:
         return pandora.invoke(Request, kwargs=context.seeds)  # type: ignore
 
-    def _when_make_request(self, raw_method):  # noqa
-        @functools.wraps(raw_method)
+    @intercept("make_request")
+    def _intercept_make_request(self, raw_method):  # noqa
         def wrapper(context: Context):
             context.form = state.const.BEFORE_MAKE_REQUEST
             events.EventManager.invoke(context)
@@ -1108,52 +1165,24 @@ class Spider(Pangu):
             else [{k: getattr(c, k) for k in extract} for c in collect.queue]
         )  # type: ignore
 
-    def _make_fetcher(
-        self,
-        downloader: Optional[AbstractDownloader] = None,
-        plugins: Union[dict, None] = ...,
-        **options,
-    ):
-        options.setdefault("downloader", downloader or self.downloader)
-        options.setdefault("dispatcher", self.dispatcher)
-        spider = Spider(**options)
-
-        # 不需要任何插件
-        if not plugins:
-            for plugin in spider.plugins:
-                plugin.unregister()
-
-        # 使用默认插件
-        elif plugins is ...:
-            pass
-
-        else:
-            for plugin in spider.plugins:
-                plugin.unregister()
-            for form, plugin in plugins:
-                spider.use(form, *pandora.iterable(plugin))
-
-        return spider
-
     def fetch(
         self,
         request: Union[Request, dict],
         downloader: Optional[AbstractDownloader] = None,
         proxy: Optional[Union[dict, BaseProxy]] = ...,
-        plugins: Union[dict, None] = ...,
-        **options,
+        plugins: Union[dict, Iterable, None] = ...,
+        max_retry: Optional[int] = 5,
     ) -> Response:
         """
         发送请求获取响应
 
-        默认情况下, 只要response 的状态码不为-1( 框架内部错误/ 异常) 就会结束
-        如果失败五次, 也会结束, 所以需要一定成功可以将 request.max_retry = math.inf
+        默认情况下, 只要 response 的状态码不为 -1 (框架内部错误/异常) 就会结束
 
-        :param plugins: 插件, 默认使用 fake_ua 和 set_proxy; 传入 None 表示什么都不用, 自定义则使用自定义的
+        :param plugins: 插件；支持 before/after/retry 字典和旧版 (form, tasks) 序列
         :param proxy: 请求代理 Key(Rules), 不传的时候默认使用 self.proxy
-        :param downloader: 下载器, 不传的时候默认使用  self.downloader
-        :param request: 需要请求的 request, 可以是字典(key value 需要对应 request 对象的实例参数)
-        :param options: custom spider 实例化的其他选项
+        :param downloader: 下载器, 不传的时候默认使用 self.downloader
+        :param request: 需要请求的 request, 可以是字典 (key value 需要对应 request 对象的实例参数)
+        :param max_retry: 此次调用附加的重试上限；None 表示只使用 Request 的限制
         :return:
         """
         if isinstance(request, dict):
@@ -1166,20 +1195,180 @@ class Spider(Pangu):
             if proxy is ...:
                 request.proxy = self.proxy
             elif proxy:
-                request.proxy = proxy  # type: ignore
+                request.proxy = proxy
             else:
                 pass
 
-        effective_downloader = downloader or self.downloader
-        spider = self._make_fetcher(effective_downloader, plugins, **options)
-        context = spider.make_context(
+        context = Context(
+            target=self,
             request=request,
-            next=spider.on_request,
-            flows={spider.on_request: None, spider.on_retry: spider.on_request},
+            next=self.on_request,
+            flows={self.on_request: None, self.on_retry: self.on_request},
         )
         context.failure = lambda _: context.flow({"next": None})
-        spider.on_consume(context=context)
-        return context.response
+
+        def normalize_hooks(hooks):
+            tasks = []
+            for hook in pandora.iterable(hooks):
+                if isinstance(hook, events.Task):
+                    task = hook
+                elif isinstance(hook, dict):
+                    task = events.Task(**hook)
+                else:
+                    task = events.Task(func=hook)
+                tasks.append(task)
+            return sorted(
+                tasks,
+                key=lambda task: task.index if task.index is not None else 0,
+            )
+
+        retry_hooks = []
+        if plugins is ...:
+            before_hooks = normalize_hooks(
+                [on_request.Before.fake_ua, on_request.Before.set_proxy]
+            )
+            after_hooks = normalize_hooks(
+                [
+                    on_request.After.show_response,
+                    on_request.After.conditional_scripts,
+                    on_request.After.bypass,
+                ]
+            )
+        elif plugins is None:
+            before_hooks = []
+            after_hooks = []
+        elif isinstance(plugins, dict):
+            before_hooks = normalize_hooks(plugins.get("before", []))
+            after_hooks = normalize_hooks(plugins.get("after", []))
+            retry_hooks = normalize_hooks(plugins.get("retry", []))
+        else:
+            hook_groups = {
+                state.const.BEFORE_REQUEST: [],
+                state.const.AFTER_REQUEST: [],
+                state.const.BEFORE_RETRY: [],
+            }
+            for form, hooks in plugins:
+                if form in hook_groups:
+                    hook_groups[form].extend(normalize_hooks(hooks))
+            before_hooks = normalize_hooks(hook_groups[state.const.BEFORE_REQUEST])
+            after_hooks = normalize_hooks(hook_groups[state.const.AFTER_REQUEST])
+            retry_hooks = normalize_hooks(hook_groups[state.const.BEFORE_RETRY])
+
+        invoked_disposable = set()
+
+        def invoke_hooks(hooks):
+            for hook in hooks:
+                if hook.disposable and id(hook) in invoked_disposable:
+                    continue
+                if not EventManager._match_event(hook, context):
+                    continue
+                pandora.invoke(
+                    hook.func,
+                    args=hook.args,
+                    kwargs=hook.kwargs,
+                    annotations=context.annotations,
+                    namespace=context.namespace,
+                )
+                if hook.disposable:
+                    invoked_disposable.add(id(hook))
+
+        attempt = 0
+        last_response = None
+        last_error = None
+
+        def prepare_retry(error=None):
+            nonlocal attempt, last_response, last_error
+            attempt += 1
+            if context.response is not None:
+                last_response = context.response
+            last_error = error or last_error
+            context.form = state.const.BEFORE_RETRY
+            invoke_hooks(retry_hooks)
+            local_retry_limit = (
+                -math.inf
+                if max_retry is not None and attempt > max_retry
+                else math.inf
+            )
+            try:
+                self.on_retry(context, max_retry=local_retry_limit)
+            except (signals.Success, signals.Failure):
+                return False
+            return True
+
+        while True:
+            try:
+                with context:  # push context onto thread-local stack
+                    context.response = None
+                    context.form = state.const.BEFORE_REQUEST
+
+                    invoke_hooks(before_hooks)
+
+                    # Download (plugin may have injected response)
+                    if context.response is None:
+                        dl = (
+                            context.request.get_options("$downloader")
+                            or downloader
+                            or self.downloader
+                        )
+                        if inspect.isclass(dl):
+                            dl = dl()
+                        self.number_of_total_requests.increment()
+                        if inspect.iscoroutinefunction(dl.fetch):
+                            task = dispatch.Task(func=dl.fetch, args=[context.request])
+                            self.dispatcher.active_task(task)
+                            response = task.result()
+                        else:
+                            response = dl.fetch(context.request)
+                        context.response = response
+
+                    context.form = state.const.AFTER_REQUEST
+                    invoke_hooks(after_hooks)
+
+                    return context.response
+
+            except signals.Retry:
+                if prepare_retry():
+                    logger.warning(f"[fetch] 第 {attempt} 次请求失败, 正在重试...")
+                    continue
+                break
+
+            except signals.Success:
+                return context.response if context.response is not None else last_response
+
+            except signals.Failure:
+                if context.response is not None:
+                    last_response = context.response
+                break
+
+            except signals.Signal:
+                raise
+
+            except Exception as e:
+                if prepare_retry(e):
+                    logger.warning(f"[fetch] 第 {attempt} 次请求失败: {e}, 正在重试...")
+                    continue
+                logger.error(
+                    f"[fetch] 请求失败, 已达最大重试次数 ({max_retry}): {e}"
+                )
+                break
+
+        if last_error is not None:
+            return Response.make_response(
+                status_code=-1,
+                error=last_error.__class__.__name__,
+                reason=str(last_error),
+                url=request.real_url,
+                request=request,
+            )
+        if last_response is not None:
+            return last_response
+        return Response.make_response(
+            status_code=-1,
+            error="RetryError",
+            reason="retry limit reached",
+            url=request.real_url,
+            request=request,
+        )
 
     def disable_statistics(self):
         counters = [
