@@ -54,6 +54,10 @@ assert machine.status.value == "completed"
 [`docs/reference/behavior.md`](docs/reference/behavior.md)，变更记录见
 [`CHANGELOG.md`](CHANGELOG.md)。
 
+需要从设计思路一路读到生产接入和源码实现时，使用
+[`docs/handbook/README.md`](docs/handbook/README.md)。手册覆盖迁移流水线、状态提交边界、
+全部核心组件、持久化与 Outbox、Wakeup、Fork/Join，以及完整使用和扩展示例。
+
 当前引擎已经包含：
 
 - `Machine` 的同步/异步事件迁移、等待、重试、内部 `Next` 和 `Fork/Join`，以及分支失败

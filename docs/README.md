@@ -2,15 +2,33 @@
 
 Bricks 文档按“先理解模型，再使用能力，最后扩展实现”的顺序组织。
 
+## 完整实现手册
+
+如果希望系统了解框架，而不是只查某个 API，从
+[handbook/README.md](handbook/README.md) 开始：
+
+```text
+handbook/
+├── README.md              # 阅读路线、整体心智模型和代码入口
+├── design-and-runtime.md  # 设计思路、生命周期、迁移流水线和提交语义
+├── components.md          # 全部核心组件、扩展点和源码责任
+├── reliability.md         # 快照、幂等、Outbox、Wakeup、Fork 和生产拓扑
+└── usage.md               # 从基础构图到生产接入的完整使用方式
+```
+
+实现手册以当前代码为事实来源；`guides/` 继续提供短教程，`reference/` 继续提供 API 速查。
+
 ## 阅读路径
 
 ### 第一次接触
 
-1. [graph_engine.md](graph_engine.md)：了解一次图运行的完整流程
-2. [module_map.md](module_map.md)：了解每个目录和文件的职责
-3. [architecture.md](architecture.md)：了解依赖边界和扩展方向
-4. [design_principles.md](design_principles.md)：了解 Bricks 的总体原则和接口为什么这样设计
-5. [roadmap.md](roadmap.md)：了解当前基线和后续推进顺序
+1. [handbook/README.md](handbook/README.md)：选择面向使用者或实现者的阅读路径
+2. [handbook/design-and-runtime.md](handbook/design-and-runtime.md)：理解一次运行如何推进和提交
+3. [graph_engine.md](graph_engine.md)：通过较短示例了解核心概念
+4. [module_map.md](module_map.md)：了解每个目录和文件的职责
+5. [architecture.md](architecture.md)：了解依赖边界和扩展方向
+6. [design_principles.md](design_principles.md)：了解接口为什么这样设计
+7. [roadmap.md](roadmap.md)：了解当前基线和后续推进顺序
 
 ### 开始使用
 
@@ -92,6 +110,7 @@ docs/graph_engine.md      核心运行概念和示例
 docs/module_map.md        模块职责和阅读顺序
 docs/architecture.md      分层、依赖和扩展边界
 docs/design_principles.md 接口设计约束
+docs/handbook/          设计、实现、可靠性与完整使用手册
 docs/roadmap.md           当前基线和后续路线
 docs/guides/              面向任务的使用说明
 docs/reference/           当前稳定 API
