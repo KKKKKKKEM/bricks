@@ -1,83 +1,92 @@
 # Bricks
 
-Bricks 正在重新构建为一个通用的图执行引擎。
+Bricks 正在重新构建为一个领域无关的 Python 图执行引擎。
 
-它不以爬虫、Agent 或某一种业务为核心，而是提供一套可以组合的基础能力：
+它以少量、稳定的执行原语为核心，让 Agent、ETL、Spider 等领域框架通过继承、组合和插件建立在
+Engine 之上，而不把任何领域策略写入内核。
 
 ```text
-图定义 → 运行上下文 → 事件迁移 → 可替换执行器 → 快照与历史
+RunRequest
+    ↓
+Flow(entrypoint, endpoints)
+    ↓
+Graph(typed Node ports, Edge)
+    ↓
+InputPolicy → NodeInputs → NodeResult → Output
 ```
-
-未来的工作流、自动化任务、爬虫、Agent、ETL 和 RPC 编排，都可以作为适配器建立在这套引擎之上。
 
 ## 当前状态
 
-项目目前处于重构早期阶段，当前分支只保留通用引擎的新架构，不再维护旧版 Spider 实现。
+项目处于 1.0 重构早期阶段。当前已经完成 typed dataflow 抽象：
 
-核心目录：
+- `Ports`：不可变的 `port -> Python type` 声明。
+- `Node`：声明 typed input/output ports、输入策略和执行行为。
+- `NodeInputs`：一次执行实际消费的只读输入。
+- `InputPolicy`：用组内 AND、组间 OR 统一表达 all、any 和 required inputs。
+- `Output`：带 port 的图内输出。
+- `NodeResult`：零到多个、支持异步渐进产生的 Output。
+- `Edge`：连接上游 output port 和下游 input port。
+- `Flow`：同一 Graph 上的一项执行能力，声明入口和终止 Endpoint。
+- `Graph`：构建后冻结的拓扑，以及严格的引用和可达性校验。
+- `ExecutionContext`：传给 Node 的只读运行身份和元数据。
 
-```text
-bricks/engine/
-├── graph/        # 不可变图定义、节点、迁移和校验
-├── runtime/      # 一次运行、上下文、Outcome 和生命周期
-├── events/       # EventBus、消息和生命周期 Hook
-├── persistence/  # 快照与事件日志协议
-├── scheduling/   # 外部定时唤醒协议
-├── policies/     # 重试、超时、取消和幂等策略
-└── semantics/    # 工作流、响应式、并行和补偿语义
-```
+`InputBuffer`、`Run`、`Task` 和 `Engine` 执行循环尚未实现。当前代码用于先稳定抽象契约，不提供旧版
+`GraphBuilder` 或 `Machine` API。
 
-当前暂不创建领域适配器目录。核心稳定后，再按需新增 Spider、Agent、ETL 等适配器。
-
-## 最小示例
+## 抽象示例
 
 ```python
-from bricks.engine import GraphBuilder, Machine
+from bricks.engine import (
+    Endpoint,
+    Flow,
+    Graph,
+    Node,
+    NodeInputs,
+    NodeResult,
+    Ports,
+)
 
 
-builder = GraphBuilder("approval", initial="draft")
-builder.action("draft")
-builder.terminal("approved")
-builder.transition("draft", "approve", "approved")
+class TransformNode(Node):
+    input_ports = Ports(source=str)
+    output_ports = Ports(result=str)
 
-machine = Machine(builder.build())
-machine.start()
-machine.dispatch("approve")
+    async def execute(self, inputs: NodeInputs, context):
+        """原样返回输入，演示最小 Node 实现。
 
-assert machine.status.value == "completed"
+        参数：
+            inputs: 本次执行消费的 source 输入。
+            context: 当前执行的只读上下文。
+
+        返回：
+            从 result 端口产生的节点结果。
+        """
+
+        return NodeResult.one(inputs["source"], port="result")
+
+
+transform = TransformNode()
+
+graph = Graph("etl")
+graph.add_node("transform", transform)
+graph.add_flow(
+    Flow(
+        name="transform",
+        entrypoint="transform",
+        endpoints=frozenset({Endpoint("transform", "result")}),
+    )
+)
+graph.freeze()
 ```
 
-更多设计说明见 [`docs/README.md`](docs/README.md)，核心运行说明见
-[`docs/graph_engine.md`](docs/graph_engine.md)，各模块职责见
-[`docs/module_map.md`](docs/module_map.md)，总体开发原则见
-[`docs/design_principles.md`](docs/design_principles.md)，0.3 行为契约见
-[`docs/reference/behavior.md`](docs/reference/behavior.md)，变更记录见
-[`CHANGELOG.md`](CHANGELOG.md)。
+同一 Graph 可以提供不同 Flow。不同 Flow 可以从不同节点进入、共享部分路径，并在不同
+`Endpoint(node_id, port)` 终止。
 
-需要从设计思路一路读到生产接入和源码实现时，使用
-[`docs/handbook/README.md`](docs/handbook/README.md)。手册覆盖迁移流水线、状态提交边界、
-全部核心组件、持久化与 Outbox、Wakeup、Fork/Join，以及完整使用和扩展示例。
+## 设计文档
 
-当前引擎已经包含：
-
-- `Machine` 的同步/异步事件迁移、等待、重试、内部 `Next` 和 `Fork/Join`，以及分支失败
-  的继续汇聚和快速失败策略。
-- `Machine.invoke()`、`stream()`、`Outcome.interrupt()` 以及命名空间图组合。
-- `Machine.stream_events()` / `astream_events()` 运行事件流，以及 Action 返回映射更新
-  `Context.data` 的能力。
-- 不可变 `OutcomeRegistry` 将 Effect/Control 解释与 Machine 执行循环分离，领域框架可以
-  增加 Tool、Memory、HumanInput 等 Outcome，而不修改核心分支。
-- 支持异步 Guard；同步入口会明确拒绝异步条件，异步入口会等待并继续执行迁移。
-- `EventBus`、生命周期 Hook，以及 `ReactiveRuntime` 事件路由。
-- `ContextSnapshot`、可选 revision/CAS 的 `SnapshotStore`、带追踪字段的 `EventLog`，并支持通过
-  `PersistenceBinding` 保存、恢复和显式重放。
-- 内存快照存储还提供可选历史查询，外部存储只需实现最小 `save/load/delete` 协议即可接入。
-- 可选 AtomicCommit/Outbox 将快照、事件事实和领域副作用意图作为一个存储事务提交；
-  WakeupScheduler 为 Wait/Retry 提供不依赖后台线程的外部定时端口。
-- `Workflow`、`ParallelPlan`、`SagaRuntime` 等建立在核心运行时之上的组合语义。
-
-这些语义都不依赖具体领域、HTTP、数据库或消息队列；后续领域能力应作为独立适配器，
-通过 Graph、ActionExecutor、EventBus 和持久化协议接入。
+- [核心概念入门](docs/core-concepts.md)
+- [Engine 设计](docs/engine-design.md)
+- [Engine 宪法](docs/constitution.md)
 
 ## 开发
 

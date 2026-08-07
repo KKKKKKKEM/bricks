@@ -1,98 +1,91 @@
-"""引擎定义层和运行时抛出的异常。"""
+"""Engine 核心抽象抛出的公共异常。"""
 
 from __future__ import annotations
 
-
-class EngineError(Exception):
-    """所有 Bricks 引擎异常的基类。"""
+from collections.abc import Iterable
 
 
-class GraphError(EngineError):
-    """图定义异常的基类。"""
+class BricksError(Exception):
+    """所有 Bricks 公共异常的基类。"""
+
+
+class GraphError(BricksError):
+    """Graph 定义和查询异常的基类。"""
+
+
+class GraphDefinitionError(GraphError):
+    """Graph 构建过程中定义不合法。"""
+
+
+class GraphFrozenError(GraphError):
+    """调用方尝试修改已经冻结的 Graph。"""
+
+    def __init__(self, graph_name: str) -> None:
+        """创建 Graph 冻结异常。
+
+        参数：
+            graph_name: 被修改的 Graph 名称。
+        """
+
+        super().__init__(f"graph {graph_name!r} is frozen")
+        self.graph_name = graph_name
 
 
 class GraphValidationError(GraphError):
-    """图无法安全执行时抛出。"""
+    """Graph 因定义不合法而无法冻结。"""
+
+    def __init__(self, issues: Iterable[str]) -> None:
+        """创建包含全部校验问题的异常。
+
+        参数：
+            issues: 本次 Graph 校验发现的问题描述。
+        """
+
+        self.issues = tuple(issues)
+        detail = "\n".join(f"- {issue}" for issue in self.issues)
+        super().__init__(f"graph validation failed:\n{detail}")
 
 
-class DuplicateNodeError(GraphError):
-    """图中出现重复节点标识时抛出。"""
+class UnknownNodeError(GraphError):
+    """Graph 中不存在指定 Node ID。"""
 
+    def __init__(self, node_id: str) -> None:
+        """创建未知 Node 异常。
 
-class DuplicateTransitionError(GraphError):
-    """迁移标识被重复使用时抛出。"""
+        参数：
+            node_id: 查询失败的 Node ID。
+        """
 
-
-class GraphSerializationError(GraphError):
-    """图定义无法编码或恢复时抛出。"""
-
-
-class RuntimeErrorBase(EngineError):
-    """运行时异常的基类。"""
-
-
-class MachineNotStarted(RuntimeErrorBase):
-    """运行实例尚未启动就收到事件时抛出。"""
-
-
-class MachineNotRunnable(RuntimeErrorBase):
-    """运行实例处于暂停、等待、完成或失败状态时抛出。"""
-
-
-class AmbiguousEventRoute(RuntimeErrorBase):
-    """未定向事件同时匹配多个运行实例时抛出。"""
-
-
-class InternalStepLimitExceeded(RuntimeErrorBase):
-    """连续的内部 Next 事件超过安全步数上限时抛出。"""
-
-
-class OutcomeConflictError(RuntimeErrorBase):
-    """Legacy compatibility error retained for integrations importing it."""
-
-
-class NoTransition(RuntimeErrorBase):
-    """当前节点没有符合条件的事件边时抛出。"""
-
-    def __init__(self, node_id: str, event_name: str):
+        super().__init__(f"unknown node {node_id!r}")
         self.node_id = node_id
-        self.event_name = event_name
+
+
+class UnknownFlowError(GraphError):
+    """Graph 中不存在指定 Flow。"""
+
+    def __init__(self, flow_name: str) -> None:
+        """创建未知 Flow 异常。
+
+        参数：
+            flow_name: 查询失败的 Flow 名称。
+        """
+
+        super().__init__(f"unknown flow {flow_name!r}")
+        self.flow_name = flow_name
+
+
+class InvalidOutputError(BricksError, TypeError):
+    """NodeResult 产生了非 Output 值。"""
+
+    def __init__(self, value: object) -> None:
+        """创建非法节点输出异常。
+
+        参数：
+            value: NodeResult 实际产生的非法值。
+        """
+
         super().__init__(
-            f"no eligible transition for event {event_name!r} from node {node_id!r}"
+            "NodeResult must produce Output instances, "
+            f"got {type(value).__name__}"
         )
-
-
-class AsyncActionRequired(RuntimeErrorBase):
-    """同步执行器收到异步 Action 或 Hook 时抛出。"""
-
-
-class AsyncGuardRequired(RuntimeErrorBase):
-    """同步图入口收到异步 Guard 时抛出。"""
-
-
-class CancellationError(RuntimeErrorBase):
-    """运行实例在执行前发现已经被取消。"""
-
-
-class ActionTimeout(RuntimeErrorBase):
-    """Action 超过执行策略允许的时间。"""
-
-
-class DuplicateEvent(RuntimeErrorBase):
-    """同一个幂等键已经被当前运行实例消费。"""
-
-    def __init__(self, key: str):
-        self.key = key
-        super().__init__(f"event has already been consumed: {key!r}")
-
-
-class PersistenceError(EngineError):
-    """快照或事件日志存储失败时抛出。"""
-
-
-class SnapshotConflictError(PersistenceError):
-    """保存快照时发现存储中的版本已经领先。"""
-
-
-class PolicyError(EngineError):
-    """执行策略配置或执行失败时抛出。"""
+        self.value = value

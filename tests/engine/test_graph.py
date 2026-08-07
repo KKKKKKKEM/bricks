@@ -1,602 +1,386 @@
-import json
-import asyncio
-from dataclasses import dataclass, field
-from typing import ClassVar
+from types import MappingProxyType
 
 import pytest
 
-from bricks.engine import Event, Graph, GraphBuilder, Machine, Status
-from bricks.engine.errors import (
-    AsyncGuardRequired,
-    GraphSerializationError,
+from bricks.engine import (
+    Edge,
+    Endpoint,
+    Flow,
+    Graph,
+    GraphDefinitionError,
+    GraphFrozenError,
     GraphValidationError,
-    NoTransition,
-)
-from bricks.engine.graph import (
-    AllOf,
-    AnyOf,
-    BaseNode,
-    Not,
-    Predicate,
-    cycle_nodes,
-    dead_end_nodes,
-    non_terminating_nodes,
-    reachable_nodes,
-    terminal_nodes,
-    transition_conflicts,
-    unreachable_nodes,
+    InputPolicy,
+    Node,
+    NodeInputs,
+    NodeResult,
+    Ports,
+    UnknownFlowError,
+    UnknownNodeError,
 )
 
 
-def test_sync_dispatch_rejects_an_async_guard_with_a_clear_error():
-    async def allow(context, event):
-        return True
+class IdentityNode(Node):
+    async def execute(self, inputs: NodeInputs, context):
+        """原样返回输入。
 
-    builder = GraphBuilder("async-guard-sync", initial="start")
-    builder.action("start")
-    builder.terminal("done")
-    builder.transition("start", "finish", "done", guard=allow)
-    machine = Machine(builder.build())
-    machine.start()
+        参数：
+            inputs: 测试传入的节点输入。
+            context: 本次节点调用的执行上下文。
 
-    with pytest.raises(AsyncGuardRequired, match="dispatch_async"):
-        machine.dispatch("finish")
+        返回：
+            包含原输入的 NodeResult。
+        """
 
-    assert machine.status is Status.RUNNING
-    assert machine.node_id == "start"
+        return NodeResult.one(inputs.single())
 
 
-def test_async_dispatch_awaits_async_guards_and_combinators():
-    async def allow(context, event):
-        await asyncio.sleep(0)
-        return context.get("allowed", False)
+class BaseValue:
+    """Graph 类型兼容测试使用的基础类型。"""
 
-    async def enabled(context, event):
-        await asyncio.sleep(0)
-        return True
 
-    builder = GraphBuilder("async-guard", initial="start")
-    builder.action("start", lambda context, event: {"allowed": True})
-    builder.terminal("done")
-    builder.transition(
-        "start",
-        "finish",
-        "done",
-        guard=lambda context, event: AllOf(allow, enabled)(context, event),
+class ChildValue(BaseValue):
+    """Graph 类型兼容测试使用的派生类型。"""
+
+
+class OtherValue:
+    """Graph 类型兼容测试使用的不相关类型。"""
+
+
+class ProducerNode(IdentityNode):
+    """产生 ChildValue 的测试 Node。"""
+
+    output_ports = Ports(result=ChildValue)
+
+
+class ConsumerNode(IdentityNode):
+    """接收 BaseValue 并产生 BaseValue 的测试 Node。"""
+
+    input_ports = Ports(value=BaseValue)
+    output_ports = Ports(result=BaseValue)
+
+
+class OtherConsumerNode(IdentityNode):
+    """只接收 OtherValue 的测试 Node。"""
+
+    input_ports = Ports(value=OtherValue)
+    output_ports = Ports(result=OtherValue)
+
+
+def build_shared_graph() -> Graph:
+    """构建包含共享路径和两个 Flow 的测试 Graph。
+
+    返回：
+        尚未冻结的测试 Graph。
+    """
+
+    node = IdentityNode()
+    graph = Graph("etl")
+    graph.add_node("extract", node)
+    graph.add_node("transform", node)
+    graph.add_node("validate", node)
+    graph.add_node("load", node)
+    graph.connect("extract", "transform")
+    graph.connect("transform", "validate")
+    graph.connect("validate", "load")
+    graph.add_flow(
+        Flow(
+            name="full",
+            entrypoint="extract",
+            endpoints=frozenset({Endpoint("load")}),
+        )
     )
-    machine = Machine(builder.build())
-
-    async def run():
-        await machine.start_async()
-        await machine.dispatch_async("finish")
-
-    asyncio.run(run())
-
-    assert machine.status is Status.COMPLETED
-
-
-def test_guard_receives_the_complete_event_for_sync_routing():
-    observed = []
-
-    def allow(context, event):
-        observed.append((event.payload, event.source, event.event_id))
-        return event.payload["approved"] is True
-
-    builder = GraphBuilder("complete-event-guard", initial="start")
-    builder.action("start")
-    builder.terminal("done")
-    builder.transition("start", "review", "done", guard=allow)
-    machine = Machine(builder.build())
-    machine.start()
-
-    received = Event(
-        "review",
-        payload={"approved": True},
-        source="reviewer",
-        event_id="review-1",
+    graph.add_flow(
+        Flow(
+            name="transform-only",
+            entrypoint="transform",
+            endpoints=frozenset({Endpoint("validate")}),
+        )
     )
-    machine.dispatch(received)
-
-    assert observed == [({"approved": True}, "reviewer", "review-1")]
+    return graph
 
 
-def test_async_guard_receives_the_complete_event():
-    observed = []
+def test_graph_supports_shared_routes_with_flow_specific_endpoints() -> None:
+    """验证多个 Flow 可以共享路径并在不同位置终止。"""
 
-    async def allow(context, event):
-        await asyncio.sleep(0)
-        observed.append((event.payload, event.source, event.event_id))
-        return event.payload["approved"] is True
+    graph = build_shared_graph().freeze()
 
-    builder = GraphBuilder("async-complete-event-guard", initial="start")
-    builder.action("start")
-    builder.terminal("done")
-    builder.transition("start", "review", "done", guard=allow)
-    machine = Machine(builder.build())
+    assert graph.is_endpoint("transform-only", "validate")
+    assert not graph.is_endpoint("full", "validate")
+    assert graph.is_endpoint("full", "load")
+    assert graph.outgoing("validate") == (
+        Edge("validate", "load"),
+    )
 
-    async def run():
-        await machine.start_async()
-        await machine.dispatch_async(
-            Event(
-                "review",
-                payload={"approved": True},
-                source="reviewer",
-                event_id="review-async-1",
-            )
+
+def test_graph_accepts_compatible_typed_port_connections() -> None:
+    """验证 Graph 允许派生输出连接基础类型输入。"""
+
+    graph = Graph("typed")
+    graph.add_node("producer", ProducerNode())
+    graph.add_node("consumer", ConsumerNode())
+    graph.connect(
+        "producer",
+        "consumer",
+        source_port="result",
+        target_port="value",
+    )
+    graph.add_flow(
+        Flow(
+            "default",
+            "producer",
+            frozenset({Endpoint("consumer", "result")}),
+        )
+    )
+
+    graph.freeze()
+
+    assert graph.outgoing("producer", "result") == (
+        Edge("producer", "consumer", "result", "value"),
+    )
+
+
+def test_freeze_rejects_incompatible_typed_port_connections() -> None:
+    """验证 Graph 拒绝类型不兼容的 Edge。"""
+
+    graph = Graph("typed")
+    graph.add_node("producer", ProducerNode())
+    graph.add_node("consumer", OtherConsumerNode())
+    graph.connect(
+        "producer",
+        "consumer",
+        source_port="result",
+        target_port="value",
+    )
+    graph.add_flow(
+        Flow(
+            "default",
+            "producer",
+            frozenset({Endpoint("consumer", "result")}),
+        )
+    )
+
+    with pytest.raises(GraphValidationError) as raised:
+        graph.freeze()
+
+    assert any("produces ChildValue" in issue for issue in raised.value.issues)
+
+
+def test_freeze_rejects_undeclared_edge_and_endpoint_ports() -> None:
+    """验证 Graph 拒绝 Edge 或 Endpoint 引用未声明端口。"""
+
+    graph = Graph("ports")
+    graph.add_node("producer", ProducerNode())
+    graph.add_node("consumer", ConsumerNode())
+    graph.connect(
+        "producer",
+        "consumer",
+        source_port="missing-output",
+        target_port="missing-input",
+    )
+    graph.add_flow(
+        Flow(
+            "default",
+            "producer",
+            frozenset({Endpoint("consumer", "missing-result")}),
+        )
+    )
+
+    with pytest.raises(GraphValidationError) as raised:
+        graph.freeze()
+
+    assert any("source port producer.missing-output" in issue for issue in raised.value.issues)
+    assert any("target port consumer.missing-input" in issue for issue in raised.value.issues)
+    assert any("endpoint port consumer.missing-result" in issue for issue in raised.value.issues)
+
+
+def test_freeze_rejects_input_policy_that_does_not_cover_ports() -> None:
+    """验证 Graph 拒绝没有覆盖全部声明端口的输入策略。"""
+
+    class InvalidPolicyNode(IdentityNode):
+        """声明了未被策略消费端口的测试 Node。"""
+
+        input_ports = Ports(left=int, right=int)
+        input_policy = InputPolicy.require("left")
+
+    graph = Graph("policy")
+    graph.add_node("node", InvalidPolicyNode())
+    graph.add_flow(
+        Flow("default", "node", frozenset({Endpoint("node")}))
+    )
+
+    with pytest.raises(GraphValidationError) as raised:
+        graph.freeze()
+
+    assert any("does not cover ports" in issue for issue in raised.value.issues)
+
+
+def test_zero_input_node_requires_on_start_policy() -> None:
+    """验证零输入 Source Node 只能使用 on_start 策略。"""
+
+    class InvalidSourceNode(IdentityNode):
+        """错误使用默认 all 策略的零输入 Node。"""
+
+        input_ports = Ports()
+
+    graph = Graph("source")
+    graph.add_node("source", InvalidSourceNode())
+    graph.add_flow(
+        Flow("default", "source", frozenset({Endpoint("source")}))
+    )
+
+    with pytest.raises(GraphValidationError) as raised:
+        graph.freeze()
+
+    assert any("requires at least one port" in issue for issue in raised.value.issues)
+
+
+def test_zero_input_node_accepts_on_start_policy() -> None:
+    """验证零输入 Source Node 可以使用 on_start 策略。"""
+
+    class SourceNode(IdentityNode):
+        """使用合法 on_start 策略的零输入 Node。"""
+
+        input_ports = Ports()
+        input_policy = InputPolicy.on_start()
+
+    graph = Graph("source")
+    graph.add_node("source", SourceNode())
+    graph.add_flow(
+        Flow("default", "source", frozenset({Endpoint("source")}))
+    )
+
+    graph.freeze()
+
+    assert graph.frozen
+
+
+def test_same_node_behavior_can_be_bound_to_multiple_positions() -> None:
+    """验证同一 Node 行为可以绑定到多个 Graph 位置。"""
+
+    node = IdentityNode()
+    graph = Graph("reuse")
+    graph.add_node("first", node)
+    graph.add_node("second", node)
+    graph.connect("first", "second")
+    graph.add_flow(
+        Flow("default", "first", frozenset({Endpoint("second")}))
+    )
+    graph.freeze()
+
+    assert graph.node("first") is node
+    assert graph.node("second") is node
+
+
+def test_freeze_is_idempotent_and_prevents_mutation() -> None:
+    """验证 freeze() 幂等且冻结后禁止修改。"""
+
+    graph = build_shared_graph()
+
+    assert graph.freeze() is graph
+    assert graph.freeze() is graph
+    assert graph.frozen
+
+    with pytest.raises(GraphFrozenError):
+        graph.add_node("another", IdentityNode())
+    with pytest.raises(GraphFrozenError):
+        graph.connect("load", "extract")
+    with pytest.raises(GraphFrozenError):
+        graph.add_flow(
+            Flow("another", "load", frozenset({Endpoint("load")}))
         )
 
-    asyncio.run(run())
 
-    assert observed == [({"approved": True}, "reviewer", "review-async-1")]
+def test_graph_exposes_read_only_definition_views() -> None:
+    """验证 Graph 只暴露只读定义视图。"""
 
+    graph = build_shared_graph().freeze()
 
-def test_async_guard_combinators_keep_short_circuit_semantics():
-    calls = []
-
-    async def false_guard(context, event):
-        calls.append("false")
-        await asyncio.sleep(0)
-        return False
-
-    async def true_guard(context, event):
-        calls.append("true")
-        await asyncio.sleep(0)
-        return True
-
-    async def run():
-        assert await AllOf(false_guard, true_guard)(None, None) is False
-        assert await AnyOf(false_guard, true_guard)(None, None) is True
-        assert await Not(Predicate(false_guard))(None, None) is True
-
-    asyncio.run(run())
-
-    assert calls == ["false", "false", "true", "false"]
-
-
-def test_builder_produces_a_shared_immutable_graph_definition():
-    builder = GraphBuilder("approval", initial="draft")
-    builder.action("draft")
-    builder.terminal("approved")
-    builder.transition("draft", "approve", "approved")
-    graph = builder.build()
-
-    assert graph.id == "approval"
-    assert graph.node("draft").kind == "action"
-    assert graph.node("approved").terminal is True
-    assert len(tuple(graph.transitions_from("draft", "approve"))) == 1
-
+    assert isinstance(graph.nodes, MappingProxyType)
+    assert isinstance(graph.flows, MappingProxyType)
     with pytest.raises(TypeError):
-        graph.nodes["new"] = graph.node("draft")
-    with pytest.raises(TypeError):
-        graph.node("draft").metadata["owner"] = "alice"
-    with pytest.raises(TypeError):
-        graph.transitions[0].metadata["owner"] = "alice"
+        graph.nodes["new"] = IdentityNode()  # type: ignore[index]
 
 
-def test_event_rejects_empty_identity_fields():
-    with pytest.raises(ValueError, match="event name"):
-        Event("")
-    with pytest.raises(ValueError, match="event_id"):
-        Event("ready", event_id="")
+def test_freeze_reports_unknown_edge_nodes() -> None:
+    """验证 freeze() 报告 Edge 引用的未知 Node。"""
 
-
-def test_custom_node_extends_base_node_without_machine_type_branches():
-    @dataclass(frozen=True)
-    class ApprovalNode(BaseNode):
-        kind: ClassVar[str] = "approval"
-        role: str = "reviewer"
-
-        def enter(self, context, event, executor):
-            context.set("approval_role", self.role)
-            return super().enter(context, event, executor)
-
-    builder = GraphBuilder("custom-node", initial="approval")
-    builder.add_node(ApprovalNode("approval", role="owner"))
-    builder.terminal("done")
-    builder.transition("approval", "approved", "done")
-
-    machine = Machine(builder.build())
-    machine.start()
-    machine.dispatch("approved")
-
-    assert machine.context.get("approval_role") == "owner"
-    assert machine.status is Status.COMPLETED
-
-
-def test_async_machine_preserves_custom_sync_enter_and_exit_overrides():
-    @dataclass(frozen=True)
-    class ApprovalNode(BaseNode):
-        kind: ClassVar[str] = "approval"
-
-        def enter(self, context, event, executor):
-            context.set("entered", event.name)
-            return super().enter(context, event, executor)
-
-        def exit(self, context, event, executor):
-            context.set("exited", event.name)
-            return super().exit(context, event, executor)
-
-    builder = GraphBuilder("async-custom-node", initial="approval")
-    builder.add_node(ApprovalNode("approval"))
-    builder.terminal("done")
-    builder.transition("approval", "approved", "done")
-    machine = Machine(builder.build())
-
-    async def run():
-        await machine.start_async()
-        await machine.dispatch_async("approved")
-
-    asyncio.run(run())
-
-    assert machine.context.data == {
-        "entered": "__start__",
-        "exited": "approved",
-    }
-    assert machine.status is Status.COMPLETED
-
-
-def test_builder_includes_a_graph_as_a_namespaced_reusable_fragment():
-    fragment_builder = GraphBuilder("review", initial="draft")
-    fragment_builder.action("draft")
-    fragment_builder.action("approved")
-    fragment_builder.transition("draft", "approve", "approved")
-    fragment = fragment_builder.build()
-
-    builder = GraphBuilder("order", initial="start")
-    builder.action("start")
-    entry = builder.include(fragment, prefix="review_flow")
-    builder.transition("start", "review", entry)
-    graph = builder.build()
-
-    assert entry == "review_flow.draft"
-    assert graph.node("review_flow.approved").kind == "action"
-    assert graph.transitions[-1].source == "start"
-    assert graph.transitions[-1].target == "review_flow.draft"
-
-    machine = Machine(graph)
-    machine.start()
-    machine.dispatch("review")
-    machine.dispatch("approve")
-    assert machine.node_id == "review_flow.approved"
-
-
-def test_builder_include_reruns_custom_node_id_invariants():
-    @dataclass(frozen=True)
-    class DerivedNode(BaseNode):
-        qualified_name: str = field(init=False)
-
-        def __post_init__(self):
-            super().__post_init__()
-            object.__setattr__(self, "qualified_name", f"node:{self.id}")
-
-    fragment_builder = GraphBuilder("fragment", initial="entry")
-    fragment_builder.add_node(DerivedNode("entry"))
-    fragment = fragment_builder.build()
-    builder = GraphBuilder("host", initial="ns.entry")
-    builder.include(fragment, prefix="ns")
-
-    included = builder.build().node("ns.entry")
-    assert included.qualified_name == "node:ns.entry"
-
-
-def test_graph_describe_exposes_structure_without_exposing_executable_objects():
-    builder = GraphBuilder("described", initial="start")
-    builder.action("start", lambda context, event: None, metadata={"role": "root"})
-    builder.terminal("done")
-    builder.transition(
-        "start",
-        "finish",
-        "done",
-        guard=lambda context, event: True,
-        action=lambda context, event: None,
-    )
-    description = builder.build().describe()
-
-    assert description["id"] == "described"
-    assert description["schema"] == "bricks.graph.description"
-    assert description["schema_version"] == 1
-    assert description["graph_version"] == "1"
-    assert description["initial"] == "start"
-    assert description["nodes"][0]["has_action"] is True
-    assert description["transitions"][0]["has_guard"] is True
-    assert "action" not in description["transitions"][0]
-    assert json.loads(json.dumps(description))["schema"] == "bricks.graph.description"
-    mermaid = builder.build().to_mermaid()
-    assert "graph TD" in mermaid
-    assert '"finish"' in mermaid
-    dot = builder.build().to_dot()
-    assert dot.startswith('digraph "described"')
-    assert '"start" -> "done"' in dot
-    assert "[guard]" in dot
-
-
-def test_graph_description_keeps_builtin_node_configuration_without_callables():
-    child = GraphBuilder("described-child", initial="start")
-    child.action("start")
-    child_graph = child.build()
-
-    builder = GraphBuilder("described-config", initial="wait")
-    builder.wait("wait", delay=3, resume_event="wake")
-    builder.subgraph(
-        "child",
-        child_graph,
-        entry_event="enter",
-        return_event="returned",
-        data={"source": "test"},
-    )
-    description = builder.build().describe()
-    nodes = {node["id"]: node for node in description["nodes"]}
-
-    assert nodes["wait"]["config"] == {"delay": 3, "resume_event": "wake"}
-    assert nodes["child"]["config"] == {
-        "graph_id": "described-child",
-        "entry_event": "enter",
-        "return_event": "returned",
-        "data": {"source": "test"},
-    }
-    assert "action" not in nodes["wait"]
-
-
-def test_subgraph_node_data_is_detached_and_read_only():
-    child = GraphBuilder("immutable-child", initial="start")
-    child.action("start")
-    child_graph = child.build()
-    data = {"nested": {"items": [1]}}
-
-    builder = GraphBuilder("immutable-subgraph", initial="start")
-    builder.action("start")
-    builder.subgraph("child", child_graph, data=data)
-    graph = builder.build()
-
-    data["nested"]["items"].append(2)
-    stored = graph.node("child").data
-    assert stored == {"nested": {"items": [1]}}
-    with pytest.raises(TypeError):
-        stored["new"] = "value"
-
-
-def test_graph_serialization_rejects_duplicate_node_ids():
-    definition = {
-        "version": 1,
-        "id": "duplicate-nodes",
-        "initial": "start",
-        "nodes": [
-            {"id": "start", "kind": "node"},
-            {"id": "start", "kind": "terminal", "terminal": True},
-        ],
-        "transitions": [],
-    }
-
-    with pytest.raises(GraphSerializationError, match="duplicate node id"):
-        Graph.from_dict(definition)
-
-def test_graph_static_analysis_reports_unreachable_nodes():
-    builder = GraphBuilder("analysis", initial="start")
-    builder.action("start")
-    builder.action("reachable")
-    builder.action("orphan")
-    builder.transition("start", "go", "reachable")
-    graph = builder.build()
-
-    assert reachable_nodes(graph) == {"start", "reachable"}
-    assert unreachable_nodes(graph) == {"orphan"}
-
-
-def test_graph_static_analysis_reports_terminals_and_reachable_dead_ends():
-    builder = GraphBuilder("dead-ends", initial="start")
-    builder.action("start")
-    builder.action("dead-end")
-    builder.terminal("done")
-    builder.action("orphan")
-    builder.transition("start", "go", "dead-end")
-    builder.transition("start", "finish", "done")
-    graph = builder.build()
-
-    assert terminal_nodes(graph) == {"done"}
-    assert dead_end_nodes(graph) == {"dead-end"}
-
-
-def test_graph_static_analysis_reports_cycles_terminal_coverage_and_conflicts():
-    builder = GraphBuilder("advanced-analysis", initial="start")
-    builder.action("start")
-    builder.action("loop-a")
-    builder.action("loop-b")
-    builder.action("stuck")
-    builder.terminal("done")
-    builder.transition("start", "begin", "loop-a")
-    builder.transition("start", "choose", "loop-a")
-    builder.transition("start", "choose", "done")
-    builder.transition("start", "stuck", "stuck")
-    builder.transition("loop-a", "next", "loop-b")
-    builder.transition("loop-b", "back", "loop-a")
-    builder.transition("loop-b", "finish", "done")
-    graph = builder.build()
-
-    assert cycle_nodes(graph) == {"loop-a", "loop-b"}
-    assert non_terminating_nodes(graph) == {"stuck"}
-    assert len(transition_conflicts(graph)) == 1
-    assert set(transition_conflicts(graph)[0]) == {
-        "start:choose:loop-a:1",
-        "start:choose:done:2",
-    }
-
-    self_loop = GraphBuilder("self-loop", initial="loop")
-    self_loop.action("loop")
-    self_loop.transition("loop", "again", None)
-    assert cycle_nodes(self_loop.build()) == {"loop"}
-
-
-def test_graph_definition_round_trips_with_explicit_callable_resolvers():
-    def enter(context, event):
-        context.set("entered", True)
-
-    def allow(context, event):
-        return context.get("allowed", False)
-
-    def transition_action(context, event):
-        context.set("transitioned", True)
-
-    builder = GraphBuilder("serializable", initial="ready")
-    builder.action("ready", enter)
-    builder.terminal("done")
-    builder.transition(
-        "ready",
-        "finish",
-        "done",
-        guard=allow,
-        action=transition_action,
-        priority=2,
-        metadata={"owner": "test"},
-    )
-    graph = builder.build()
-    actions = {
-        "enter": enter,
-        "transition": transition_action,
-    }
-    encoded = graph.to_dict(
-        action_serializer=lambda action: next(
-            name for name, value in actions.items() if value is action
-        ),
-        guard_serializer=lambda guard: "allow" if guard is allow else "unknown",
+    graph = Graph("invalid")
+    graph.add_node("start", IdentityNode())
+    graph.connect("start", "missing")
+    graph.add_flow(
+        Flow("default", "start", frozenset({Endpoint("start")}))
     )
 
-    restored = graph.from_dict(
-        encoded,
-        action_resolver=actions.__getitem__,
-        guard_resolver=lambda reference: {"allow": allow}[reference],
+    with pytest.raises(GraphValidationError) as raised:
+        graph.freeze()
+
+    assert "edge target 'missing' is not a registered node" in raised.value.issues
+    assert not graph.frozen
+
+
+def test_freeze_reports_unreachable_flow_endpoint() -> None:
+    """验证 freeze() 报告 Flow 无法到达的 Endpoint。"""
+
+    graph = Graph("invalid")
+    graph.add_node("start", IdentityNode())
+    graph.add_node("isolated", IdentityNode())
+    graph.add_flow(
+        Flow("default", "start", frozenset({Endpoint("isolated")}))
     )
 
-    assert restored.to_dict(
-        action_serializer=lambda action: next(
-            name for name, value in actions.items() if value is action
-        ),
-        guard_serializer=lambda guard: "allow",
-    ) == encoded
+    with pytest.raises(GraphValidationError) as raised:
+        graph.freeze()
+
+    assert any("cannot reach any endpoint" in issue for issue in raised.value.issues)
 
 
-def test_graph_definition_version_is_preserved_and_validated():
-    builder = GraphBuilder("versioned", initial="ready", version="2026.1")
-    builder.action("ready")
-    graph = builder.build()
-    encoded = graph.to_dict()
-    restored = Graph.from_dict(encoded)
+def test_duplicate_nodes_edges_and_flows_are_rejected() -> None:
+    """验证重复 Node、Edge 和 Flow 会被拒绝。"""
 
-    assert restored.version == "2026.1"
-    assert restored.describe()["version"] == "2026.1"
+    graph = Graph("duplicates")
+    graph.add_node("node", IdentityNode())
 
+    with pytest.raises(GraphDefinitionError, match="duplicate node"):
+        graph.add_node("node", IdentityNode())
 
-def test_graph_serialization_requires_explicit_resolvers_and_valid_version():
-    builder = GraphBuilder("serializable-errors", initial="ready")
-    builder.action("ready", lambda context, event: None)
-    graph = builder.build()
+    graph.connect("node", "node")
+    with pytest.raises(GraphDefinitionError, match="duplicate edge"):
+        graph.connect("node", "node")
 
-    with pytest.raises(GraphSerializationError, match="action_serializer"):
-        graph.to_dict()
-
-    encoded = {
-        "version": 999,
-        "id": "serializable-errors",
-        "initial": "ready",
-        "nodes": [],
-        "transitions": [],
-    }
-    with pytest.raises(GraphSerializationError, match="unsupported graph schema"):
-        Graph.from_dict(encoded)
+    flow = Flow("default", "node", frozenset({Endpoint("node")}))
+    graph.add_flow(flow)
+    with pytest.raises(GraphDefinitionError, match="duplicate flow"):
+        graph.add_flow(flow)
 
 
-def test_custom_node_serialization_uses_a_small_explicit_codec():
-    @dataclass(frozen=True)
-    class ApprovalNode(BaseNode):
-        kind: ClassVar[str] = "approval"
-        role: str = "reviewer"
+def test_unknown_node_and_flow_lookups_are_explicit() -> None:
+    """验证未知 Node 和 Flow 查询抛出明确异常。"""
 
-    builder = GraphBuilder("custom-serializable", initial="approval")
-    builder.add_node(ApprovalNode("approval", role="owner"))
-    builder.terminal("done")
-    builder.transition("approval", "approve", "done")
-    graph = builder.build()
+    graph = build_shared_graph().freeze()
 
-    encoded = graph.to_dict(
-        node_serializer=lambda node: {"role": node.role},
-    )
-    restored = Graph.from_dict(
-        encoded,
-        node_resolver=lambda value: ApprovalNode(
-            value["id"], role=value["config"]["role"]
-        ),
+    with pytest.raises(UnknownNodeError):
+        graph.node("missing")
+    with pytest.raises(UnknownNodeError):
+        graph.outgoing("missing")
+    with pytest.raises(UnknownFlowError):
+        graph.flow("missing")
+
+
+def test_flow_normalizes_endpoint_collection_to_frozenset() -> None:
+    """验证 Flow 将 Endpoint 集合规范化为 frozenset。"""
+
+    flow = Flow(
+        "default",
+        "node",
+        {Endpoint("node")},  # type: ignore[arg-type]
     )
 
-    assert restored.node("approval").role == "owner"
+    assert flow.endpoints == frozenset({Endpoint("node")})
 
 
-def test_guarded_event_transition_and_hook_order():
-    calls = []
-    builder = GraphBuilder("guarded", initial="ready")
-    builder.action("ready", lambda ctx, event: ctx.set("seen", event.payload))
-    builder.terminal("accepted")
-    builder.terminal("rejected")
-    builder.transition(
-        "ready",
-        "review",
-        "accepted",
-        guard=lambda context, event: context.get("allowed", False),
-        action=lambda context, event: context.set("seen", event.payload),
-    )
-    builder.transition("ready", "review", "rejected")
+def test_flow_requires_at_least_one_endpoint() -> None:
+    """验证 Flow 至少需要一个 Endpoint。"""
 
-    machine = Machine(builder.build())
-    machine.context.set("allowed", True)
-    machine.hooks.on("transition.before", lambda hook: calls.append("before"))
-    machine.hooks.on("node.exit", lambda hook: calls.append("exit"))
-    machine.hooks.on("node.enter", lambda hook: calls.append("enter"))
-    machine.hooks.on("transition.after", lambda hook: calls.append("after"))
-
-    machine.start()
-    calls.clear()
-    machine.dispatch(Event("review", payload={"id": 1}))
-
-    assert machine.node_id == "accepted"
-    assert machine.status is Status.COMPLETED
-    assert machine.context.get("seen") == {"id": 1}
-    assert calls == ["before", "exit", "enter", "after"]
-
-
-def test_invalid_graph_and_unhandled_events_fail_explicitly():
-    with pytest.raises(GraphValidationError):
-        GraphBuilder("invalid", initial="missing").build()
-
-    builder = GraphBuilder("unhandled", initial="ready")
-    builder.action("ready")
-    machine = Machine(builder.build())
-    machine.start()
-    with pytest.raises(NoTransition):
-        machine.dispatch("unknown")
-
-
-def test_custom_node_can_add_a_required_dataclass_field():
-    @dataclass(frozen=True)
-    class RequiredNode(BaseNode):
-        value: str
-
-    node = RequiredNode("required", "configured")
-
-    assert node.id == "required"
-    assert node.value == "configured"
-
-
-def test_graph_constructor_enforces_the_same_invariants_as_builder():
-    with pytest.raises(GraphValidationError, match="initial node"):
-        Graph(id="invalid", initial="missing", nodes={}, transitions=())
-
-
-def test_graph_metadata_is_recursively_immutable_and_input_isolated():
-    metadata = {"nested": {"owners": ["alice"]}}
-    graph = GraphBuilder("immutable", initial="node").action(
-        "node", metadata=metadata
-    ).build()
-    metadata["nested"]["owners"].append("bob")
-
-    owners = graph.node("node").metadata["nested"]["owners"]
-    assert owners == ["alice"]
-    with pytest.raises(AttributeError):
-        owners.append("mallory")
+    with pytest.raises(ValueError, match="must not be empty"):
+        Flow("default", "node", frozenset())
