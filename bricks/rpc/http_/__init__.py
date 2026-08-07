@@ -1,1 +1,0 @@
-# HTTP RPC implementation

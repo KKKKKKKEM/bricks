@@ -1,46 +1,29 @@
 [project]
 name = "bricks-py"
-version = "0.2.6"
-description = "quickly build your crawler"
+version = "0.3.0"
+description = "A composable graph execution engine"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [
     { name = "Kem", email = "531144129@qq.com" },
 ]
-keywords = ["bricks", "crawler", "spider", "scraper"]
+keywords = ["graph", "workflow", "state-machine", "automation", "engine"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Topic :: Internet :: WWW/HTTP",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 requires-python = ">=3.10,<3.14"
-dependencies = [
-    "better-exceptions==0.3.3",
-    "curl-cffi==0.15.0",
-    "jmespath-community==1.1.3",
-    "jsonpath==0.82.2",
-    "loguru==0.7.3",
-    "lxml==5.3.1",
-    "redis==5.2.1",
-    "w3lib==2.3.1",
-]
+dependencies = []
 
 [project.urls]
 Homepage = "https://github.com/KKKKKKKEM/bricks"
 Repository = "https://github.com/KKKKKKKEM/bricks.git"
-Documentation = "https://kkkkkkkem.vercel.app/bricks"
-"Bug Tracker" = "https://github.com/KKKKKKKEM/bricks/issues"
-
-[project.optional-dependencies]
-requests = ["requests>=2.28.0"]
-httpx = ["httpx>=0.24.0"]
-playwright = ["playwright>=1.40.0"]
 
 [build-system]
 requires = ["hatchling"]
@@ -53,12 +36,9 @@ packages = ["bricks"]
 include = [
     "bricks/",
     "README.md",
+    "CHANGELOG.md",
+    "docs/",
+    "examples/",
     "LICENSE",
     "pyproject.toml",
 ]
-
-[[tool.uv.index]]
-name = "testpypi"
-url = "https://test.pypi.org/simple/"
-publish-url = "https://test.pypi.org/legacy/"
-explicit = true
