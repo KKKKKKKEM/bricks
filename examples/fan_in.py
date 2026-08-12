@@ -30,8 +30,7 @@ def run(value: int = 2) -> int:
 
     graph = (
         Graph(entrypoint="split")
-        .add("split", Split())
-        .add("add", Add())
+        .add(split=Split(), add=Add())
         .connect("split", "add", source_port="left", target_port="left")
         .connect("split", "add", source_port="right", target_port="right")
     )

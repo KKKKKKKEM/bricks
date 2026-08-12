@@ -26,7 +26,7 @@ class Upper(Node):
         return Output(inputs["text"].upper(), "result")
 
 
-graph = Graph(entrypoint="upper").add("upper", Upper())
+graph = Graph(entrypoint="upper").add(upper=Upper())
 
 with Runtime() as runtime:
     runtime.register("upper.graph", graph)
@@ -43,8 +43,9 @@ with Runtime() as runtime:
 
 ## 当前范围
 
-默认实现提供内存事件分发、线程池队列并发、Graph 冻结与类型校验，以及可替换的 EventBus、TaskBackend、
-GraphExecutor 协议。它不提供持久化、ack、进程恢复、定时器、死信队列或 exactly-once 语义。
+默认实现提供内存事件分发、线程池队列并发、Graph 冻结与类型校验，以及可替换的 EventBus、TaskPublisher、
+TaskConsumer、TaskBackend 和 GraphExecutor 协议。它不提供持久化、ack、进程恢复、定时器、死信队列或
+exactly-once 语义。
 
 ```bash
 uv run python examples/linear.py

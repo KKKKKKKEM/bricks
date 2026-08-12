@@ -7,6 +7,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from inspect import iscoroutinefunction
 from types import MappingProxyType
+from typing import overload
 
 from .core import (
     AsyncNode,
@@ -127,24 +128,44 @@ class Graph:
         self._entrypoint = require_non_empty_string(node_id, "graph entrypoint")
         return self
 
-    def add(self, node_id: str, node: Node) -> Graph:
-        """把 Node 行为绑定到 Graph 中的一个位置。
+    @overload
+    def add(self, node_id: str, node: Node, /) -> Graph: ...
+
+    @overload
+    def add(self, **nodes: Node) -> Graph: ...
+
+    def add(self, *args: object, **nodes: Node) -> Graph:
+        """把一个或多个 Node 行为绑定到 Graph 中的位置。
 
         参数：
-            node_id: 当前 Graph 内唯一的 Node ID。
-            node: 可复用 Node 行为。
+            args: 单个 Node 的 ID 和可复用 Node 行为。
+            nodes: 以关键字名称作为 Node ID 的一组 Node 行为。
 
         返回：
             当前 Graph，便于链式构建。
         """
 
         self._ensure_mutable()
-        node_id = require_non_empty_string(node_id, "node_id")
-        if not isinstance(node, Node):
-            raise TypeError("node must be a Node")
-        if node_id in self._nodes:
-            raise GraphError(f"duplicate node {node_id!r}")
-        self._nodes[node_id] = node
+        if args and nodes:
+            raise TypeError("add accepts either (node_id, node) or keyword nodes")
+        if args:
+            if len(args) != 2:
+                raise TypeError("add expects a node_id and node")
+            bindings = ((args[0], args[1]),)
+        else:
+            if not nodes:
+                raise TypeError("add requires at least one node")
+            bindings = tuple(nodes.items())
+
+        validated: list[tuple[str, Node]] = []
+        for node_id, node in bindings:
+            node_id = require_non_empty_string(node_id, "node_id")
+            if not isinstance(node, Node):
+                raise TypeError(f"node {node_id!r} must be a Node")
+            if node_id in self._nodes:
+                raise GraphError(f"duplicate node {node_id!r}")
+            validated.append((node_id, node))
+        self._nodes.update(validated)
         return self
 
     def connect(

@@ -28,8 +28,7 @@ def run(text: str = "  hello, bricks  ") -> str:
 
     graph = (
         Graph(entrypoint="strip")
-        .add("strip", Strip())
-        .add("upper", Upper())
+        .add(strip=Strip(), upper=Upper())
         .connect("strip", "upper", source_port="text", target_port="text")
     )
     with Runtime() as runtime:

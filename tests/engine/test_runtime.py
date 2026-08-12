@@ -263,8 +263,8 @@ def test_context_emit_routes_to_another_graph() -> None:
     assert received == ["hello"]
 
 
-def test_runtime_has_explicit_observe_and_route_methods() -> None:
-    """观察者和 Graph 路由有清晰的命名入口。"""
+def test_runtime_keeps_observe_separate_from_combined_on() -> None:
+    """observe 只观察 Event，on 组合 route 与 consume。"""
 
     observed = []
     received: list[str] = []
@@ -281,7 +281,7 @@ def test_runtime_has_explicit_observe_and_route_methods() -> None:
     with Runtime() as runtime:
         runtime.register("consumer.graph", graph)
         runtime.observe("value.observed", observed.append)
-        runtime.route(
+        runtime.on(
             "value.routed",
             graph="consumer.graph",
             queue="values",
@@ -292,6 +292,27 @@ def test_runtime_has_explicit_observe_and_route_methods() -> None:
 
     assert [event.payload for event in observed] == ["seen"]
     assert received == ["handled"]
+
+
+def test_runtime_on_forwards_subscription() -> None:
+    """组合入口保留 route 的显式 subscription 身份。"""
+
+    class Consumer(Node):
+        input_ports = Ports(value=str)
+        output_ports = Ports()
+
+        def execute(self, inputs, context: Context) -> None:
+            del inputs, context
+
+    graph = Graph(entrypoint="consume").add(consume=Consumer())
+    with Runtime() as runtime:
+        runtime.register("consumer.graph", graph)
+        runtime.on(
+            "value.routed",
+            graph="consumer.graph",
+            queue="values",
+            subscription="consumer-values",
+        )
 
 
 def test_event_is_committed_even_if_source_node_later_fails() -> None:
@@ -309,7 +330,7 @@ def test_event_is_committed_even_if_source_node_later_fails() -> None:
     seen = []
     with Runtime() as runtime:
         runtime.register("broken.graph", graph)
-        runtime.on("value.committed", seen.append)
+        runtime.observe("value.committed", seen.append)
         with pytest.raises(Exception, match="boom"):
             runtime.run("broken.graph", "kept")
 

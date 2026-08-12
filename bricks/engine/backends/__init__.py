@@ -7,6 +7,8 @@ from .protocols import (
     EventHandler,
     GraphExecutor,
     TaskBackend,
+    TaskConsumer,
+    TaskPublisher,
     Work,
     WorkHandler,
 )
@@ -19,6 +21,8 @@ __all__ = [
     "MemoryEventBus",
     "MemoryTaskBackend",
     "TaskBackend",
+    "TaskConsumer",
+    "TaskPublisher",
     "Work",
     "WorkHandler",
 ]

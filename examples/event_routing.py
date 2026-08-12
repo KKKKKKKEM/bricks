@@ -29,12 +29,12 @@ def run(message: str = "hello") -> list[str]:
     """发布事件，等待路由后的 Graph 完成。"""
 
     received: list[str] = []
-    producer = Graph(entrypoint="publish").add("publish", Publish())
-    consumer = Graph(entrypoint="collect").add("collect", Collect(received))
+    producer = Graph(entrypoint="publish").add(publish=Publish())
+    consumer = Graph(entrypoint="collect").add(collect=Collect(received))
     with Runtime() as runtime:
         runtime.register("producer", producer)
         runtime.register("consumer", consumer)
-        runtime.route(
+        runtime.on(
             "message.created",
             graph="consumer",
             queue="messages",

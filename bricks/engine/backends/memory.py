@@ -17,7 +17,11 @@ class MemoryEventBus:
     """同步、进程内的 EventBus 默认实现。"""
 
     def __init__(self) -> None:
-        self._handlers: dict[str, list[EventHandler]] = defaultdict(list)
+        self._handlers: dict[str, dict[str, list[EventHandler]]] = defaultdict(
+            lambda: defaultdict(list)
+        )
+        self._anonymous = 0
+        self._next_handler: dict[tuple[str, str], int] = defaultdict(int)
         self._condition = Condition(RLock())
         self._active_dispatches = 0
         self._closed = False
@@ -27,7 +31,13 @@ class MemoryEventBus:
         with self._condition:
             return self._active_dispatches == 0
 
-    def subscribe(self, event_type: str, handler: EventHandler) -> None:
+    def subscribe(
+        self,
+        event_type: str,
+        handler: EventHandler,
+        *,
+        subscription: str | None = None,
+    ) -> None:
         event_type = require_non_empty_string(
             event_type,
             "subscription event type",
@@ -37,7 +47,14 @@ class MemoryEventBus:
         with self._condition:
             if self._closed:
                 raise RuntimeError("event bus is closed")
-            self._handlers[event_type].append(handler)
+            if subscription is None:
+                self._anonymous += 1
+                subscription = f"__anonymous__:{self._anonymous}"
+            else:
+                subscription = require_non_empty_string(
+                    subscription, "event subscription"
+                )
+            self._handlers[event_type][subscription].append(handler)
 
     def publish(self, event: Event) -> None:
         if not isinstance(event, Event):
@@ -45,9 +62,9 @@ class MemoryEventBus:
         with self._condition:
             if self._closed:
                 raise RuntimeError("event bus is closed")
-            handlers = tuple(self._handlers.get(event.type, ()))
+            handlers = self._select_handlers(event.type)
             if event.type != "*":
-                handlers += tuple(self._handlers.get("*", ()))
+                handlers += self._select_handlers("*")
             self._active_dispatches += 1
         failure: Exception | None = None
         try:
@@ -79,12 +96,28 @@ class MemoryEventBus:
         with self._condition:
             self._closed = True
 
+    def _select_handlers(self, event_type: str) -> tuple[EventHandler, ...]:
+        selected: list[EventHandler] = []
+        for subscription, handlers in self._handlers.get(event_type, {}).items():
+            key = (event_type, subscription)
+            index = self._next_handler[key] % len(handlers)
+            self._next_handler[key] += 1
+            selected.append(handlers[index])
+        return tuple(selected)
+
 
 @dataclass(slots=True)
-class _Channel:
+class _Consumer:
     handler: WorkHandler
     concurrency: int
     executor: ThreadPoolExecutor
+
+
+@dataclass(slots=True)
+class _Channel:
+    consumers: list[_Consumer]
+    queued: deque[Work]
+    next_consumer: int = 0
 
 
 class MemoryTaskBackend:
@@ -100,7 +133,9 @@ class MemoryTaskBackend:
     @property
     def idle(self) -> bool:
         with self._condition:
-            return not self._pending
+            return not self._pending and not any(
+                channel.queued for channel in self._channels.values()
+            )
 
     def bind(
         self,
@@ -119,19 +154,16 @@ class MemoryTaskBackend:
         with self._condition:
             if self._closed:
                 raise RuntimeError("task backend is closed")
-            existing = self._channels.get(queue)
-            if existing is not None:
-                if existing.concurrency != concurrency:
-                    raise RuntimeError(
-                        f"queue {queue!r} already uses concurrency "
-                        f"{existing.concurrency}"
-                    )
-                return
             executor = ThreadPoolExecutor(
                 max_workers=concurrency,
                 thread_name_prefix=f"bricks-{queue}",
             )
-            self._channels[queue] = _Channel(handler, concurrency, executor)
+            consumer = _Consumer(handler, concurrency, executor)
+            channel = self._channels.setdefault(queue, _Channel([], deque()))
+            channel.consumers.append(consumer)
+            while channel.queued:
+                self._dispatch(channel, channel.queued.popleft())
+            self._condition.notify_all()
 
     def submit(self, queue: str, work: Work) -> None:
         queue = require_non_empty_string(queue, "task queue")
@@ -140,19 +172,17 @@ class MemoryTaskBackend:
         with self._condition:
             if self._closed:
                 raise RuntimeError("task backend is closed")
-            try:
-                channel = self._channels[queue]
-            except KeyError as exc:
-                raise RuntimeError(f"unknown task queue {queue!r}") from exc
-            future = channel.executor.submit(channel.handler, work)
-            self._pending.add(future)
-        future.add_done_callback(self._done)
+            channel = self._channels.setdefault(queue, _Channel([], deque()))
+            if not channel.consumers:
+                channel.queued.append(work)
+                return
+            self._dispatch(channel, work)
 
     def wait_idle(self, timeout: float | None = None) -> None:
         _validate_timeout(timeout)
         deadline = None if timeout is None else time.monotonic() + timeout
         with self._condition:
-            while self._pending:
+            while not self.idle:
                 remaining = (
                     None if deadline is None else deadline - time.monotonic()
                 )
@@ -175,9 +205,13 @@ class MemoryTaskBackend:
             failure = exc
         with self._condition:
             self._closed = True
-            channels = tuple(self._channels.values())
-        for channel in channels:
-            channel.executor.shutdown(wait=True)
+            consumers = tuple(
+                consumer
+                for channel in self._channels.values()
+                for consumer in channel.consumers
+            )
+        for consumer in consumers:
+            consumer.executor.shutdown(wait=True)
         if failure is not None:
             raise failure
 
@@ -188,3 +222,12 @@ class MemoryTaskBackend:
             if failure is not None:
                 self._failures.append(failure)
             self._condition.notify_all()
+
+    def _dispatch(self, channel: _Channel, work: Work) -> None:
+        consumer = channel.consumers[
+            channel.next_consumer % len(channel.consumers)
+        ]
+        channel.next_consumer += 1
+        future = consumer.executor.submit(consumer.handler, work)
+        self._pending.add(future)
+        future.add_done_callback(self._done)

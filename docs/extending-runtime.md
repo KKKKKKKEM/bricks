@@ -1,32 +1,45 @@
 # 扩展 Runtime
 
-Runtime 有三个彼此独立的注入点，定义在 `bricks.engine.backends`：
+扩展部署先组装职责明确的 `EventRouter` 与 `GraphWorker`，再按需组合成 Runtime：
 
 ```python
-runtime = Runtime(
+from bricks import Runtime
+from bricks.engine import EventRouter, GraphWorker
+
+router = EventRouter(
     events=my_event_bus,
-    tasks=my_task_backend,
-    executor=my_graph_executor,
+    publisher=my_task_publisher,
 )
+worker = GraphWorker(
+    consumer=my_task_consumer,
+    executor=my_graph_executor,
+    emit=router.publish,
+)
+runtime = Runtime(router=router, worker=worker)
 ```
 
-它们是高级扩展接口，不属于顶层 `bricks` 公共 API。应用侧的 Graph、Node、Event 和 `Runtime.route()` 用法不
-需要因此改变。
+`EventRouter`、`GraphWorker` 和底层协议是高级扩展接口，不属于顶层 `bricks` 公共 API。应用侧的 Graph、Node、
+Event 和 Runtime 门面用法不需要因此改变。`Runtime()` 仍会创建完整的默认内存组合。
 
 | 协议 | 负责什么 | 默认实现 |
 | --- | --- | --- |
 | `EventBus` | Event 订阅、发布、投递空闲与关闭 | `MemoryEventBus` |
-| `TaskBackend` | 命名队列、Work 提交、并发、空闲与关闭 | `MemoryTaskBackend` |
+| `TaskPublisher` | 向命名队列提交 Work | `MemoryTaskBackend` |
+| `TaskConsumer` | 消费 Work，并控制当前实例的本地并发 | `MemoryTaskBackend` |
+| `TaskBackend` | 同时实现发布与消费的组合协议 | `MemoryTaskBackend` |
 | `GraphExecutor` | 执行已冻结 Graph 并返回终端 Output | `Engine` |
 
 ## 适配器的最低要求
 
-所有协议都必须实现 `idle`、`wait_idle(timeout)` 和 `close()` 所表达的生命周期语义。Runtime 依赖这些方法来
-正确完成 `wait_idle()` 和 `close()`；不能只实现消息的发送或接收。
+EventBus 和 TaskConsumer 必须实现 `idle`、`wait_idle(timeout)` 和 `close()` 所表达的本实例生命周期语义；
+TaskPublisher 的 `submit()` 正常返回即表示后端已接受 Work，同时提供 `close()` 释放发布端资源。GraphExecutor
+提供 `execute()` 和 `close()`。角色依赖这些方法完成自身的等待与关闭。
 
-- EventBus 的 `subscribe(event_type, handler)` 需要支持精确类型和 `"*"` 通配订阅。
-- TaskBackend 的 `bind(queue, handler, concurrency=...)` 需要对同名 queue 的并发配置保持一致，并把提交的
-  `Work` 交给 handler。
+- EventBus 的 `subscribe(event_type, handler, subscription=...)` 需要支持精确类型和 `"*"` 通配订阅。同名
+  subscription 的多个实例竞争消费，不同 subscription 各自收到一份；省略 subscription 的观察者相互独立。
+- TaskPublisher 把 Work 提交到命名 queue，`submit()` 正常返回表示后端已经接受；TaskConsumer 的
+  `bind(queue, handler, concurrency=...)` 把 Work 交给 handler，其中 concurrency 只限制当前 Runtime/Worker
+  实例。
 - GraphExecutor 接收注册名、冻结 Graph、入口输入和 Event emitter；若替换执行器，就必须保留 Graph 的
   Ports、InputPolicy、Output、Edge 和 Event 语义。
 
@@ -46,6 +59,40 @@ Runtime 不依赖默认内存实现的私有字段。
 
 不要仅因后端名为 Redis 或 MQ 就暗示这些能力已经存在。领域 ID、去重和外部副作用的幂等性仍应由领域模型
 显式实现。
+
+## 分离 Router 与 Worker
+
+`route()` 只负责把 Event 转成 Work 并投递到 queue，`consume()` 只负责消费 queue 并执行 Work 指定的 Graph：
+
+```python
+# Router 不需要注册目标 Graph。
+router = EventRouter(events=events, publisher=tasks)
+router.route("order.created", graph="order.process", queue="orders")
+
+# Worker 不需要订阅源 Event；同一 queue 可以启动多个 Worker 竞争消费。
+worker = GraphWorker(consumer=tasks, emit=router.publish)
+worker.register("order.process", order_graph)
+worker.consume("orders", concurrency=8)
+```
+
+`route()` 默认生成稳定的 `route:{event_type}:{graph}:{queue}` subscription，也可通过 `subscription=` 显式指定。
+多个 Router 注册同一条 route 时属于同一逻辑订阅，只应由其中一个实例投递 Work。
+
+`on(event_type, graph=..., queue=..., concurrency=...)` 是 Runtime 上组合 `route()` 与 `consume()` 的常用入口。
+`observe(event_type, handler)` 独立用于观察 Event。只有需要独立部署 Router 和 Worker，或多条 route 共享一次
+queue 消费配置时，才需要显式调用 `route()` 与 `consume()`。
+
+## 组件生命周期
+
+EventRouter 和 GraphWorker 只自动关闭自己创建的默认组件。注入的 EventBus、TaskPublisher、TaskConsumer 和
+GraphExecutor 默认由调用方管理，这使多个角色可以安全共享客户端或连接池。若注入组件明确由某个角色独占，
+可对该角色传 `close_injected=True`。同一共享组件不要同时交给两个角色管理。
+
+Runtime 显式拥有传入的角色，`Runtime.close()` 会依次关闭 Worker 和 Router。`Runtime()` 创建的默认底层组件则
+由 Runtime 统一关闭，避免共享 TaskBackend 被重复管理。
+
+TaskConsumer 的 `idle` 和 `wait_idle()` 只描述当前消费实例能够跟踪的工作，不是分布式系统的全局完成屏障；
+TaskPublisher 不等待远端消费者执行完成。
 
 ## 动态 Node Hook
 

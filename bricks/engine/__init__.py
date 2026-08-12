@@ -28,7 +28,7 @@ from .hooks import (
     ShortCircuit,
     StopGraph,
 )
-from .runtime import Runtime
+from .runtime import EventRouter, GraphWorker, Runtime
 
 # 兼容旧版本的直接导入；不再通过 __all__ 推荐这个易混淆名称。
 RuntimeError = BricksRuntimeError
@@ -40,10 +40,12 @@ __all__ = [
     "Context",
     "Edge",
     "Event",
+    "EventRouter",
     "EventDispatchError",
     "ExecutionError",
     "ExecutionPlan",
     "Graph",
+    "GraphWorker",
     "GraphError",
     "GraphFrozenError",
     "GraphValidationError",

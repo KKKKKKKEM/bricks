@@ -17,8 +17,7 @@ uv run python examples/async_node.py
 ```python
 graph = (
     Graph(entrypoint="strip")
-    .add("strip", Strip())
-    .add("upper", Upper())
+    .add(strip=Strip(), upper=Upper())
     .connect("strip", "upper", source_port="text", target_port="text")
 )
 
@@ -38,8 +37,7 @@ with Runtime() as runtime:
 ```python
 graph = (
     Graph(entrypoint="split")
-    .add("split", Split())
-    .add("add", Add())
+    .add(split=Split(), add=Add())
     .connect("split", "add", source_port="left", target_port="left")
     .connect("split", "add", source_port="right", target_port="right")
 )
@@ -57,7 +55,7 @@ Node 必须能根据实际存在的 key 区分输入来源。
 ```python
 runtime.register("producer", producer)
 runtime.register("consumer", consumer)
-runtime.route(
+runtime.on(
     "message.created",
     graph="consumer",
     queue="messages",

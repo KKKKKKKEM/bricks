@@ -5,7 +5,7 @@ Bricks 只区分两种流动：Graph 内的值流动，以及 Graph 间的事件
 | 范围 | 使用的对象 | 用途 |
 | --- | --- | --- |
 | 单张 Graph | `Output`、`Edge` | 把一个 Node 的值交给下游 Node |
-| 多张 Graph | `Event`、`Context.emit()`、`Runtime.route()` | 发布领域事实并异步启动工作 |
+| 多张 Graph | `Event`、`Context.emit()`、`Runtime.on()` | 发布领域事实并异步启动工作 |
 | 动态执行扩展 | `Runtime.attach()`、`NodeHook` | 不修改冻结 Graph，转换 Node 输入、结果和流程 |
 
 ## Ports 与 Node
@@ -42,12 +42,15 @@ Graph 在构建阶段可变，`freeze()` 后成为可执行的静态定义：
 ```python
 graph = (
     Graph(entrypoint="parse")
-    .add("parse", Parse())
-    .add("store", Store())
+    .add(parse=Parse(), store=Store())
     .connect("parse", "store", source_port="length", target_port="length")
     .freeze()
 )
 ```
+
+`add()` 的关键字名称就是当前 Graph 内的 Node ID。需要动态生成 ID 时也可使用
+`add(node_id, node)`；ID 属于 Graph binding，不是 Node 自身属性，因此同一个无状态 Node 行为可以用不同 ID
+复用。
 
 冻结会拒绝以下定义：空图或未知入口、重复节点/边、未知端口、端口类型不兼容、Graph 内环、不可从入口到达
 的节点，以及不合法的输入策略。`Runtime.register()` 会自动冻结尚未冻结的 Graph。

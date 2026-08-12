@@ -45,17 +45,19 @@ Event、Context、Runtime
 
 ## 第五条：Runtime 是 composition root
 
-1. Runtime 注册 Graph，并用 `route(event, graph, queue, concurrency)` 连接跨图流程；用 `observe()` 注册观察者。
-2. Runtime 只组装事件传输、任务后端和 Graph 执行器，并拥有它们的生命周期。
+1. Runtime 注册 Graph，用 `on(event, graph, queue, concurrency)` 组合路由与本地消费，并用 `observe()` 独立注册
+   观察者；高级组合可以分别调用 `route()` 与 `consume()`。
+2. Runtime 显式组合 EventRouter 与 GraphWorker；Router 组装事件发布和任务投递，Worker 组装任务消费和 Graph
+   执行。自建组件由创建者管理，注入组件默认由调用方管理。
 3. Runtime 不得直接实现消息持久化、队列算法、Node 执行或领域策略。
 4. Trigger、Task、Queue、Scheduler、execution record 可以作为内部职责存在，但不要求用户逐项组装。
 
 ## 第六条：可替换性通过窄协议获得
 
 1. EventBus 只负责 Event 发布、订阅和投递生命周期。
-2. TaskBackend 只负责命名执行通道、工作投递、并发和生命周期。
+2. TaskPublisher 负责工作投递，TaskConsumer 负责命名执行通道、本地并发和消费；TaskBackend 是两者的组合。
 3. GraphExecutor 只负责执行冻结 Graph。
-4. 三个能力必须可以独立替换和组合，不得合并为万能 Backend。
+4. EventBus、任务传输和 GraphExecutor 必须可以独立替换和组合，不得合并为万能 Backend。
 5. SPI 位于高级扩展层，不进入顶层 `bricks` API。
 6. Runtime 只依赖协议，不得使用默认内存实现的私有状态。
 
@@ -96,7 +98,8 @@ Event、Context、Runtime
 清楚，但用户连接两张 Graph 时被迫理解运行实现，违背 less is more。
 
 本次修订恢复十个顶层名字，用 `Runtime.route()` 表达事件到 Graph 的连接、用 `observe()` 表达事件观察；
-运行职责退回内部。与此同时引入 EventBus、TaskBackend、GraphExecutor 三个高级结构协议，默认内存实现
+运行职责退回内部。与此同时引入 EventBus、TaskPublisher、TaskConsumer、TaskBackend、GraphExecutor
+高级结构协议，默认内存实现
 通过 Runtime 构造器注入。由此把“用户模型精简”和“基础设施可替换”分开解决。
 
 领域去重、外部调用幂等和业务重试继续留在应用代码；默认内存实现不提供自动重试、持久化或 exactly-once。

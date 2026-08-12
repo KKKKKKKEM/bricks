@@ -65,6 +65,34 @@ def test_graph_freezes_typed_dag() -> None:
     assert len(graph.edges) == 1
 
 
+def test_graph_adds_keyword_node_bindings() -> None:
+    """关键字名称直接作为 Graph 内的 Node ID。"""
+
+    source = Source()
+    sink = Sink()
+    graph = Graph(entrypoint="source").add(source=source, sink=sink)
+
+    assert graph.nodes == {"source": source, "sink": sink}
+
+
+def test_graph_keyword_add_is_atomic() -> None:
+    """批量绑定包含非法 Node 时不留下部分结果。"""
+
+    graph = Graph(entrypoint="source")
+
+    with pytest.raises(TypeError, match="sink.*Node"):
+        graph.add(source=Source(), sink=object())  # type: ignore[arg-type]
+
+    assert graph.nodes == {}
+
+
+def test_graph_add_rejects_mixed_forms() -> None:
+    """单 Node 位置参数与关键字批量形式不能混用。"""
+
+    with pytest.raises(TypeError, match="either"):
+        Graph().add("source", Source(), sink=Sink())
+
+
 def test_graph_rejects_cycle() -> None:
     """图内环必须改用跨图 Event 表达。"""
 

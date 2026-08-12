@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+from uuid import uuid4
 
 from ..core import Output, require_non_empty_string
 from ..events import Event
@@ -20,9 +21,11 @@ class Work:
     graph: str
     inputs: Any = None
     trigger: Event | None = field(default=None, compare=False, repr=False)
+    id: str = field(default_factory=lambda: str(uuid4()), kw_only=True)
 
     def __post_init__(self) -> None:
         require_non_empty_string(self.graph, "work graph")
+        require_non_empty_string(self.id, "work id")
 
 
 class EventBus(Protocol):
@@ -32,8 +35,14 @@ class EventBus(Protocol):
     def idle(self) -> bool:
         """返回当前是否没有尚未投递完成的 Event。"""
 
-    def subscribe(self, event_type: str, handler: EventHandler) -> None:
-        """订阅精确 Event type；``*`` 表示全部类型。"""
+    def subscribe(
+        self,
+        event_type: str,
+        handler: EventHandler,
+        *,
+        subscription: str | None = None,
+    ) -> None:
+        """订阅 Event；同名 subscription 的实例竞争消费。"""
 
     def publish(self, event: Event) -> None:
         """发布一个 Event。"""
@@ -48,12 +57,22 @@ class EventBus(Protocol):
 WorkHandler = Callable[[Work], None]
 
 
-class TaskBackend(Protocol):
-    """配置命名执行通道并投递 Work 的替换协议。"""
+class TaskPublisher(Protocol):
+    """向命名任务通道投递 Work。"""
+
+    def submit(self, queue: str, work: Work) -> None:
+        """向命名通道提交 Work；正常返回表示后端已接受。"""
+
+    def close(self) -> None:
+        """关闭发布端持有的资源。"""
+
+
+class TaskConsumer(Protocol):
+    """从命名任务通道消费 Work。"""
 
     @property
     def idle(self) -> bool:
-        """返回当前是否没有尚未完成的 Work。"""
+        """返回当前实例是否没有尚未完成的 Work。"""
 
     def bind(
         self,
@@ -62,16 +81,17 @@ class TaskBackend(Protocol):
         *,
         concurrency: int,
     ) -> None:
-        """绑定一个命名通道及其消费并发。"""
-
-    def submit(self, queue: str, work: Work) -> None:
-        """向命名通道提交 Work。"""
+        """绑定通道；concurrency 是当前消费实例的本地并发。"""
 
     def wait_idle(self, timeout: float | None = None) -> None:
-        """等待已接受 Work 完成。"""
+        """等待当前实例已接受的 Work 完成。"""
 
     def close(self) -> None:
-        """关闭全部执行通道。"""
+        """关闭消费端持有的资源。"""
+
+
+class TaskBackend(TaskPublisher, TaskConsumer, Protocol):
+    """兼具任务发布和消费能力的便捷组合协议。"""
 
 
 Emit = Callable[[Event], None]

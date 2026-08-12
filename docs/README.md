@@ -12,9 +12,10 @@ Graph -- Event / Runtime --> Graph      多张 Graph 间的工作流
 
 1. [快速开始](getting-started.md)：用一张 Graph 跑通最小程序。
 2. [核心概念](core-concepts.md)：理解 Ports、Node、Output、Edge 和 Event 的边界。
-3. [运行语义](runtime-semantics.md)：查阅输入触发、并发、失败、关闭等实际行为。
-4. [扩展 Runtime](extending-runtime.md)：实现 EventBus、TaskBackend 或 GraphExecutor 适配器。
-5. [常见编排方式](examples.md)：运行线性、分支汇聚、事件路由和异步 Node 示例。
+3. [核心架构](architecture.md)：查看 Runtime 组装关系和从 Event 到 Graph execution 的完整流程。
+4. [运行语义](runtime-semantics.md)：查阅输入触发、并发、失败、关闭等实际行为。
+5. [扩展 Runtime](extending-runtime.md)：实现 EventBus、TaskPublisher、TaskConsumer 或 GraphExecutor 适配器。
+6. [常见编排方式](examples.md)：运行线性、分支汇聚、事件路由和异步 Node 示例。
 
 需要了解项目的设计约束和贡献边界时，再阅读[架构原则](constitution.md)。它不是入门教程，也不是尚未实现的
 路线图。

@@ -15,7 +15,7 @@ class Upper(Node):
         return Output(inputs["text"].upper(), port="result")
 
 
-graph = Graph(entrypoint="upper").add("upper", Upper())
+graph = Graph(entrypoint="upper").add(upper=Upper())
 
 with Runtime() as runtime:
     runtime.register("upper.graph", graph)  # register() 会冻结并校验 Graph

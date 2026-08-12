@@ -18,11 +18,11 @@ with Runtime() as runtime:
 
 ## 事件路由与并发
 
-通过 `route()` 声明“收到某类事件，向某个命名队列提交一张 Graph”：
+通常用 `on()` 组合注册事件路由并启动本地消费者：
 
 ```python
 runtime.register("crawl.graph", crawl_graph)
-runtime.route(
+runtime.on(
     "crawl.task.created",
     graph="crawl.graph",
     queue="crawl",
@@ -32,12 +32,14 @@ runtime.emit("crawl.task.created", {"url": "https://example.com"})
 runtime.wait_idle()
 ```
 
-同一事件类型可以有多个观察者和路由。`observe()` 注册同步观察者；`"*"` 观察所有类型。旧的 `on()` 同时兼容
-观察和路由两种写法，新代码应使用 `observe()`、`route()` 来表达意图。
+`on()` 等价于依次调用 `route()` 与 `consume()`；需要把 Router 和 Worker 分开部署时可以直接使用后二者。同一
+事件类型可以有多个观察者和路由。`observe()` 独立注册同步观察者，`"*"` 观察所有类型，不承担 Graph 路由。
+每条 route 都有稳定 subscription 身份：同名 subscription 的 Router 实例竞争消费，不同 subscription 各自收到
+事件。
 
 默认 `MemoryEventBus` 在调用 `emit()` 的线程同步调用观察者并提交路由任务；目标 Graph 不在源 Node 的调用
-栈执行。默认 `MemoryTaskBackend` 使用每个命名队列各自的线程池。`concurrency` 限制的是该队列同时执行的
-完整 Graph 数量，而不是其中某一个 Node 的并发数。
+栈执行。默认 `MemoryTaskBackend` 使用线程池。`concurrency` 限制当前 Runtime/Worker 实例同时执行的完整
+Graph 数量，而不是集群全局并发，也不是其中某一个 Node 的并发数。
 
 `wait_idle(timeout)` 会交替等待事件总线和任务后端，直到由事件继续产生的工作也已完成。传 `0` 可以进行即时
 空闲检查。

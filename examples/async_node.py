@@ -18,7 +18,7 @@ class DelayedUpper(AsyncNode):
 
 
 def run(text: str = "asynchronous") -> str:
-    graph = Graph(entrypoint="upper").add("upper", DelayedUpper())
+    graph = Graph(entrypoint="upper").add(upper=DelayedUpper())
     with Runtime() as runtime:
         runtime.register("async-node", graph)
         return runtime.run("async-node", text)[0].value

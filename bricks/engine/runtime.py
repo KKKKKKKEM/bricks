@@ -1,4 +1,4 @@
-"""用可替换能力端口组装 Graph 和 Event。"""
+"""组合 Event 路由、Graph Worker 和完整 Runtime。"""
 
 from __future__ import annotations
 
@@ -10,11 +10,13 @@ from threading import RLock
 from typing import Any
 
 from .backends import (
+    Emit,
     EventBus,
     GraphExecutor,
     MemoryEventBus,
     MemoryTaskBackend,
-    TaskBackend,
+    TaskConsumer,
+    TaskPublisher,
     Work,
 )
 from .core import Output, _validate_timeout, require_non_empty_string
@@ -33,71 +35,38 @@ from .hooks import HookHandle, HookPhase, NodeHook
 EventHandler = Callable[[Event], None]
 
 
-class Runtime:
-    """注册 Graph、连接 Event，并管理可替换组件的生命周期。"""
+class EventRouter:
+    """发布和订阅 Event，并把匹配的 Event 转成队列 Work。"""
 
     def __init__(
         self,
         *,
+        publisher: TaskPublisher,
         events: EventBus | None = None,
-        tasks: TaskBackend | None = None,
-        executor: GraphExecutor | None = None,
+        close_injected: bool = False,
     ) -> None:
-        """组装事件传输、任务后端和 Graph 执行器。"""
-
-        self._events = MemoryEventBus() if events is None else events
-        self._tasks = MemoryTaskBackend() if tasks is None else tasks
-        self._executor = Engine() if executor is None else executor
-        self._graphs: dict[str, Graph] = {}
+        if type(close_injected) is not bool:
+            raise TypeError("close_injected must be a boolean")
+        owned: list[object] = []
+        if events is None:
+            events = MemoryEventBus()
+            owned.append(events)
+        self._events = events
+        self._publisher = publisher
+        self._owned_components = owned
+        self._close_injected = close_injected
         self._routes: set[tuple[str, str, str]] = set()
-        self._queues: dict[str, int] = {}
         self._lock = RLock()
         self._closed = False
 
-    def register(self, name: str, graph: Graph) -> Runtime:
-        """以稳定名称注册并冻结一张 Graph。"""
+    @property
+    def idle(self) -> bool:
+        """返回当前 Router 是否没有正在投递的 Event。"""
 
-        self._ensure_open()
-        name = require_non_empty_string(name, "registered graph name")
-        if not isinstance(graph, Graph):
-            raise TypeError("graph must be a Graph")
-        if not graph.frozen:
-            graph.freeze()
-        with self._lock:
-            if name in self._graphs:
-                raise BricksRuntimeError(f"duplicate registered graph {name!r}")
-            self._graphs[name] = graph
-        return self
+        return self._events.idle
 
-    def on(
-        self,
-        event_type: str,
-        handler: EventHandler | None = None,
-        *,
-        graph: str | None = None,
-        queue: str | None = None,
-        concurrency: int = 1,
-    ) -> Runtime:
-        """兼容入口：观察 Event 或把 Event 路由到 Graph。
-
-        新代码可以使用语义更明确的 :meth:`observe` 和 :meth:`route`。
-        """
-
-        if handler is not None:
-            if graph is not None or queue is not None or concurrency != 1:
-                raise TypeError("event observer cannot also configure a graph route")
-            return self.observe(event_type, handler)
-        if graph is None or queue is None:
-            raise TypeError("graph route requires graph and queue")
-        return self.route(
-            event_type,
-            graph=graph,
-            queue=queue,
-            concurrency=concurrency,
-        )
-
-    def observe(self, event_type: str, handler: EventHandler) -> Runtime:
-        """注册一个同步 Event 观察者。"""
+    def observe(self, event_type: str, handler: EventHandler) -> EventRouter:
+        """注册一个相互独立的 Event 观察者。"""
 
         self._ensure_open()
         event_type = require_non_empty_string(event_type, "subscription event type")
@@ -112,45 +81,34 @@ class Runtime:
         *,
         graph: str,
         queue: str,
-        concurrency: int = 1,
-    ) -> Runtime:
-        """把 Event 路由到注册 Graph 的命名执行队列。"""
+        subscription: str | None = None,
+    ) -> EventRouter:
+        """订阅 Event，并向队列投递目标 Graph 的 Work。"""
 
         self._ensure_open()
         event_type = require_non_empty_string(event_type, "subscription event type")
         graph = require_non_empty_string(graph, "route graph")
         queue = require_non_empty_string(queue, "route queue")
-        if type(concurrency) is not int:
-            raise TypeError("queue concurrency must be an integer")
-        if concurrency < 1:
-            raise ValueError("queue concurrency must be at least 1")
+        if subscription is None:
+            subscription = f"route:{event_type}:{graph}:{queue}"
+        else:
+            subscription = require_non_empty_string(
+                subscription, "route subscription"
+            )
         with self._lock:
-            if graph not in self._graphs:
-                raise UnknownGraphError(f"unknown registered graph {graph!r}")
             route = (event_type, graph, queue)
             if route in self._routes:
                 raise BricksRuntimeError(f"duplicate event route {route!r}")
-            configured = self._queues.get(queue)
-            if configured is not None and configured != concurrency:
-                raise BricksRuntimeError(
-                    f"queue {queue!r} already uses concurrency {configured}"
-                )
-            if configured is None:
-                self._tasks.bind(
-                    queue,
-                    self._execute_work,
-                    concurrency=concurrency,
-                )
-                self._queues[queue] = concurrency
             self._events.subscribe(
                 event_type,
                 partial(self._submit, graph, queue),
+                subscription=subscription,
             )
             self._routes.add(route)
         return self
 
     def emit(self, event_or_type: Event | str, payload: Any = None) -> Event:
-        """从 Runtime 外部发布一个 Event。"""
+        """发布完整 Event，或从 type 和 payload 创建后发布。"""
 
         if isinstance(event_or_type, Event):
             if payload is not None:
@@ -158,8 +116,143 @@ class Runtime:
             event = event_or_type
         else:
             event = Event(event_or_type, payload)
-        self._publish(event)
+        self.publish(event)
         return event
+
+    def publish(self, event: Event) -> None:
+        """向 EventBus 发布一项 Event，供 GraphWorker emitter 使用。"""
+
+        self._ensure_open()
+        try:
+            self._events.publish(event)
+        except EventDispatchError:
+            raise
+        except Exception as exc:
+            raise EventDispatchError(event, exc) from exc
+
+    def wait_idle(self, timeout: float | None = None) -> None:
+        """等待当前 Router 已接受的 Event 投递完成。"""
+
+        self._events.wait_idle(timeout)
+
+    def close(self) -> None:
+        """等待投递结束，并关闭当前 Router 拥有的组件。"""
+
+        with self._lock:
+            if self._closed:
+                return
+        failure: BaseException | None = None
+        try:
+            self.wait_idle()
+        except Exception as exc:  # noqa: BLE001
+            failure = exc
+        with self._lock:
+            self._closed = True
+        components = (
+            _unique(self._events, self._publisher)
+            if self._close_injected
+            else tuple(self._owned_components)
+        )
+        failure = _close_components(reversed(components), failure)
+        if failure is not None:
+            raise failure
+
+    def __enter__(self):
+        self._ensure_open()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        del exc_type, traceback
+        try:
+            self.close()
+        except Exception:
+            if exc_value is None:
+                raise
+
+    def _submit(self, graph: str, queue: str, event: Event) -> None:
+        self._publisher.submit(queue, Work(graph, event.payload, trigger=event))
+
+    def _ensure_open(self) -> None:
+        with self._lock:
+            if self._closed:
+                raise RuntimeClosedError("EventRouter is closed")
+
+
+class GraphWorker:
+    """注册 Graph、消费队列 Work，并执行完整 Graph。"""
+
+    def __init__(
+        self,
+        *,
+        consumer: TaskConsumer,
+        executor: GraphExecutor | None = None,
+        emit: Emit | None = None,
+        close_injected: bool = False,
+    ) -> None:
+        if type(close_injected) is not bool:
+            raise TypeError("close_injected must be a boolean")
+        owned: list[object] = []
+        if executor is None:
+            executor = Engine()
+            owned.append(executor)
+        self._consumer = consumer
+        self._executor = executor
+        self._emit = _reject_emit if emit is None else emit
+        if not callable(self._emit):
+            raise TypeError("worker emitter must be callable")
+        self._owned_components = owned
+        self._close_injected = close_injected
+        self._graphs: dict[str, Graph] = {}
+        self._queues: dict[str, int] = {}
+        self._lock = RLock()
+        self._closed = False
+
+    @property
+    def idle(self) -> bool:
+        """返回当前 Worker 是否没有正在执行或排队的 Work。"""
+
+        return self._consumer.idle
+
+    def register(self, name: str, graph: Graph) -> GraphWorker:
+        """以稳定名称注册并冻结一张 Graph。"""
+
+        self._ensure_open()
+        name = require_non_empty_string(name, "registered graph name")
+        if not isinstance(graph, Graph):
+            raise TypeError("graph must be a Graph")
+        if not graph.frozen:
+            graph.freeze()
+        with self._lock:
+            if name in self._graphs:
+                raise BricksRuntimeError(f"duplicate registered graph {name!r}")
+            self._graphs[name] = graph
+        return self
+
+    def consume(self, queue: str, *, concurrency: int = 1) -> GraphWorker:
+        """消费队列；concurrency 是当前 Worker 实例的本地并发。"""
+
+        self._ensure_open()
+        queue = require_non_empty_string(queue, "task queue")
+        if type(concurrency) is not int:
+            raise TypeError("queue concurrency must be an integer")
+        if concurrency < 1:
+            raise ValueError("queue concurrency must be at least 1")
+        with self._lock:
+            configured = self._queues.get(queue)
+            if configured is not None:
+                if configured != concurrency:
+                    raise BricksRuntimeError(
+                        f"queue {queue!r} already uses local concurrency "
+                        f"{configured}"
+                    )
+                return self
+            self._consumer.bind(
+                queue,
+                self._execute_work,
+                concurrency=concurrency,
+            )
+            self._queues[queue] = concurrency
+        return self
 
     def run(
         self,
@@ -173,10 +266,21 @@ class Runtime:
         self._ensure_open()
         registered = self._get_graph(graph)
         if plan is None:
-            return self._executor.execute(graph, registered, inputs, self._publish)
+            return self._executor.execute(graph, registered, inputs, self._emit)
         return self._executor.execute(
-            graph, registered, inputs, self._publish, plan=plan
+            graph, registered, inputs, self._emit, plan=plan
         )
+
+    async def arun(
+        self,
+        graph: str,
+        inputs: Any = None,
+        *,
+        plan: ExecutionPlan | None = None,
+    ) -> tuple[Output, ...]:
+        """在线程中直接执行 Graph，避免阻塞异步调用方。"""
+
+        return await asyncio.to_thread(self.run, graph, inputs, plan=plan)
 
     def attach(
         self,
@@ -195,9 +299,7 @@ class Runtime:
             if node is not None:
                 node = require_non_empty_string(node, "hook node")
                 if node not in registered.nodes:
-                    raise ValueError(
-                        f"graph {graph!r} has no node {node!r}"
-                    )
+                    raise ValueError(f"graph {graph!r} has no node {node!r}")
         if not isinstance(self._executor, Engine):
             raise TypeError("the configured GraphExecutor does not support hooks")
         return self._executor.hooks.attach(
@@ -207,34 +309,13 @@ class Runtime:
             node=node,
         )
 
-    async def arun(
-        self,
-        graph: str,
-        inputs: Any = None,
-        *,
-        plan: ExecutionPlan | None = None,
-    ) -> tuple[Output, ...]:
-        """在线程中直接执行 Graph，避免阻塞异步调用方。"""
-
-        return await asyncio.to_thread(self.run, graph, inputs, plan=plan)
-
     def wait_idle(self, timeout: float | None = None) -> None:
-        """等待 Event 与 Work 级联网络静止。"""
+        """等待当前 Worker 已接受的 Work 完成。"""
 
-        _validate_timeout(timeout)
-        deadline = None if timeout is None else time.monotonic() + timeout
-        while True:
-            remaining = self._remaining(deadline)
-            self._events.wait_idle(remaining)
-            remaining = self._remaining(deadline)
-            self._tasks.wait_idle(remaining)
-            if self._events.idle and self._tasks.idle:
-                return
-            if deadline is not None and time.monotonic() >= deadline:
-                raise TimeoutError("Runtime did not become idle before timeout")
+        self._consumer.wait_idle(timeout)
 
     def close(self) -> None:
-        """排空已接受工作，然后关闭注入的组件。"""
+        """排空本地 Work，并关闭当前 Worker 拥有的组件。"""
 
         with self._lock:
             if self._closed:
@@ -246,12 +327,12 @@ class Runtime:
             failure = exc
         with self._lock:
             self._closed = True
-        for component in (self._tasks, self._events, self._executor):
-            try:
-                component.close()
-            except Exception as exc:  # noqa: BLE001
-                if failure is None:
-                    failure = exc
+        components = (
+            _unique(self._consumer, self._executor)
+            if self._close_injected
+            else tuple(self._owned_components)
+        )
+        failure = _close_components(reversed(components), failure)
         if failure is not None:
             raise failure
 
@@ -259,12 +340,7 @@ class Runtime:
         self._ensure_open()
         return self
 
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: object,
-    ) -> None:
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
         del exc_type, traceback
         try:
             self.close()
@@ -272,22 +348,10 @@ class Runtime:
             if exc_value is None:
                 raise
 
-    def _publish(self, event: Event) -> None:
-        self._ensure_open()
-        try:
-            self._events.publish(event)
-        except EventDispatchError:
-            raise
-        except Exception as exc:
-            raise EventDispatchError(event, exc) from exc
-
-    def _submit(self, graph: str, queue: str, event: Event) -> None:
-        self._tasks.submit(queue, Work(graph, event.payload, trigger=event))
-
     def _execute_work(self, work: Work) -> None:
         graph = self._get_graph(work.graph)
         try:
-            self._executor.execute(work.graph, graph, work.inputs, self._publish)
+            self._executor.execute(work.graph, graph, work.inputs, self._emit)
         except ExecutionError as exc:
             if exc.event is None:
                 exc.event = work.trigger
@@ -306,10 +370,196 @@ class Runtime:
     def _ensure_open(self) -> None:
         with self._lock:
             if self._closed:
-                raise RuntimeClosedError("Runtime is closed")
+                raise RuntimeClosedError("GraphWorker is closed")
 
-    @staticmethod
-    def _remaining(deadline: float | None) -> float | None:
-        if deadline is None:
-            return None
-        return max(0.0, deadline - time.monotonic())
+
+class Runtime:
+    """组合 EventRouter 与 GraphWorker 的单进程便利门面。"""
+
+    def __init__(
+        self,
+        *,
+        router: EventRouter | None = None,
+        worker: GraphWorker | None = None,
+    ) -> None:
+        if (router is None) != (worker is None):
+            raise TypeError("Runtime requires both router and worker")
+        owned: tuple[object, ...] = ()
+        if router is None:
+            events = MemoryEventBus()
+            backend = MemoryTaskBackend()
+            executor = Engine()
+            router = EventRouter(
+                events=events,
+                publisher=backend,
+            )
+            worker = GraphWorker(
+                consumer=backend,
+                executor=executor,
+                emit=router.publish,
+            )
+            owned = (events, backend, executor)
+        if not isinstance(router, EventRouter):
+            raise TypeError("router must be an EventRouter")
+        if not isinstance(worker, GraphWorker):
+            raise TypeError("worker must be a GraphWorker")
+        self.router = router
+        self.worker = worker
+        self._owned_components = owned
+        self._closed = False
+        self._lock = RLock()
+
+    def register(self, name: str, graph: Graph) -> Runtime:
+        self.worker.register(name, graph)
+        return self
+
+    def observe(self, event_type: str, handler: EventHandler) -> Runtime:
+        self.router.observe(event_type, handler)
+        return self
+
+    def route(
+        self,
+        event_type: str,
+        *,
+        graph: str,
+        queue: str,
+        subscription: str | None = None,
+    ) -> Runtime:
+        self.router.route(
+            event_type,
+            graph=graph,
+            queue=queue,
+            subscription=subscription,
+        )
+        return self
+
+    def consume(self, queue: str, *, concurrency: int = 1) -> Runtime:
+        self.worker.consume(queue, concurrency=concurrency)
+        return self
+
+    def emit(self, event_or_type: Event | str, payload: Any = None) -> Event:
+        return self.router.emit(event_or_type, payload)
+
+    def run(
+        self,
+        graph: str,
+        inputs: Any = None,
+        *,
+        plan: ExecutionPlan | None = None,
+    ) -> tuple[Output, ...]:
+        return self.worker.run(graph, inputs, plan=plan)
+
+    async def arun(
+        self,
+        graph: str,
+        inputs: Any = None,
+        *,
+        plan: ExecutionPlan | None = None,
+    ) -> tuple[Output, ...]:
+        return await self.worker.arun(graph, inputs, plan=plan)
+
+    def attach(
+        self,
+        hook: NodeHook | Callable[..., object],
+        *,
+        phase: HookPhase | str | None = None,
+        graph: str | None = None,
+        node: str | None = None,
+    ) -> HookHandle:
+        return self.worker.attach(hook, phase=phase, graph=graph, node=node)
+
+    def on(
+        self,
+        event_type: str,
+        *,
+        graph: str,
+        queue: str,
+        concurrency: int = 1,
+        subscription: str | None = None,
+    ) -> Runtime:
+        """组合注册 Event route，并启动对应 queue 的本地消费者。"""
+
+        self.route(
+            event_type,
+            graph=graph,
+            queue=queue,
+            subscription=subscription,
+        )
+        return self.consume(queue, concurrency=concurrency)
+
+    def wait_idle(self, timeout: float | None = None) -> None:
+        """等待 Router 与 Worker 的级联网络在当前实例内静止。"""
+
+        _validate_timeout(timeout)
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            self.router.wait_idle(_remaining(deadline))
+            self.worker.wait_idle(_remaining(deadline))
+            if self.router.idle and self.worker.idle:
+                return
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("Runtime did not become idle before timeout")
+
+    def close(self) -> None:
+        """排空组合角色，并关闭 Runtime 拥有的底层组件。"""
+
+        with self._lock:
+            if self._closed:
+                return
+        failure: BaseException | None = None
+        try:
+            self.wait_idle()
+        except Exception as exc:  # noqa: BLE001
+            failure = exc
+        with self._lock:
+            self._closed = True
+        failure = _close_components((self.worker, self.router), failure)
+        failure = _close_components(reversed(self._owned_components), failure)
+        if failure is not None:
+            raise failure
+
+    def __enter__(self):
+        with self._lock:
+            if self._closed:
+                raise RuntimeClosedError("Runtime is closed")
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        del exc_type, traceback
+        try:
+            self.close()
+        except Exception:
+            if exc_value is None:
+                raise
+
+
+def _reject_emit(event: Event) -> None:
+    del event
+    raise BricksRuntimeError("GraphWorker has no Event emitter")
+
+
+def _unique(*components: object) -> tuple[object, ...]:
+    unique: list[object] = []
+    for component in components:
+        if all(component is not item for item in unique):
+            unique.append(component)
+    return tuple(unique)
+
+
+def _close_components(
+    components: Any,
+    failure: BaseException | None,
+) -> BaseException | None:
+    for component in components:
+        try:
+            component.close()
+        except Exception as exc:  # noqa: BLE001
+            if failure is None:
+                failure = exc
+    return failure
+
+
+def _remaining(deadline: float | None) -> float | None:
+    if deadline is None:
+        return None
+    return max(0.0, deadline - time.monotonic())
