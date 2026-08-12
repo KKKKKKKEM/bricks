@@ -71,7 +71,7 @@ class Join(Node):
 
 
 def join_graph() -> Graph:
-    """构建用于测试图内 Edge 和 InputPolicy 的 DAG。
+    """构建用于测试图内 Edge 和 InputPolicy 的 Graph。
 
     返回：
         已冻结的两节点 Graph。
@@ -95,6 +95,234 @@ def test_runtime_executes_graph_internal_dataflow() -> None:
         outputs = runtime.run("join.graph", 2)
 
     assert outputs == (Output(5, "total"),)
+
+
+def test_runtime_executes_self_loop_until_node_stops_emitting_feedback() -> None:
+    """自环由 Node 停止产生反馈 Output 后自然结束。"""
+
+    visits: list[int] = []
+
+    class Counter(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports(again=int, done=int)
+
+        def execute(self, inputs, context: Context) -> Output:
+            del context
+            value = inputs["value"]
+            visits.append(value)
+            if value < 4:
+                return Output(value + 1, "again")
+            return Output(value, "done")
+
+    graph = (
+        Graph(entrypoint="counter")
+        .add("counter", Counter())
+        .connect("counter", "counter", source_port="again", target_port="value")
+    )
+
+    with Runtime() as runtime:
+        runtime.register("loop.graph", graph)
+        outputs = runtime.run("loop.graph", 0)
+
+    assert visits == [0, 1, 2, 3, 4]
+    assert outputs == (Output(4, "done"),)
+
+
+def test_runtime_does_not_impose_cycle_step_limit() -> None:
+    """核心不会按 Node 执行次数截断合法长循环。"""
+
+    class Counter(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports(again=int, done=int)
+
+        def execute(self, inputs, context: Context) -> Output:
+            del context
+            value = inputs["value"]
+            if value < 10_000:
+                return Output(value + 1, "again")
+            return Output(value, "done")
+
+    graph = (
+        Graph(entrypoint="counter")
+        .add(counter=Counter())
+        .connect("counter", "counter", source_port="again", target_port="value")
+    )
+
+    with Runtime() as runtime:
+        runtime.register("long-cycle.graph", graph)
+        outputs = runtime.run("long-cycle.graph", 0)
+
+    assert outputs == (Output(10_000, "done"),)
+
+
+def test_runtime_executes_cycle_across_multiple_nodes() -> None:
+    """数据可以多次经过由多个 Node 组成的回路。"""
+
+    calls: list[tuple[str, int]] = []
+
+    class Check(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports(continue_=int, done=int)
+
+        def execute(self, inputs, context: Context) -> Output:
+            del context
+            value = inputs["value"]
+            calls.append(("check", value))
+            if value < 3:
+                return Output(value, "continue_")
+            return Output(value, "done")
+
+    class Increment(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports(value=int)
+
+        def execute(self, inputs, context: Context) -> Output:
+            del context
+            value = inputs["value"]
+            calls.append(("increment", value))
+            return Output(value + 1, "value")
+
+    graph = (
+        Graph(entrypoint="check")
+        .add(check=Check(), increment=Increment())
+        .connect(
+            "check", "increment", source_port="continue_", target_port="value"
+        )
+        .connect("increment", "check", source_port="value", target_port="value")
+    )
+
+    with Runtime() as runtime:
+        runtime.register("cycle.graph", graph)
+        outputs = runtime.run("cycle.graph", 0)
+
+    assert calls == [
+        ("check", 0),
+        ("increment", 0),
+        ("check", 1),
+        ("increment", 1),
+        ("check", 2),
+        ("increment", 2),
+        ("check", 3),
+    ]
+    assert outputs == (Output(3, "done"),)
+
+
+def test_runtime_executes_cycle_inside_execution_plan() -> None:
+    """ExecutionPlan 保留所选节点之间的回边。"""
+
+    class Counter(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports(again=int, done=int)
+
+        def execute(self, inputs, context: Context) -> Output:
+            del context
+            value = inputs["value"]
+            if value < 2:
+                return Output(value + 1, "again")
+            return Output(value, "done")
+
+    graph = (
+        Graph(entrypoint="counter")
+        .add(counter=Counter())
+        .connect("counter", "counter", source_port="again", target_port="value")
+    )
+    plan = graph.plan(include={"counter"})
+
+    with Runtime() as runtime:
+        runtime.register("planned-cycle.graph", graph)
+        outputs = runtime.run("planned-cycle.graph", 0, plan=plan)
+
+    assert plan.edges == graph.edges
+    assert outputs == (Output(2, "done"),)
+
+
+def test_cycle_scheduler_does_not_starve_ready_branch() -> None:
+    """自环每轮只执行一次，已经就绪的旁路会获得调度。"""
+
+    calls: list[str] = []
+
+    class Loop(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports(again=int, observe=int, done=int)
+
+        def execute(self, inputs, context: Context):
+            del context
+            value = inputs["value"]
+            calls.append(f"loop:{value}")
+            if value < 3:
+                return (
+                    Output(value + 1, "again"),
+                    Output(value, "observe"),
+                )
+            return Output(value, "done")
+
+    class Observe(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports()
+
+        def execute(self, inputs, context: Context) -> None:
+            del context
+            calls.append(f"observe:{inputs['value']}")
+
+    graph = (
+        Graph(entrypoint="loop")
+        .add(loop=Loop(), observe=Observe())
+        .connect("loop", "loop", source_port="again", target_port="value")
+        .connect("loop", "observe", source_port="observe", target_port="value")
+    )
+
+    with Runtime() as runtime:
+        runtime.register("fair.graph", graph)
+        outputs = runtime.run("fair.graph", 0)
+
+    assert calls == [
+        "loop:0",
+        "loop:1",
+        "observe:0",
+        "loop:2",
+        "observe:1",
+        "loop:3",
+        "observe:2",
+    ]
+    assert outputs == (Output(3, "done"),)
+
+
+def test_cycle_quiescence_reports_incomplete_inputs() -> None:
+    """回路停止后，无法组成 ALL 输入的残留数据仍是执行错误。"""
+
+    class Loop(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports(again=int, partial=int, done=int)
+
+        def execute(self, inputs, context: Context):
+            del context
+            value = inputs["value"]
+            if value < 2:
+                return (
+                    Output(value + 1, "again"),
+                    Output(value, "partial"),
+                )
+            return Output(value, "done")
+
+    class Join(Node):
+        input_ports = Ports(left=int, right=int)
+        output_ports = Ports()
+        input_policy = InputPolicy.ALL
+
+        def execute(self, inputs, context: Context) -> None:
+            del inputs, context
+
+    graph = (
+        Graph(entrypoint="loop")
+        .add(loop=Loop(), join=Join())
+        .connect("loop", "loop", source_port="again", target_port="value")
+        .connect("loop", "join", source_port="partial", target_port="left")
+    )
+
+    with Runtime() as runtime:
+        runtime.register("incomplete-cycle.graph", graph)
+        with pytest.raises(IncompleteInputsError, match="join.left"):
+            runtime.run("incomplete-cycle.graph", 0)
 
 
 def test_runtime_executes_different_plans_from_one_graph() -> None:

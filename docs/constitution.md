@@ -26,13 +26,13 @@ Event、Context、Slot、SlotPool、Runtime
 4. 目标 Graph 不在源 Node 的 emit 调用栈内执行。
 5. 跨图事件使用 imperative `emit()`，不得依靠 `yield` 的多义语义。
 
-## 第三条：Graph 是有限静态定义
+## 第三条：Graph 是静态有向定义
 
 1. Node 声明 typed input/output Ports。
 2. InputPolicy 只判断端口组合，不读取领域值。
-3. Graph 进入 Runtime 前必须冻结并校验 DAG、可达性和类型兼容。
+3. Graph 进入 Runtime 前必须冻结并校验可达性和类型兼容；普通 Edge 可以组成环。
 4. Node ID 属于 Graph binding，Node 不保存某次 execution 状态。
-5. 动态循环通过 Event 再次触发 Graph，Graph 内不画回边。
+5. Graph 内循环由 Output 沿回边继续传值，并在不再产生可执行数据时自然结束。
 6. 无下游 Edge 的 Output 由 `Runtime.run()` 返回。
 
 ## 第四条：Event 是最小事实

@@ -114,98 +114,115 @@ class Engine:
         plan: ExecutionPlan | None,
         slot: Slot | None,
     ) -> tuple[Output, ...]:
-        active_nodes = set(graph.nodes) if plan is None else plan.nodes
+        nodes = graph.nodes
+        active_nodes = set(nodes) if plan is None else plan.nodes
         specs = {
             node_id: graph._spec_for(node_id)
-            for node_id in graph.nodes
+            for node_id in nodes
             if node_id in active_nodes
+        }
+        input_ports = {
+            node_id: tuple(spec.input_ports) for node_id, spec in specs.items()
+        }
+        hooks_by_node = {
+            node_id: self.hooks.for_node(hook_snapshot, node_id)
+            for node_id in active_nodes
         }
         queues: dict[str, dict[str, deque[Any]]] = {
             node_id: {port: deque() for port in specs[node_id].input_ports}
-            for node_id in graph.nodes
+            for node_id in nodes
             if node_id in active_nodes
         }
+        outgoing_for = graph._outgoing_for if plan is None else plan._outgoing_for
         for port, value in initial_inputs.items():
             queues[graph.entrypoint][port].append(value)
         started: set[str] = set()
         terminal: list[Output] = []
+        ready: deque[str] = deque((graph.entrypoint,))
+        scheduled = {graph.entrypoint}
 
-        while True:
-            progressed = False
-            for node_id, node in graph.nodes.items():
-                if node_id not in active_nodes:
+        def schedule_if_ready(node_id: str) -> None:
+            if node_id in scheduled:
+                return
+            spec = specs[node_id]
+            if spec.input_policy is InputPolicy.ON_START:
+                runnable = node_id == graph.entrypoint and node_id not in started
+            else:
+                runnable = (
+                    spec.input_policy._select(input_ports[node_id], queues[node_id])
+                    is not None
+                )
+            if runnable:
+                ready.append(node_id)
+                scheduled.add(node_id)
+
+        while ready:
+            node_id = ready.popleft()
+            scheduled.remove(node_id)
+            node = nodes[node_id]
+            spec = specs[node_id]
+            policy = spec.input_policy
+            if policy is InputPolicy.ON_START:
+                started.add(node_id)
+                consumed: dict[str, Any] = {}
+            else:
+                selection = policy._select(input_ports[node_id], queues[node_id])
+                if selection is None:
                     continue
-                spec = specs[node_id]
-                policy = spec.input_policy
-                if policy is InputPolicy.ON_START:
-                    if node_id != graph.entrypoint or node_id in started:
-                        continue
-                    started.add(node_id)
-                    consumed: dict[str, Any] = {}
-                else:
-                    selection = policy._select(
-                        tuple(spec.input_ports), queues[node_id]
-                    )
-                    if selection is None:
-                        continue
-                    consumed = {
-                        port: queues[node_id][port].popleft()
-                        for port in selection
-                    }
-                progressed = True
-                hooks = self.hooks.for_node(hook_snapshot, node_id)
-                try:
-                    outputs = self._call_node(
-                        graph_name,
-                        node_id,
-                        node,
-                        MappingProxyType(consumed),
-                        Context(emit, slot),
-                        hooks,
-                        spec.input_ports,
-                    )
-                except ShortCircuit as exc:
-                    raise HookExecutionError(
-                        "ShortCircuit is only valid during hook enter",
+                consumed = {
+                    port: queues[node_id][port].popleft() for port in selection
+                }
+
+            try:
+                outputs = self._call_node(
+                    graph_name,
+                    node_id,
+                    node,
+                    MappingProxyType(consumed),
+                    Context(emit, slot),
+                    hooks_by_node[node_id],
+                    spec.input_ports,
+                )
+            except ShortCircuit as exc:
+                raise HookExecutionError(
+                    "ShortCircuit is only valid during hook enter",
+                    graph=graph_name,
+                    node=node_id,
+                ) from exc
+            for output in outputs:
+                declared = spec.output_ports
+                if output.port not in declared:
+                    raise InvalidOutputError(
+                        f"node {node_id!r} produced unknown port {output.port!r}",
                         graph=graph_name,
                         node=node_id,
-                    ) from exc
-                for output in outputs:
-                    declared = spec.output_ports
-                    if output.port not in declared:
-                        raise InvalidOutputError(
-                            f"node {node_id!r} produced unknown port {output.port!r}",
-                            graph=graph_name,
-                            node=node_id,
-                        )
-                    expected = declared[output.port]
-                    if not isinstance(output.value, expected):
-                        raise PortValueTypeError(
-                            f"node {node_id!r} output {output.port!r} expected "
-                            f"{expected.__name__}, got {type(output.value).__name__}",
-                            graph=graph_name,
-                            node=node_id,
-                        )
-                    edges = (
-                        graph._outgoing_for(node_id, output.port)
-                        if plan is None
-                        else plan._outgoing_for(node_id, output.port)
                     )
-                    if not edges:
-                        terminal.append(output)
-                        continue
-                    for edge in edges:
-                        target_type = specs[edge.target].input_ports[edge.target_port]
-                        if not isinstance(output.value, target_type):
-                            raise PortValueTypeError(
-                                f"edge target {edge.target}.{edge.target_port} "
-                                f"expected {target_type.__name__}",
-                                graph=graph_name,
-                                node=node_id,
-                            )
-                        queues[edge.target][edge.target_port].append(output.value)
-            if not progressed:
-                break
+                expected = declared[output.port]
+                if not isinstance(output.value, expected):
+                    raise PortValueTypeError(
+                        f"node {node_id!r} output {output.port!r} expected "
+                        f"{expected.__name__}, got {type(output.value).__name__}",
+                        graph=graph_name,
+                        node=node_id,
+                    )
+                edges = outgoing_for(node_id, output.port)
+                if not edges:
+                    terminal.append(output)
+                    continue
+                for edge in edges:
+                    target_type = specs[edge.target].input_ports[edge.target_port]
+                    if not isinstance(output.value, target_type):
+                        raise PortValueTypeError(
+                            f"edge target {edge.target}.{edge.target_port} "
+                            f"expected {target_type.__name__}",
+                            graph=graph_name,
+                            node=node_id,
+                        )
+                    queues[edge.target][edge.target_port].append(output.value)
+                    schedule_if_ready(edge.target)
+
+            # Consume one input group per turn so a hot cycle cannot starve peers.
+            schedule_if_ready(node_id)
 
         leftovers = {
             f"{node_id}.{port}": len(values)

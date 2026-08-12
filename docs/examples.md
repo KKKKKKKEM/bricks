@@ -5,6 +5,7 @@
 ```bash
 uv run python examples/linear.py
 uv run python examples/fan_in.py
+uv run python examples/cycle.py
 uv run python examples/event_routing.py
 uv run python examples/async_node.py
 ```
@@ -48,7 +49,23 @@ graph = (
 `InputPolicy.ANY` 适合“任一输入到达即可处理”的消费者；它按 Ports 声明顺序从第一个就绪端口取一个值，因此
 Node 必须能根据实际存在的 key 区分输入来源。
 
-## 3. 用事件连接 Graph
+## 3. 循环
+
+[`examples/cycle.py`](../examples/cycle.py) 展示一个自环。`again` 端口连接回 `Counter` 自身，`done` 没有下游，
+所以它产生终端输出：
+
+```python
+graph = (
+    Graph(entrypoint="counter")
+    .add(counter=Counter())
+    .connect("counter", "counter", source_port="again", target_port="value")
+)
+```
+
+环是普通 Edge 结构，不需要特殊配置，也没有默认执行次数或时长限制。Node 不再向回路输出数据后，Graph 自然
+进入静止并结束。
+
+## 4. 用事件连接 Graph
 
 [`examples/event_routing.py`](../examples/event_routing.py) 将同步的发布 Graph 与队列中的消费 Graph 分开：
 
@@ -69,7 +86,7 @@ runtime.wait_idle()
 发布 Node 使用 `context.emit("message.created", value)`。这不是 Graph 内 Output 的替代物：事件用于表达已发生
 的事实，并可能启动多张 Graph；`wait_idle()` 确保已接受的级联任务完成后再读取结果。
 
-## 4. 异步 Node
+## 5. 异步 Node
 
 [`examples/async_node.py`](../examples/async_node.py) 展示 `AsyncNode`。它与 `Node` 有相同的 Ports、Output、
 Edge 和 InputPolicy，只是 `execute()` 是 `async def`：

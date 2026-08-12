@@ -93,8 +93,8 @@ def test_graph_add_rejects_mixed_forms() -> None:
         Graph().add("source", Source(), sink=Sink())
 
 
-def test_graph_rejects_cycle() -> None:
-    """图内环必须改用跨图 Event 表达。"""
+def test_graph_accepts_cycle() -> None:
+    """普通 typed Edge 可以组成环。"""
 
     class Relay(Node):
         input_ports = Ports(value=str)
@@ -108,8 +108,8 @@ def test_graph_rejects_cycle() -> None:
     graph.connect("a", "b", source_port="value", target_port="value")
     graph.connect("b", "a", source_port="value", target_port="value")
 
-    with pytest.raises(GraphValidationError, match="acyclic"):
-        graph.freeze()
+    assert graph.freeze().frozen
+    assert graph.edges[1].target == "a"
 
 
 def test_graph_rejects_unreachable_node() -> None:

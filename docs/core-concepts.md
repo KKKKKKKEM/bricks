@@ -53,11 +53,33 @@ graph = (
 `add(node_id, node)`；ID 属于 Graph binding，不是 Node 自身属性，因此同一个无状态 Node 行为可以用不同 ID
 复用。
 
-冻结会拒绝以下定义：空图或未知入口、重复节点/边、未知端口、端口类型不兼容、Graph 内环、不可从入口到达
-的节点，以及不合法的输入策略。`Runtime.register()` 会自动冻结尚未冻结的 Graph。
+冻结会拒绝以下定义：空图或未知入口、重复节点/边、未知端口、端口类型不兼容、不可从入口到达的节点，以及
+不合法的输入策略。`Runtime.register()` 会自动冻结尚未冻结的 Graph。
 
-Graph 是有向无环图。重复工作、轮询、爬虫的继续发现等，都应发布 Event 再触发另一张 Graph，而不是在图中
-添加回边。
+Graph 是普通有向图，Edge 可以回到上游或形成自环。循环不需要特殊 Edge；Node 通过是否继续产生连接到回路的
+Output 决定循环是否继续：
+
+```python
+class Counter(Node):
+    input_ports = Ports(value=int)
+    output_ports = Ports(again=int, done=int)
+
+    def execute(self, inputs, context):
+        value = inputs["value"]
+        if value < 3:
+            return Output(value + 1, "again")
+        return Output(value, "done")
+
+
+graph = (
+    Graph(entrypoint="counter")
+    .add(counter=Counter())
+    .connect("counter", "counter", source_port="again", target_port="value")
+)
+```
+
+执行器不会按步数或运行时间截断循环。只要回路继续产生可消费的数据，本次 execution 就继续运行；所有可执行
+Node 和端口队列都清空后，Graph 才自然结束。
 
 ### ExecutionPlan：从完整 Graph 选择子路径
 
@@ -84,8 +106,9 @@ runtime.run("document.graph", payload, plan=fast)
 | `ANY` | 按端口声明顺序找到第一个有值的端口 | 只包含被消费的一个端口 |
 | `ON_START` | Graph 执行开始时 | 空 Mapping |
 
-`ON_START` 只能用于零输入 Node。执行器为每个端口维护 FIFO 队列；一次执行每个被选中的端口只消费一个值。
-如果 Graph 静止后还剩无法组合的值，例如 `ALL` Node 只收到一半输入，会抛出 `IncompleteInputsError`。
+`ON_START` 只能用于零输入入口 Node。执行器为每个端口维护 FIFO 队列，并用 FIFO 就绪队列调度 Node；每次
+调度只消费一组输入，再把仍然就绪的 Node 放到队尾，因此持续循环不会独占其他已就绪分支。如果 Graph 静止后
+还剩无法组合的值，例如 `ALL` Node 只收到一半输入，会抛出 `IncompleteInputsError`。
 
 ## Event 与 Context
 

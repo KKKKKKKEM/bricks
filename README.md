@@ -50,6 +50,7 @@ exactly-once 语义。
 ```bash
 uv run python examples/linear.py
 uv run python examples/fan_in.py
+uv run python examples/cycle.py
 uv run python examples/event_routing.py
 uv run python examples/async_node.py
 uv run --with pytest pytest -q

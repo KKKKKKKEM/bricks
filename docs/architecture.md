@@ -9,7 +9,7 @@ Bricks 把系统分成两条不会隐式互转的通路：Graph 内使用 `Outpu
 flowchart LR
     App[应用]
 
-    subgraph GA[Graph A · 有限静态 DAG]
+    subgraph GA[Graph A · 静态有向图]
         direction LR
         A1[Node A1] -->|Output / Edge| A2[Node A2]
     end
@@ -27,7 +27,7 @@ flowchart LR
         Dispatch --> Execute
     end
 
-    subgraph GB[Graph B · 有限静态 DAG]
+    subgraph GB[Graph B · 静态有向图]
         direction LR
         B1[Node B1] -->|Output / Edge| B2[Node B2]
     end
@@ -48,7 +48,7 @@ flowchart LR
 
 三者的关系是：
 
-- `Graph` 定义一次有限的局部计算，内部只通过 `Output / Edge` 传值。
+- `Graph` 定义一次局部计算，内部只通过 `Output / Edge` 传值，Edge 可以组成循环。
 - `Event` 是 Graph 对外发布的领域事实，也是跨 Graph 连接的唯一数据对象。
 - `Runtime` 注册并执行 Graph，接收 Event，再根据 `on()` 规则异步启动另一张 Graph。
 
@@ -176,11 +176,11 @@ edge:
 flowchart LR
     Build[构建态 Graph] --> Freeze[freeze]
     Freeze --> EntryCheck[入口存在]
-    Freeze --> DagCheck[DAG 无环且全部可达]
+    Freeze --> ReachableCheck[全部 Node 从入口可达]
     Freeze --> PortCheck[Edge 端口存在且类型兼容]
     Freeze --> PolicyCheck[InputPolicy 与输入合法]
     EntryCheck --> Frozen[冻结 Graph]
-    DagCheck --> Frozen
+    ReachableCheck --> Frozen
     PortCheck --> Frozen
     PolicyCheck --> Frozen
     Frozen --> Execute[可被 Runtime 注册和执行]
@@ -204,6 +204,10 @@ flowchart LR
 `Ports` 声明输入输出的名称和类型，`InputPolicy` 决定 Node 何时可以消费输入。`Output` 只沿当前 Graph 的
 `Edge` 传播；`Context.emit()` 产生的 `Event` 则离开当前 Graph，交回 Runtime 进入跨 Graph 流程。
 
+Executor 使用 FIFO 就绪队列，每次只让一个 Node 消费一组输入。回边与其他 Edge 使用相同的投递语义；回路继续
+产生数据时 execution 持续运行，不再产生数据时进入静止。静止时队列为空即正常完成，仍有无法满足
+`InputPolicy` 的残留输入则抛出 `IncompleteInputsError`。核心不设置默认步数或运行时间限制。
+
 ## 组装关系
 
 | 层次 | 核心概念 | 责任 |
@@ -220,7 +224,7 @@ flowchart LR
 
 1. 应用用 `Graph.add(node_id, node)` 或 `Graph.add(parse=..., store=...)` 建图；Node ID 只标识 Graph 中的
    binding，Node 行为本身可以复用。
-2. `Runtime.register(name, graph)` 冻结并校验 Graph，包括入口、DAG、可达性、Ports 类型和 InputPolicy。
+2. `Runtime.register(name, graph)` 冻结并校验 Graph，包括入口、可达性、Ports 类型和 InputPolicy；Graph 可以含环。
 3. `Runtime.run()` 直接把注册名和输入交给 GraphExecutor；`ExecutionPlan` 可以把本次执行限制在严格子图中。
 4. Executor 按 InputPolicy 组合输入并调用 Node。Node 返回的 `Output` 沿 `Edge` 进入下游端口；没有下游的
    Output 成为 `run()` 的返回值。

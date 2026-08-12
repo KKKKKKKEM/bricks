@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import defaultdict, deque
+from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from inspect import iscoroutinefunction
@@ -63,7 +63,7 @@ class ExecutionPlan:
 
 
 class Graph:
-    """描述一次有限局部数据流的静态有向无环图。"""
+    """描述 Node 通过 typed Edge 传递数据的静态有向图。"""
 
     def __init__(self, *, entrypoint: str | None = None) -> None:
         """创建处于构建状态的空 Graph。
@@ -355,7 +355,6 @@ class Graph:
                 )
             adjacency[edge.source].add(edge.target)
 
-        self._validate_acyclic(adjacency)
         reachable = self._reachable(adjacency)
         unreachable = set(self._nodes) - reachable
         if unreachable:
@@ -405,31 +404,6 @@ class Graph:
         if not declared:
             raise GraphValidationError(
                 f"zero-input node {node_id!r} must use InputPolicy.ON_START"
-            )
-
-    def _validate_acyclic(self, adjacency: Mapping[str, set[str]]) -> None:
-        """拒绝图内环；动态循环应通过跨图事件表达。
-
-        参数：
-            adjacency: Node ID 到直接下游的邻接表。
-        """
-
-        indegree = {node_id: 0 for node_id in self._nodes}
-        for targets in adjacency.values():
-            for target in targets:
-                indegree[target] += 1
-        ready = deque(node for node, degree in indegree.items() if degree == 0)
-        visited = 0
-        while ready:
-            source = ready.popleft()
-            visited += 1
-            for target in adjacency.get(source, set()):
-                indegree[target] -= 1
-                if indegree[target] == 0:
-                    ready.append(target)
-        if visited != len(self._nodes):
-            raise GraphValidationError(
-                "graph must be acyclic; use events to express repeated work"
             )
 
     def _reachable(self, adjacency: Mapping[str, set[str]]) -> set[str]:
