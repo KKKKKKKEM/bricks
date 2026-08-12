@@ -18,7 +18,7 @@ from bricks.engine.backends import (
     Work,
     WorkHandler,
 )
-from bricks.engine import EventRouter, GraphWorker
+from bricks.engine import EventRouter, GraphWorker, HookRegistry
 
 
 class EmptyNode(Node):
@@ -122,6 +122,26 @@ class RecordingExecutor:
         self.closed = True
 
 
+class HookableRecordingExecutor(RecordingExecutor):
+    """不继承 Engine，但显式提供可选 Hook 能力。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.hooks = HookRegistry()
+
+    def attach(self, hook, *, phase=None, graph=None, node=None):
+        return self.hooks.attach(
+            hook,
+            phase=phase,
+            graph=graph,
+            node=node,
+        )
+
+    def close(self) -> None:
+        self.hooks.close()
+        super().close()
+
+
 def test_runtime_composes_replaceable_capabilities() -> None:
     """替换传输、任务和执行器不改变 Runtime/Graph 使用 API。"""
 
@@ -153,6 +173,35 @@ def test_runtime_composes_replaceable_capabilities() -> None:
     assert tasks.submitted[0][1].trigger == Event("work.created", {"id": 1})
     assert executor.calls == [("work.graph", {"id": 1})]
     assert not bus.closed and not tasks.closed and not executor.closed
+
+
+def test_custom_executor_can_explicitly_support_runtime_hooks() -> None:
+    """Hook 是结构化可选能力，不要求自定义执行器继承 Engine。"""
+
+    tasks = RecordingTasks()
+    executor = HookableRecordingExecutor()
+    worker = GraphWorker(consumer=tasks, executor=executor)
+    worker.register("work.graph", Graph(entrypoint="empty").add(empty=EmptyNode()))
+
+    handle = worker.attach(lambda call: call, graph="work.graph", node="empty")
+
+    assert executor.hooks.snapshot("work.graph")
+    handle.detach()
+    assert executor.hooks.snapshot("work.graph") == ()
+    worker.close()
+
+
+def test_custom_executor_without_hook_capability_is_rejected() -> None:
+    """普通 GraphExecutor 仍可执行，只在请求可选 Hook 能力时失败。"""
+
+    tasks = RecordingTasks()
+    worker = GraphWorker(consumer=tasks, executor=RecordingExecutor())
+    worker.register("work.graph", Graph(entrypoint="empty").add(empty=EmptyNode()))
+
+    with pytest.raises(TypeError, match="does not support hooks"):
+        worker.attach(lambda call: call, graph="work.graph")
+
+    worker.close()
 
 
 def test_runtime_explicitly_exposes_composed_roles() -> None:

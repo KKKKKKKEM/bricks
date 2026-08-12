@@ -28,6 +28,7 @@ Event 和 Runtime 门面用法不需要因此改变。`Runtime()` 仍会创建�
 | `TaskConsumer` | 消费 Work，并控制当前实例的本地并发 | `MemoryTaskBackend` |
 | `TaskBackend` | 同时实现发布与消费的组合协议 | `MemoryTaskBackend` |
 | `GraphExecutor` | 执行已冻结 Graph 并返回终端 Output | `Engine` |
+| `HookableGraphExecutor` | GraphExecutor 的可选动态 Hook 能力 | `Engine` |
 
 ## 适配器的最低要求
 
@@ -41,7 +42,8 @@ TaskPublisher 的 `submit()` 正常返回即表示后端已接受 Work，同时�
   `bind(queue, handler, concurrency=...)` 把 Work 交给 handler，其中 concurrency 只限制当前 Runtime/Worker
   实例。
 - GraphExecutor 接收注册名、冻结 Graph、入口输入和 Event emitter；若替换执行器，就必须保留 Graph 的
-  Ports、InputPolicy、Output、Edge 和 Event 语义。
+  Ports、InputPolicy、Output、Edge 和 Event 语义。自定义执行器若还实现 `HookableGraphExecutor` 的 `attach()`，
+  `Runtime.attach()` 会按结构化能力委托给它，并不要求执行器继承默认 `Engine`。
 
 可参考 [test_backends.py](../tests/engine/test_backends.py) 中的同步替身：它验证三个能力可独立替换，也验证
 Runtime 不依赖默认内存实现的私有字段。
@@ -78,7 +80,8 @@ worker.consume("orders", concurrency=8)
 `route()` 默认生成稳定的 `route:{event_type}:{graph}:{queue}` subscription，也可通过 `subscription=` 显式指定。
 多个 Router 注册同一条 route 时属于同一逻辑订阅，只应由其中一个实例投递 Work。
 
-`on(event_type, graph=..., queue=..., concurrency=...)` 是 Runtime 上组合 `route()` 与 `consume()` 的常用入口。
+`on(event_type, graph=..., queue=..., concurrency=...)` 是 Runtime 上组合 `consume()` 与 `route()` 的常用入口。
+它先准备本地消费者，再暴露 Event route，避免消费端配置失败后留下仍会投递 Work 的 route。
 `observe(event_type, handler)` 独立用于观察 Event。只有需要独立部署 Router 和 Worker，或多条 route 共享一次
 queue 消费配置时，才需要显式调用 `route()` 与 `consume()`。
 

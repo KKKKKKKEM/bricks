@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
 
 from ..core import Output, require_non_empty_string
 from ..events import Event
 from ..graph import ExecutionPlan, Graph
+from ..hooks import HookHandle, HookPhase, NodeHook
 
 EventHandler = Callable[[Event], None]
 
@@ -112,3 +113,18 @@ class GraphExecutor(Protocol):
 
     def close(self) -> None:
         """关闭执行器持有的资源。"""
+
+
+@runtime_checkable
+class HookableGraphExecutor(GraphExecutor, Protocol):
+    """额外支持动态 Node Hook 的 GraphExecutor 可选能力。"""
+
+    def attach(
+        self,
+        hook: NodeHook | Callable[..., object],
+        *,
+        phase: HookPhase | str | None = None,
+        graph: str | None = None,
+        node: str | None = None,
+    ) -> HookHandle:
+        """挂载 Hook，并返回可用于卸载的句柄。"""

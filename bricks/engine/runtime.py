@@ -13,6 +13,7 @@ from .backends import (
     Emit,
     EventBus,
     GraphExecutor,
+    HookableGraphExecutor,
     MemoryEventBus,
     MemoryTaskBackend,
     TaskConsumer,
@@ -300,9 +301,9 @@ class GraphWorker:
                 node = require_non_empty_string(node, "hook node")
                 if node not in registered.nodes:
                     raise ValueError(f"graph {graph!r} has no node {node!r}")
-        if not isinstance(self._executor, Engine):
+        if not isinstance(self._executor, HookableGraphExecutor):
             raise TypeError("the configured GraphExecutor does not support hooks")
-        return self._executor.hooks.attach(
+        return self._executor.attach(
             hook,
             phase=phase,
             graph=graph,
@@ -479,13 +480,14 @@ class Runtime:
     ) -> Runtime:
         """组合注册 Event route，并启动对应 queue 的本地消费者。"""
 
-        self.route(
+        # Expose the route only after its local consumer is ready.
+        self.consume(queue, concurrency=concurrency)
+        return self.route(
             event_type,
             graph=graph,
             queue=queue,
             subscription=subscription,
         )
-        return self.consume(queue, concurrency=concurrency)
 
     def wait_idle(self, timeout: float | None = None) -> None:
         """等待 Router 与 Worker 的级联网络在当前实例内静止。"""

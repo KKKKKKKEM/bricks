@@ -315,6 +315,36 @@ def test_runtime_on_forwards_subscription() -> None:
         )
 
 
+def test_runtime_on_does_not_leave_route_when_consumer_setup_fails() -> None:
+    """消费配置失败时，同一 route 仍可在修正参数后正常注册。"""
+
+    class Consumer(Node):
+        input_ports = Ports(value=str)
+        output_ports = Ports()
+
+        def execute(self, inputs, context: Context) -> None:
+            del inputs, context
+
+    with Runtime() as runtime:
+        runtime.register(
+            "consumer.graph",
+            Graph(entrypoint="consume").add(consume=Consumer()),
+        )
+        with pytest.raises(ValueError, match="at least 1"):
+            runtime.on(
+                "value.routed",
+                graph="consumer.graph",
+                queue="values",
+                concurrency=0,
+            )
+
+        runtime.on(
+            "value.routed",
+            graph="consumer.graph",
+            queue="values",
+        )
+
+
 def test_event_is_committed_even_if_source_node_later_fails() -> None:
     """emit 成功后的事件不因当前 Node 后续失败而撤回。"""
 

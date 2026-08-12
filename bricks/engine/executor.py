@@ -23,6 +23,8 @@ from .errors import (
 from .events import Context, Event
 from .graph import ExecutionPlan, Graph
 from .hooks import (
+    HookHandle,
+    HookPhase,
     HookRegistry,
     NodeCall,
     NodeHook,
@@ -84,6 +86,18 @@ class Engine:
 
         self.hooks.close()
         self._runner.close()
+
+    def attach(
+        self,
+        hook: NodeHook | Callable[..., object],
+        *,
+        phase: HookPhase | str | None = None,
+        graph: str | None = None,
+        node: str | None = None,
+    ) -> HookHandle:
+        """声明并实现 GraphExecutor 的可选动态 Hook 能力。"""
+
+        return self.hooks.attach(hook, phase=phase, graph=graph, node=node)
 
     def _run(
         self,
