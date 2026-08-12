@@ -27,7 +27,7 @@ from .errors import (
 )
 from .events import Event
 from .executor import Engine
-from .graph import Graph
+from .graph import ExecutionPlan, Graph
 from .hooks import HookHandle, HookPhase, NodeHook
 
 EventHandler = Callable[[Event], None]
@@ -161,12 +161,22 @@ class Runtime:
         self._publish(event)
         return event
 
-    def run(self, graph: str, inputs: Any = None) -> tuple[Output, ...]:
+    def run(
+        self,
+        graph: str,
+        inputs: Any = None,
+        *,
+        plan: ExecutionPlan | None = None,
+    ) -> tuple[Output, ...]:
         """同步直接执行一个已注册 Graph。"""
 
         self._ensure_open()
         registered = self._get_graph(graph)
-        return self._executor.execute(graph, registered, inputs, self._publish)
+        if plan is None:
+            return self._executor.execute(graph, registered, inputs, self._publish)
+        return self._executor.execute(
+            graph, registered, inputs, self._publish, plan=plan
+        )
 
     def attach(
         self,
@@ -197,10 +207,16 @@ class Runtime:
             node=node,
         )
 
-    async def arun(self, graph: str, inputs: Any = None) -> tuple[Output, ...]:
+    async def arun(
+        self,
+        graph: str,
+        inputs: Any = None,
+        *,
+        plan: ExecutionPlan | None = None,
+    ) -> tuple[Output, ...]:
         """在线程中直接执行 Graph，避免阻塞异步调用方。"""
 
-        return await asyncio.to_thread(self.run, graph, inputs)
+        return await asyncio.to_thread(self.run, graph, inputs, plan=plan)
 
     def wait_idle(self, timeout: float | None = None) -> None:
         """等待 Event 与 Work 级联网络静止。"""

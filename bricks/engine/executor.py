@@ -21,7 +21,7 @@ from .errors import (
     PortValueTypeError,
 )
 from .events import Context, Event
-from .graph import Graph
+from .graph import ExecutionPlan, Graph
 from .hooks import (
     HookRegistry,
     NodeCall,
@@ -55,6 +55,7 @@ class Engine:
         graph: Graph,
         inputs: Any,
         emit: Emit,
+        plan: ExecutionPlan | None = None,
     ) -> tuple[Output, ...]:
         """执行一张 Graph 并返回终端 Output。"""
 
@@ -65,11 +66,16 @@ class Engine:
             raise TypeError("emit must be callable")
         if not graph.frozen:
             raise RuntimeError("Engine requires a frozen Graph")
+        if plan is not None:
+            if not isinstance(plan, ExecutionPlan):
+                raise TypeError("plan must be an ExecutionPlan")
+            if plan._graph is not graph:
+                raise ValueError("execution plan belongs to a different Graph")
 
         prepared = self._coerce_inputs(graph, inputs)
         snapshot = self.hooks.snapshot(name)
         try:
-            return self._run(name, graph, prepared, emit, snapshot)
+            return self._run(name, graph, prepared, emit, snapshot, plan)
         except StopGraph as signal:
             return self._coerce_outputs(signal.outputs, name, None, "StopGraph")
 
@@ -86,14 +92,18 @@ class Engine:
         initial_inputs: Mapping[str, Any],
         emit: Emit,
         hook_snapshot: tuple[Any, ...],
+        plan: ExecutionPlan | None,
     ) -> tuple[Output, ...]:
+        active_nodes = set(graph.nodes) if plan is None else plan.nodes
         specs = {
             node_id: graph._spec_for(node_id)
             for node_id in graph.nodes
+            if node_id in active_nodes
         }
         queues: dict[str, dict[str, deque[Any]]] = {
             node_id: {port: deque() for port in specs[node_id].input_ports}
             for node_id in graph.nodes
+            if node_id in active_nodes
         }
         for port, value in initial_inputs.items():
             queues[graph.entrypoint][port].append(value)
@@ -103,6 +113,8 @@ class Engine:
         while True:
             progressed = False
             for node_id, node in graph.nodes.items():
+                if node_id not in active_nodes:
+                    continue
                 spec = specs[node_id]
                 policy = spec.input_policy
                 if policy is InputPolicy.ON_START:
@@ -154,7 +166,11 @@ class Engine:
                             graph=graph_name,
                             node=node_id,
                         )
-                    edges = graph._outgoing_for(node_id, output.port)
+                    edges = (
+                        graph._outgoing_for(node_id, output.port)
+                        if plan is None
+                        else plan._outgoing_for(node_id, output.port)
+                    )
                     if not edges:
                         terminal.append(output)
                         continue

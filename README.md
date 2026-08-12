@@ -8,8 +8,8 @@ Node -- Output / Edge --> Node
 Graph -- Event / Runtime --> Graph
 ```
 
-顶层 API 只有十个概念：`Ports`、`Node`、`AsyncNode`、`InputPolicy`、`Output`、`Edge`、`Graph`、
-`Event`、`Context` 与 `Runtime`。
+顶层 API 只有十一个概念：`Ports`、`Node`、`AsyncNode`、`InputPolicy`、`Output`、`Edge`、`Graph`、
+`ExecutionPlan`、`Event`、`Context` 与 `Runtime`。
 
 ## 最小示例
 

@@ -55,6 +55,21 @@ graph = (
 Graph 是有向无环图。重复工作、轮询、爬虫的继续发现等，都应发布 Event 再触发另一张 Graph，而不是在图中
 添加回边。
 
+### ExecutionPlan：从完整 Graph 选择子路径
+
+同一张完整 Graph 可以为不同需求创建不同的严格执行计划：
+
+```python
+fast = graph.plan(include={"load", "parse", "save"})
+full = graph.plan(include={"load", "parse", "enrich", "save"})
+
+runtime.run("document.graph", payload, plan=fast)
+```
+
+`plan()` 会在需要时先冻结 Graph。计划只保留两端都被选择的原有 Edge，不会跨过未选择 Node 自动补边；入口不在
+计划内、所选 Node 不可达，或 `ALL` Node 缺少输入端口时，创建计划会立即失败。计划绑定创建它的 Graph 实例，
+创建后不可变，可以安全复用，也可以在并发 execution 中使用不同计划。没有传 `plan` 时仍执行完整 Graph。
+
 ## 输入触发策略
 
 每个 Node 固定使用一种 `InputPolicy`：

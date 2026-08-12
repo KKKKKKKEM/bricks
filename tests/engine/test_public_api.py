@@ -16,6 +16,7 @@ def test_top_level_api_contains_only_core_vocabulary() -> None:
         "Context",
         "Edge",
         "Event",
+        "ExecutionPlan",
         "Graph",
         "InputPolicy",
         "Node",

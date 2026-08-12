@@ -17,7 +17,7 @@ from .errors import (
     UnknownGraphError,
 )
 from .events import Context, Event
-from .graph import Edge, Graph
+from .graph import Edge, ExecutionPlan, Graph
 from .hooks import (
     HookHandle,
     HookPhase,
@@ -42,6 +42,7 @@ __all__ = [
     "Event",
     "EventDispatchError",
     "ExecutionError",
+    "ExecutionPlan",
     "Graph",
     "GraphError",
     "GraphFrozenError",

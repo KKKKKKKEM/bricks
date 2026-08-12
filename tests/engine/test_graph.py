@@ -6,7 +6,7 @@ from collections.abc import Mapping
 
 import pytest
 
-from bricks import AsyncNode, Graph, InputPolicy, Node, Output, Ports
+from bricks import AsyncNode, ExecutionPlan, Graph, InputPolicy, Node, Output, Ports
 from bricks.engine import Context, GraphFrozenError, GraphValidationError
 
 
@@ -135,6 +135,97 @@ def test_frozen_graph_is_immutable() -> None:
 
     with pytest.raises(GraphFrozenError):
         graph.add("another", Source())
+
+
+def test_graph_builds_strict_execution_plan() -> None:
+    """Plan 仅保留两端都被选中的原始 Edge，并冻结所属 Graph。"""
+
+    graph = (
+        Graph(entrypoint="source")
+        .add("source", Source())
+        .add("left", Sink())
+        .add("right", Sink())
+        .connect("source", "left", source_port="value", target_port="value")
+        .connect("source", "right", source_port="value", target_port="value")
+    )
+
+    plan = graph.plan(include={"source", "left"})
+
+    assert isinstance(plan, ExecutionPlan)
+    assert graph.frozen
+    assert plan.entrypoint == "source"
+    assert plan.nodes == frozenset({"source", "left"})
+    assert plan.edges == (graph.edges[0],)
+
+
+def test_execution_plan_rejects_disconnected_selection() -> None:
+    """严格 Plan 不会跨过未选中的中间 Node 自动补边。"""
+
+    class Relay(Source):
+        input_ports = Ports(value=str)
+        input_policy = InputPolicy.ALL
+
+        def execute(self, inputs, context: Context) -> Output:
+            del context
+            return Output(inputs["value"], "value")
+
+    graph = (
+        Graph(entrypoint="source")
+        .add("source", Source())
+        .add("relay", Relay())
+        .add("sink", Sink())
+        .connect("source", "relay", source_port="value", target_port="value")
+        .connect("relay", "sink", source_port="value", target_port="value")
+    )
+
+    with pytest.raises(GraphValidationError, match="unreachable"):
+        graph.plan(include={"source", "sink"})
+
+
+def test_execution_plan_requires_all_join_inputs() -> None:
+    """裁掉 ALL Node 的任一输入分支时在创建 Plan 阶段失败。"""
+
+    class Split(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports(left=int, right=int)
+
+        def execute(self, inputs, context: Context):
+            del context
+            return (
+                Output(inputs["value"], "left"),
+                Output(inputs["value"], "right"),
+            )
+
+    class Relay(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports(value=int)
+
+        def execute(self, inputs, context: Context) -> Output:
+            del context
+            return Output(inputs["value"], "value")
+
+    class Join(Node):
+        input_ports = Ports(left=int, right=int)
+        output_ports = Ports(total=int)
+        input_policy = InputPolicy.ALL
+
+        def execute(self, inputs, context: Context) -> Output:
+            del context
+            return Output(inputs["left"] + inputs["right"], "total")
+
+    graph = (
+        Graph(entrypoint="split")
+        .add("split", Split())
+        .add("left", Relay())
+        .add("right", Relay())
+        .add("join", Join())
+        .connect("split", "left", source_port="left", target_port="value")
+        .connect("split", "right", source_port="right", target_port="value")
+        .connect("left", "join", source_port="value", target_port="left")
+        .connect("right", "join", source_port="value", target_port="right")
+    )
+    with pytest.raises(GraphValidationError, match="ALL node.*right"):
+        graph.plan(include={"split", "left", "join"})
 
 
 def test_input_policy_any_uses_declaration_order() -> None:

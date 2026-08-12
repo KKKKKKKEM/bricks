@@ -95,6 +95,76 @@ def test_runtime_executes_graph_internal_dataflow() -> None:
     assert outputs == (Output(5, "total"),)
 
 
+def test_runtime_executes_different_plans_from_one_graph() -> None:
+    """同一冻结 Graph 可按每次调用选择不同分支，未选 Node 不执行。"""
+
+    calls: list[str] = []
+
+    class SourceNode(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports(value=int)
+
+        def execute(self, inputs, context: Context) -> Output:
+            del context
+            calls.append("source")
+            return Output(inputs["value"], "value")
+
+    class Branch(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports(result=str)
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def execute(self, inputs, context: Context) -> Output:
+            del context
+            calls.append(self.name)
+            return Output(f"{self.name}:{inputs['value']}", "result")
+
+    graph = (
+        Graph(entrypoint="source")
+        .add("source", SourceNode())
+        .add("fast", Branch("fast"))
+        .add("full", Branch("full"))
+        .connect("source", "fast", source_port="value", target_port="value")
+        .connect("source", "full", source_port="value", target_port="value")
+    )
+    fast = graph.plan(include={"source", "fast"})
+    full = graph.plan(include={"source", "full"})
+
+    with Runtime() as runtime:
+        runtime.register("work.graph", graph)
+        assert runtime.run("work.graph", 3, plan=fast) == (
+            Output("fast:3", "result"),
+        )
+        assert runtime.run("work.graph", 4, plan=full) == (
+            Output("full:4", "result"),
+        )
+
+    assert calls == ["source", "fast", "source", "full"]
+
+
+def test_runtime_rejects_plan_from_another_graph() -> None:
+    """Plan 只能用于创建它的同一个 Graph 实例。"""
+
+    class Start(Node):
+        input_ports = Ports()
+        output_ports = Ports()
+        input_policy = InputPolicy.ON_START
+
+        def execute(self, inputs, context: Context) -> None:
+            del inputs, context
+
+    first = Graph(entrypoint="source").add("source", Start()).freeze()
+    second = Graph(entrypoint="source").add("source", Start()).freeze()
+    plan = first.plan(include={"source"})
+
+    with Runtime() as runtime:
+        runtime.register("second", second)
+        with pytest.raises(ValueError, match="different Graph"):
+            runtime.run("second", plan=plan)
+
+
 def test_single_port_receives_complete_mapping_payload() -> None:
     """单端口的 Mapping payload 不按多端口输入映射解释。"""
 

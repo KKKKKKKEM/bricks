@@ -8,7 +8,7 @@ from typing import Any, Protocol
 
 from ..core import Output, require_non_empty_string
 from ..events import Event
-from ..graph import Graph
+from ..graph import ExecutionPlan, Graph
 
 EventHandler = Callable[[Event], None]
 
@@ -86,6 +86,7 @@ class GraphExecutor(Protocol):
         graph: Graph,
         inputs: Any,
         emit: Emit,
+        plan: ExecutionPlan | None = None,
     ) -> tuple[Output, ...]:
         """执行 Graph 并返回终端 Output。"""
 
