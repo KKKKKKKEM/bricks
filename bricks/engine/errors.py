@@ -53,6 +53,10 @@ class ExecutionError(BricksRuntimeError):
         self.event = event
 
 
+class HookExecutionError(ExecutionError):
+    """Hook 返回非法数据、修改调用身份或在非法阶段发出信号。"""
+
+
 class IncompleteInputsError(ExecutionError):
     """Graph 静止时仍存在无法满足输入策略的数据。"""
 

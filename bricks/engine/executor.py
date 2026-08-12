@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections import deque
-from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from types import MappingProxyType
-from typing import Any, cast
+from typing import Any
 
 from .core import (
-    AsyncNode,
     InputPolicy,
     Node,
     Output,
@@ -17,18 +15,39 @@ from .core import (
 )
 from .errors import (
     ExecutionError,
+    HookExecutionError,
     IncompleteInputsError,
     InvalidOutputError,
     PortValueTypeError,
 )
 from .events import Context, Event
 from .graph import Graph
+from .hooks import (
+    HookRegistry,
+    NodeCall,
+    NodeHook,
+    Outputs,
+    ShortCircuit,
+    StopGraph,
+)
+from .runner import LocalRunner
 
 Emit = Callable[[Event], None]
 
 
 class Engine:
     """执行 Graph 内的 Node、InputPolicy、Output 和 Edge。"""
+
+    def __init__(
+        self,
+        *,
+        hooks: HookRegistry | None = None,
+        runner: LocalRunner | None = None,
+    ) -> None:
+        """组装动态 Hook 注册表和同步/异步调用 Runner。"""
+
+        self.hooks = HookRegistry() if hooks is None else hooks
+        self._runner = LocalRunner() if runner is None else runner
 
     def execute(
         self,
@@ -48,10 +67,17 @@ class Engine:
             raise RuntimeError("Engine requires a frozen Graph")
 
         prepared = self._coerce_inputs(graph, inputs)
-        return self._run(name, graph, prepared, emit)
+        snapshot = self.hooks.snapshot(name)
+        try:
+            return self._run(name, graph, prepared, emit, snapshot)
+        except StopGraph as signal:
+            return self._coerce_outputs(signal.outputs, name, None, "StopGraph")
 
     def close(self) -> None:
-        """本地无状态执行器没有需要释放的资源。"""
+        """关闭 Hook 注册表和后台异步 Runner。"""
+
+        self.hooks.close()
+        self._runner.close()
 
     def _run(
         self,
@@ -59,6 +85,7 @@ class Engine:
         graph: Graph,
         initial_inputs: Mapping[str, Any],
         emit: Emit,
+        hook_snapshot: tuple[Any, ...],
     ) -> tuple[Output, ...]:
         specs = {
             node_id: graph._spec_for(node_id)
@@ -94,13 +121,23 @@ class Engine:
                         for port in selection
                     }
                 progressed = True
-                outputs = self._call_node(
-                    graph_name,
-                    node_id,
-                    node,
-                    MappingProxyType(consumed),
-                    Context(emit),
-                )
+                hooks = self.hooks.for_node(hook_snapshot, node_id)
+                try:
+                    outputs = self._call_node(
+                        graph_name,
+                        node_id,
+                        node,
+                        MappingProxyType(consumed),
+                        Context(emit),
+                        hooks,
+                        spec.input_ports,
+                    )
+                except ShortCircuit as exc:
+                    raise HookExecutionError(
+                        "ShortCircuit is only valid during hook enter",
+                        graph=graph_name,
+                        node=node_id,
+                    ) from exc
                 for output in outputs:
                     declared = spec.output_ports
                     if output.port not in declared:
@@ -147,19 +184,63 @@ class Engine:
             )
         return tuple(terminal)
 
-    @staticmethod
     def _call_node(
+        self,
         graph_name: str,
         node_id: str,
         node: Node,
         inputs: Mapping[str, Any],
         context: Context,
+        hooks: tuple[NodeHook, ...],
+        input_ports: Mapping[str, type[Any]],
     ) -> tuple[Output, ...]:
+        """在 Hook 生命周期内调用 Node，并保留原始异常供 error 处理。"""
+
+        original = NodeCall(graph_name, node_id, node, inputs, context)
+
+        def invoke(index: int, call: NodeCall) -> Outputs:
+            if index == len(hooks):
+                try:
+                    result = self._runner.resolve(
+                        node.execute(call.inputs, context)
+                    )
+                except (ShortCircuit, StopGraph) as signal:
+                    raise HookExecutionError(
+                        f"{type(signal).__name__} can only be raised by a hook",
+                        graph=graph_name,
+                        node=node_id,
+                    ) from signal
+                return self._coerce_outputs(result, graph_name, node_id, "Node")
+
+            hook = hooks[index]
+            try:
+                entered = self._runner.resolve(hook.enter(call))
+            except ShortCircuit as signal:
+                outputs = self._coerce_outputs(
+                    signal.outputs, graph_name, node_id, "ShortCircuit"
+                )
+                return self._resolve_hook_outputs(
+                    hook.exit(call, outputs), graph_name, node_id
+                )
+
+            entered = self._validate_hook_call(
+                original, entered, input_ports, graph_name, node_id
+            )
+            try:
+                outputs = invoke(index + 1, entered)
+            except Exception as error:
+                outputs = self._resolve_hook_outputs(
+                    hook.error(entered, error), graph_name, node_id
+                )
+            return self._resolve_hook_outputs(
+                hook.exit(entered, outputs), graph_name, node_id
+            )
+
         try:
-            result = node.execute(inputs, context)
-            if isinstance(node, AsyncNode):
-                result = asyncio.run(Engine._await_node_result(result))
+            return invoke(0, original)
         except ExecutionError:
+            raise
+        except (ShortCircuit, StopGraph):
             raise
         except Exception as exc:
             raise ExecutionError(
@@ -167,26 +248,81 @@ class Engine:
                 graph=graph_name,
                 node=node_id,
             ) from exc
+
+    def _resolve_hook_outputs(
+        self,
+        value: object,
+        graph_name: str,
+        node_id: str,
+    ) -> Outputs:
+        resolved = self._runner.resolve(value)
+        return self._coerce_outputs(resolved, graph_name, node_id, "Hook")
+
+    @staticmethod
+    def _coerce_outputs(
+        result: object,
+        graph_name: str,
+        node_id: str | None,
+        source: str,
+    ) -> Outputs:
         try:
             return tuple(Engine._iter_outputs(result))
         except ExecutionError:
             raise
         except TypeError as exc:
             raise InvalidOutputError(
-                f"node {node_id!r} returned invalid output: {exc}",
+                f"{source} returned invalid output: {exc}",
                 graph=graph_name,
                 node=node_id,
             ) from exc
         except Exception as exc:
             raise ExecutionError(
-                f"node {node_id!r} failed while producing output: {exc}",
+                f"{source} failed while producing output: {exc}",
                 graph=graph_name,
                 node=node_id,
             ) from exc
 
     @staticmethod
-    async def _await_node_result(result: object) -> object:
-        return await cast(Awaitable[object], result)
+    def _validate_hook_call(
+        original: NodeCall,
+        modified: object,
+        input_ports: Mapping[str, type[Any]],
+        graph_name: str,
+        node_id: str,
+    ) -> NodeCall:
+        if not isinstance(modified, NodeCall):
+            raise HookExecutionError(
+                "hook enter must return NodeCall",
+                graph=graph_name,
+                node=node_id,
+            )
+        if (
+            modified.graph != original.graph
+            or modified.node_id != original.node_id
+            or modified.node is not original.node
+            or modified.context is not original.context
+        ):
+            raise HookExecutionError(
+                "hook cannot replace graph, node, or context",
+                graph=graph_name,
+                node=node_id,
+            )
+        if set(modified.inputs) != set(original.inputs):
+            raise HookExecutionError(
+                "hook cannot add or remove node input ports",
+                graph=graph_name,
+                node=node_id,
+            )
+        for port, value in modified.inputs.items():
+            expected = input_ports[port]
+            if not isinstance(value, expected):
+                raise PortValueTypeError(
+                    f"hook input {port!r} expected {expected.__name__}, "
+                    f"got {type(value).__name__}",
+                    graph=graph_name,
+                    node=node_id,
+                )
+        return modified
 
     @staticmethod
     def _iter_outputs(result: object) -> Iterator[Output]:

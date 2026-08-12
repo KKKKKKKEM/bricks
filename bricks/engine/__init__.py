@@ -9,6 +9,7 @@ from .errors import (
     GraphError,
     GraphFrozenError,
     GraphValidationError,
+    HookExecutionError,
     IncompleteInputsError,
     InvalidOutputError,
     PortValueTypeError,
@@ -17,6 +18,16 @@ from .errors import (
 )
 from .events import Context, Event
 from .graph import Edge, Graph
+from .hooks import (
+    HookHandle,
+    HookPhase,
+    HookRegistry,
+    HookSignal,
+    NodeCall,
+    NodeHook,
+    ShortCircuit,
+    StopGraph,
+)
 from .runtime import Runtime
 
 # 兼容旧版本的直接导入；不再通过 __all__ 推荐这个易混淆名称。
@@ -35,14 +46,23 @@ __all__ = [
     "GraphError",
     "GraphFrozenError",
     "GraphValidationError",
+    "HookExecutionError",
+    "HookHandle",
+    "HookPhase",
+    "HookRegistry",
+    "HookSignal",
     "IncompleteInputsError",
     "InputPolicy",
     "InvalidOutputError",
     "Node",
+    "NodeCall",
+    "NodeHook",
     "Output",
     "PortValueTypeError",
     "Ports",
     "Runtime",
     "RuntimeClosedError",
+    "ShortCircuit",
+    "StopGraph",
     "UnknownGraphError",
 ]

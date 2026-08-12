@@ -46,3 +46,68 @@ Runtime 不依赖默认内存实现的私有字段。
 
 不要仅因后端名为 Redis 或 MQ 就暗示这些能力已经存在。领域 ID、去重和外部副作用的幂等性仍应由领域模型
 显式实现。
+
+## 动态 Node Hook
+
+Graph 注册后保持冻结，但默认 `Engine` 允许使用者给后续 Graph execution 动态挂载 Hook：
+
+```python
+from bricks import Output
+from bricks.engine import NodeCall, NodeHook, ShortCircuit
+
+
+class RequestCache(NodeHook):
+    async def enter(self, call: NodeCall) -> NodeCall:
+        response = await cache.get(call.inputs["request"])
+        if response is not None:
+            raise ShortCircuit(Output(response, "response"))
+        return call
+
+    async def exit(self, call, outputs):
+        await cache.put(call.inputs["request"], outputs[0].value)
+        return outputs
+
+
+handle = runtime.attach(
+    RequestCache(),
+    graph="crawl.graph",
+    node="request",
+)
+handle.detach()
+```
+
+`enter()` 转换 Node 输入，`exit()` 转换结果，`error()` 可以返回结果来恢复普通异常。三者都可以是同步或异步方法；
+Engine 把 awaitable 提交给常驻后台 event loop，并在执行 Graph 的 worker 中等待结果。Hook 无需、也不能手动推进
+Node 执行：`enter()` 正常返回后 Engine 默认执行 Node。
+
+单阶段转换不需要定义 class：
+
+```python
+def normalize(call, outputs):
+    return tuple(Output(clean(item.value), item.port) for item in outputs)
+
+
+handle = runtime.attach(
+    normalize,
+    phase="exit",
+    graph="crawl.graph",
+    node="parse",
+)
+```
+
+`phase` 可以是 `"enter"`、`"exit"` 或 `"error"`，省略时函数作为 `enter` Hook。注册范围可以是全部 Graph、
+指定 Graph，或者指定 Graph 内的 Node；Node 范围必须同时给出 Graph 名。
+
+Hook 通过两个信号显式改变流程：
+
+- `ShortCircuit(*outputs)` 只能从 `enter()` 发出。它跳过当前 Node，把 outputs 当作该 Node 的结果，经过
+  当前 Node 的 output port/type 校验后继续走既有 Edge。
+- `StopGraph(*outputs)` 可以从任意 Hook 阶段发出。它立即停止整个 Graph，并直接返回携带的终端 outputs；
+  当前 Graph 没有 graph-level output schema，因此只校验它们是 `Output`。
+
+Hook 按注册顺序进入、逆序退出。短路后，已经进入的 Hook 仍会执行 `exit()`；终止 Graph 则不会继续执行剩余
+生命周期。每次 Graph execution 在开始时固定 Hook 快照，所以 `attach()`/`detach()` 不会改变已经在途的执行，
+但会作用于下一次执行。`detach()` 是幂等的，也不会等待旧快照结束。
+
+Hook 最终产生的结果仍受 Graph 契约约束：除 `StopGraph` 的整图终端结果外，Hook 不能产生未声明的 output port
+或错误类型，也不能替换 Graph、Node、Context，或增删 Node input port。

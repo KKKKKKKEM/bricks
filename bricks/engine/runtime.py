@@ -28,6 +28,7 @@ from .errors import (
 from .events import Event
 from .executor import Engine
 from .graph import Graph
+from .hooks import HookHandle, HookPhase, NodeHook
 
 EventHandler = Callable[[Event], None]
 
@@ -166,6 +167,35 @@ class Runtime:
         self._ensure_open()
         registered = self._get_graph(graph)
         return self._executor.execute(graph, registered, inputs, self._publish)
+
+    def attach(
+        self,
+        hook: NodeHook | Callable[..., object],
+        *,
+        phase: HookPhase | str | None = None,
+        graph: str | None = None,
+        node: str | None = None,
+    ) -> HookHandle:
+        """动态挂载 Node Hook；变更从下一次 Graph execution 生效。"""
+
+        self._ensure_open()
+        if graph is not None:
+            graph = require_non_empty_string(graph, "hook graph")
+            registered = self._get_graph(graph)
+            if node is not None:
+                node = require_non_empty_string(node, "hook node")
+                if node not in registered.nodes:
+                    raise ValueError(
+                        f"graph {graph!r} has no node {node!r}"
+                    )
+        if not isinstance(self._executor, Engine):
+            raise TypeError("the configured GraphExecutor does not support hooks")
+        return self._executor.hooks.attach(
+            hook,
+            phase=phase,
+            graph=graph,
+            node=node,
+        )
 
     async def arun(self, graph: str, inputs: Any = None) -> tuple[Output, ...]:
         """在线程中直接执行 Graph，避免阻塞异步调用方。"""

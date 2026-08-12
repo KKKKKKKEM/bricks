@@ -6,6 +6,7 @@ Bricks 只区分两种流动：Graph 内的值流动，以及 Graph 间的事件
 | --- | --- | --- |
 | 单张 Graph | `Output`、`Edge` | 把一个 Node 的值交给下游 Node |
 | 多张 Graph | `Event`、`Context.emit()`、`Runtime.route()` | 发布领域事实并异步启动工作 |
+| 动态执行扩展 | `Runtime.attach()`、`NodeHook` | 不修改冻结 Graph，转换 Node 输入、结果和流程 |
 
 ## Ports 与 Node
 
