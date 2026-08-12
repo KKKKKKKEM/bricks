@@ -1,91 +1,89 @@
-"""Engine 核心抽象抛出的公共异常。"""
+"""Bricks 精简内核的公共错误。"""
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-
 
 class BricksError(Exception):
-    """所有 Bricks 公共异常的基类。"""
+    """所有 Bricks 公共错误的基类。"""
 
 
 class GraphError(BricksError):
-    """Graph 定义和查询异常的基类。"""
-
-
-class GraphDefinitionError(GraphError):
-    """Graph 构建过程中定义不合法。"""
+    """Graph 定义、冻结或引用不合法。"""
 
 
 class GraphFrozenError(GraphError):
     """调用方尝试修改已经冻结的 Graph。"""
 
-    def __init__(self, graph_name: str) -> None:
-        """创建 Graph 冻结异常。
-
-        参数：
-            graph_name: 被修改的 Graph 名称。
-        """
-
-        super().__init__(f"graph {graph_name!r} is frozen")
-        self.graph_name = graph_name
-
 
 class GraphValidationError(GraphError):
-    """Graph 因定义不合法而无法冻结。"""
-
-    def __init__(self, issues: Iterable[str]) -> None:
-        """创建包含全部校验问题的异常。
-
-        参数：
-            issues: 本次 Graph 校验发现的问题描述。
-        """
-
-        self.issues = tuple(issues)
-        detail = "\n".join(f"- {issue}" for issue in self.issues)
-        super().__init__(f"graph validation failed:\n{detail}")
+    """Graph 在冻结时未满足静态约束。"""
 
 
-class UnknownNodeError(GraphError):
-    """Graph 中不存在指定 Node ID。"""
-
-    def __init__(self, node_id: str) -> None:
-        """创建未知 Node 异常。
-
-        参数：
-            node_id: 查询失败的 Node ID。
-        """
-
-        super().__init__(f"unknown node {node_id!r}")
-        self.node_id = node_id
+class BricksRuntimeError(BricksError):
+    """Runtime 注册、路由或生命周期操作失败。"""
 
 
-class UnknownFlowError(GraphError):
-    """Graph 中不存在指定 Flow。"""
+class UnknownGraphError(BricksRuntimeError):
+    """Runtime 中不存在指定的 Graph 注册名。"""
 
-    def __init__(self, flow_name: str) -> None:
-        """创建未知 Flow 异常。
+
+class ExecutionError(BricksRuntimeError):
+    """一次 Graph 或 Node 执行失败。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        graph: str | None = None,
+        node: str | None = None,
+        event: object | None = None,
+    ) -> None:
+        """保存失败位置和可选触发事件。
 
         参数：
-            flow_name: 查询失败的 Flow 名称。
+            message: 面向调用方的错误说明。
+            graph: 失败的 Graph 注册名或定义名。
+            node: 失败的 Node ID。
+            event: 触发跨图执行的领域事件。
         """
 
-        super().__init__(f"unknown flow {flow_name!r}")
-        self.flow_name = flow_name
+        super().__init__(message)
+        self.graph = graph
+        self.node = node
+        self.event = event
 
 
-class InvalidOutputError(BricksError, TypeError):
-    """NodeResult 产生了非 Output 值。"""
+class IncompleteInputsError(ExecutionError):
+    """Graph 静止时仍存在无法满足输入策略的数据。"""
 
-    def __init__(self, value: object) -> None:
-        """创建非法节点输出异常。
+
+class InvalidOutputError(ExecutionError, TypeError):
+    """Node 返回了不符合输出协议的值。"""
+
+
+class PortValueTypeError(ExecutionError, TypeError):
+    """实际端口值不满足 Ports 声明的类型。"""
+
+
+class EventDispatchError(BricksRuntimeError):
+    """事件订阅者或目标 Graph 执行失败。"""
+
+    def __init__(self, event: object, cause: BaseException) -> None:
+        """保存投递失败的事件与原始异常。
 
         参数：
-            value: NodeResult 实际产生的非法值。
+            event: 投递失败的领域事件。
+            cause: handler 或目标 Graph 抛出的原始异常。
         """
 
-        super().__init__(
-            "NodeResult must produce Output instances, "
-            f"got {type(value).__name__}"
-        )
-        self.value = value
+        super().__init__(f"failed to dispatch event: {cause}")
+        self.event = event
+        self.cause = cause
+
+
+class RuntimeClosedError(BricksRuntimeError):
+    """调用方在 Runtime 关闭后继续提交工作。"""
+
+
+# 兼容旧版本导入；新代码应使用 BricksRuntimeError。
+RuntimeError = BricksRuntimeError

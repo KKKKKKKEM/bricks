@@ -1,51 +1,48 @@
-"""领域无关的图执行基础抽象。"""
+"""Bricks 的精简 typed Graph、领域事件与 Runtime API。"""
 
-from .context import ExecutionContext
+from .core import AsyncNode, InputPolicy, Node, Output, Ports
 from .errors import (
     BricksError,
-    GraphDefinitionError,
+    BricksRuntimeError,
+    EventDispatchError,
+    ExecutionError,
     GraphError,
     GraphFrozenError,
     GraphValidationError,
+    IncompleteInputsError,
     InvalidOutputError,
-    UnknownFlowError,
-    UnknownNodeError,
+    PortValueTypeError,
+    RuntimeClosedError,
+    UnknownGraphError,
 )
-from .graph import Edge, Endpoint, Flow, Graph
-from .inputs import (
-    InputAvailability,
-    InputGroup,
-    InputPolicy,
-    InputSelection,
-    InputToken,
-    NodeInputs,
-)
-from .node import Node, NodeResult, Output
-from .ports import Ports, is_type_compatible
+from .events import Context, Event
+from .graph import Edge, Graph
+from .runtime import Runtime
+
+# 兼容旧版本的直接导入；不再通过 __all__ 推荐这个易混淆名称。
+RuntimeError = BricksRuntimeError
 
 __all__ = [
+    "AsyncNode",
     "BricksError",
+    "BricksRuntimeError",
+    "Context",
     "Edge",
-    "Endpoint",
-    "ExecutionContext",
-    "Flow",
+    "Event",
+    "EventDispatchError",
+    "ExecutionError",
     "Graph",
-    "GraphDefinitionError",
     "GraphError",
     "GraphFrozenError",
     "GraphValidationError",
-    "InputAvailability",
-    "InputGroup",
+    "IncompleteInputsError",
     "InputPolicy",
-    "InputSelection",
-    "InputToken",
     "InvalidOutputError",
     "Node",
-    "NodeInputs",
-    "NodeResult",
     "Output",
+    "PortValueTypeError",
     "Ports",
-    "UnknownFlowError",
-    "UnknownNodeError",
-    "is_type_compatible",
+    "Runtime",
+    "RuntimeClosedError",
+    "UnknownGraphError",
 ]

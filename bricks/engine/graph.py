@@ -1,28 +1,26 @@
-"""静态 Graph 拓扑和 Flow 定义。"""
+"""可冻结的 typed Graph 定义。"""
 
 from __future__ import annotations
 
 from collections import defaultdict, deque
 from collections.abc import Mapping
 from dataclasses import dataclass
+from inspect import iscoroutinefunction
 from types import MappingProxyType
 
-from ._validation import require_non_empty_string
-from .errors import (
-    GraphDefinitionError,
-    GraphFrozenError,
-    GraphValidationError,
-    UnknownFlowError,
-    UnknownNodeError,
+from .core import (
+    AsyncNode,
+    InputPolicy,
+    Node,
+    Ports,
+    require_non_empty_string,
 )
-from .inputs import InputPolicy
-from .node import Node
-from .ports import Ports, is_type_compatible
+from .errors import GraphError, GraphFrozenError, GraphValidationError
 
 
 @dataclass(frozen=True, slots=True)
 class Edge:
-    """从源 Node 端口到目标 Node 的静态连接。"""
+    """连接源 Node output port 和目标 Node input port。"""
 
     source: str
     target: str
@@ -30,12 +28,7 @@ class Edge:
     target_port: str = "default"
 
     def __post_init__(self) -> None:
-        """校验 Edge 的节点 ID 和端口。
-
-        异常：
-            TypeError: 任一字段不是字符串。
-            ValueError: 任一字段为空。
-        """
+        """校验节点 ID 和端口名称。"""
 
         require_non_empty_string(self.source, "edge source")
         require_non_empty_string(self.target, "edge target")
@@ -44,82 +37,47 @@ class Edge:
 
 
 @dataclass(frozen=True, slots=True)
-class Endpoint:
-    """Flow 用于返回结果的 Node 端口。"""
+class NodeSpec:
+    """Graph 冻结时保存的单个 Node 执行元数据。"""
 
-    node_id: str
-    port: str = "default"
-
-    def __post_init__(self) -> None:
-        """校验 Endpoint 的 Node ID 和端口。
-
-        异常：
-            TypeError: 任一字段不是字符串。
-            ValueError: 任一字段为空。
-        """
-
-        require_non_empty_string(self.node_id, "endpoint node_id")
-        require_non_empty_string(self.port, "endpoint port")
-
-
-@dataclass(frozen=True, slots=True)
-class Flow:
-    """Graph 对外提供的一项执行能力。"""
-
-    name: str
-    entrypoint: str
-    endpoints: frozenset[Endpoint]
-
-    def __post_init__(self) -> None:
-        """校验 Flow 身份、入口和终止端点。
-
-        异常：
-            TypeError: 名称或入口不是字符串，或 endpoints 包含非法类型。
-            ValueError: 名称、入口或 endpoints 为空。
-        """
-
-        require_non_empty_string(self.name, "flow name")
-        require_non_empty_string(self.entrypoint, "flow entrypoint")
-
-        endpoints = frozenset(self.endpoints)
-        if not endpoints:
-            raise ValueError("flow endpoints must not be empty")
-        if not all(isinstance(endpoint, Endpoint) for endpoint in endpoints):
-            raise TypeError("flow endpoints must contain only Endpoint instances")
-        object.__setattr__(self, "endpoints", endpoints)
+    input_ports: Ports
+    output_ports: Ports
+    input_policy: InputPolicy
 
 
 class Graph:
-    """构建完成后可以冻结的 Graph 定义。"""
+    """描述一次有限局部数据流的静态有向无环图。"""
 
-    __slots__ = (
-        "_edge_set",
-        "_edges",
-        "_flows",
-        "_frozen",
-        "_nodes",
-        "_outgoing",
-        "name",
-    )
-
-    def __init__(self, name: str) -> None:
-        """创建一个处于构建状态的空 Graph。
+    def __init__(self, *, entrypoint: str | None = None) -> None:
+        """创建处于构建状态的空 Graph。
 
         参数：
-            name: Graph 的稳定名称。
-
-        异常：
-            TypeError: name 不是字符串。
-            ValueError: name 为空。
+            entrypoint: 可选的入口 Node ID，也可稍后用 entry() 设置。
         """
 
-        self.name = require_non_empty_string(name, "graph name")
+        self._entrypoint = (
+            None
+            if entrypoint is None
+            else require_non_empty_string(entrypoint, "graph entrypoint")
+        )
         self._nodes: dict[str, Node] = {}
         self._edges: list[Edge] = []
         self._edge_set: set[Edge] = set()
-        self._flows: dict[str, Flow] = {}
-        self._outgoing: dict[tuple[str, str], list[Edge]] = defaultdict(list)
+        self._outgoing: dict[tuple[str, str], tuple[Edge, ...]] = {}
+        self._node_specs: dict[str, NodeSpec] = {}
         self._frozen = False
+
+    @property
+    def entrypoint(self) -> str:
+        """返回入口 Node ID。
+
+        异常：
+            GraphError: Graph 尚未设置入口。
+        """
+
+        if self._entrypoint is None:
+            raise GraphError("graph has no entrypoint")
+        return self._entrypoint
 
     @property
     def frozen(self) -> bool:
@@ -129,45 +87,47 @@ class Graph:
 
     @property
     def nodes(self) -> Mapping[str, Node]:
-        """返回只读的 Node ID 到 Node 映射。"""
+        """返回只读的 Node binding。"""
 
         return MappingProxyType(self._nodes)
 
     @property
     def edges(self) -> tuple[Edge, ...]:
-        """返回按定义顺序排列的全部 Edge。"""
+        """返回按定义顺序排列的 Edge。"""
 
         return tuple(self._edges)
 
-    @property
-    def flows(self) -> Mapping[str, Flow]:
-        """返回只读的 Flow 名称到 Flow 映射。"""
-
-        return MappingProxyType(self._flows)
-
-    def add_node(self, node_id: str, node: Node) -> Graph:
-        """把 Node 行为绑定到 Graph 中的一个位置。
+    def entry(self, node_id: str) -> Graph:
+        """设置当前 Graph 的唯一入口。
 
         参数：
-            node_id: Node 在当前 Graph 中的唯一 ID。
-            node: 需要绑定的 Node 行为对象。
+            node_id: 作为入口的 Node ID。
 
         返回：
             当前 Graph，便于链式构建。
+        """
 
-        异常：
-            GraphFrozenError: Graph 已经冻结。
-            GraphDefinitionError: node_id 已经存在。
-            TypeError: node_id 或 node 类型不合法。
-            ValueError: node_id 为空。
+        self._ensure_mutable()
+        self._entrypoint = require_non_empty_string(node_id, "graph entrypoint")
+        return self
+
+    def add(self, node_id: str, node: Node) -> Graph:
+        """把 Node 行为绑定到 Graph 中的一个位置。
+
+        参数：
+            node_id: 当前 Graph 内唯一的 Node ID。
+            node: 可复用 Node 行为。
+
+        返回：
+            当前 Graph，便于链式构建。
         """
 
         self._ensure_mutable()
         node_id = require_non_empty_string(node_id, "node_id")
         if not isinstance(node, Node):
-            raise TypeError("node must be a Node instance")
+            raise TypeError("node must be a Node")
         if node_id in self._nodes:
-            raise GraphDefinitionError(f"duplicate node {node_id!r}")
+            raise GraphError(f"duplicate node {node_id!r}")
         self._nodes[node_id] = node
         return self
 
@@ -179,349 +139,221 @@ class Graph:
         source_port: str = "default",
         target_port: str = "default",
     ) -> Graph:
-        """连接一个源 Node 端口和目标 Node。
+        """增加一条端口到端口的有向连接。
 
         参数：
             source: 源 Node ID。
             target: 目标 Node ID。
-            source_port: Output 离开源 Node 时使用的端口。
-            target_port: 目标 Node 接收 value 的 input port。
+            source_port: 源 output port。
+            target_port: 目标 input port。
 
         返回：
             当前 Graph，便于链式构建。
-
-        异常：
-            GraphFrozenError: Graph 已经冻结。
-            GraphDefinitionError: 相同 Edge 已经存在。
-            TypeError: 任一参数类型不合法。
-            ValueError: 任一字符串参数为空。
-
-        说明：
-            source 和 target 是否存在统一在 freeze() 时检查，因此可以先连边再加节点。
         """
 
         self._ensure_mutable()
-        edge = Edge(
-            source=source,
-            target=target,
-            source_port=source_port,
-            target_port=target_port,
-        )
+        edge = Edge(source, target, source_port, target_port)
         if edge in self._edge_set:
-            raise GraphDefinitionError(
-                "duplicate edge "
-                f"({edge.source!r}, {edge.source_port!r}, "
-                f"{edge.target!r}, {edge.target_port!r})"
-            )
-
+            raise GraphError(f"duplicate edge {edge!r}")
         self._edges.append(edge)
         self._edge_set.add(edge)
-        self._outgoing[(edge.source, edge.source_port)].append(edge)
-        return self
-
-    def add_flow(self, flow: Flow) -> Graph:
-        """向 Graph 注册一项公开 Flow。
-
-        参数：
-            flow: 包含名称、入口和终止端点的 Flow。
-
-        返回：
-            当前 Graph，便于链式构建。
-
-        异常：
-            GraphFrozenError: Graph 已经冻结。
-            GraphDefinitionError: 同名 Flow 已经存在。
-            TypeError: flow 不是 Flow 实例。
-        """
-
-        self._ensure_mutable()
-        if not isinstance(flow, Flow):
-            raise TypeError("flow must be a Flow instance")
-        if flow.name in self._flows:
-            raise GraphDefinitionError(f"duplicate flow {flow.name!r}")
-        self._flows[flow.name] = flow
         return self
 
     def freeze(self) -> Graph:
         """校验并冻结 Graph。
 
         返回：
-            已冻结的当前 Graph；重复调用仍返回自身。
+            已冻结的当前 Graph。
 
         异常：
-            GraphValidationError: Graph 引用、入口或可达性不合法。
+            GraphValidationError: 节点、端口、策略、连接或可达性不合法。
         """
 
         if self._frozen:
             return self
-
-        issues = self._validation_issues()
-        if issues:
-            raise GraphValidationError(issues)
-
+        self._validate_structure()
+        outgoing: dict[tuple[str, str], list[Edge]] = defaultdict(list)
+        for edge in self._edges:
+            outgoing[(edge.source, edge.source_port)].append(edge)
+        self._outgoing = {
+            key: tuple(edges) for key, edges in outgoing.items()
+        }
         self._frozen = True
         return self
 
-    def node(self, node_id: str) -> Node:
-        """根据 Node ID 查询行为对象。
+    def _spec_for(self, node_id: str) -> NodeSpec:
+        """返回冻结后的 Node 执行元数据。"""
 
-        参数：
-            node_id: 需要查询的 Node ID。
+        self._ensure_frozen()
+        return self._node_specs[node_id]
 
-        返回：
-            绑定在该位置的 Node。
-
-        异常：
-            UnknownNodeError: Graph 中不存在 node_id。
-        """
-
-        try:
-            return self._nodes[node_id]
-        except KeyError:
-            raise UnknownNodeError(node_id) from None
-
-    def flow(self, flow_name: str) -> Flow:
-        """根据名称查询 Flow。
-
-        参数：
-            flow_name: 需要查询的 Flow 名称。
-
-        返回：
-            对应的 Flow。
-
-        异常：
-            UnknownFlowError: Graph 中不存在 flow_name。
-        """
-
-        try:
-            return self._flows[flow_name]
-        except KeyError:
-            raise UnknownFlowError(flow_name) from None
-
-    def outgoing(
-        self,
-        node_id: str,
-        source_port: str = "default",
-    ) -> tuple[Edge, ...]:
-        """查询一个 Node 端口连接的全部 Edge。
+    def _outgoing_for(self, node_id: str, port: str) -> tuple[Edge, ...]:
+        """返回指定 output port 的有序下游连接。
 
         参数：
             node_id: 源 Node ID。
-            source_port: 需要查询的输出端口。
+            port: 源 output port。
 
         返回：
-            按定义顺序排列的匹配 Edge。
-
-        异常：
-            UnknownNodeError: Graph 中不存在 node_id。
-            TypeError: source_port 不是字符串。
-            ValueError: source_port 为空。
+            按定义顺序排列的 Edge。
         """
 
-        if node_id not in self._nodes:
-            raise UnknownNodeError(node_id)
-        require_non_empty_string(source_port, "output port")
-        return tuple(self._outgoing.get((node_id, source_port), ()))
+        self._ensure_frozen()
+        return self._outgoing.get((node_id, port), ())
 
-    def is_endpoint(
-        self,
-        flow_name: str,
-        node_id: str,
-        port: str = "default",
-    ) -> bool:
-        """判断一个 Node 端口是否是指定 Flow 的终止端点。
-
-        参数：
-            flow_name: 需要判断的 Flow 名称。
-            node_id: 当前 Node ID。
-            port: 当前 Output 使用的端口。
-
-        返回：
-            匹配 Flow Endpoint 时返回 True，否则返回 False。
-
-        异常：
-            UnknownFlowError: Graph 中不存在 flow_name。
-            TypeError: Endpoint 参数类型不合法。
-            ValueError: Endpoint 参数为空。
-        """
-
-        return Endpoint(node_id=node_id, port=port) in self.flow(flow_name).endpoints
-
-    def _ensure_mutable(self) -> None:
-        """确保 Graph 仍处于可构建状态。
-
-        异常：
-            GraphFrozenError: Graph 已经冻结。
-        """
-
-        if self._frozen:
-            raise GraphFrozenError(self.name)
-
-    def _validation_issues(self) -> list[str]:
-        """收集当前 Graph 的全部静态校验问题。
-
-        返回：
-            可直接展示给调用方的问题描述列表。
-        """
-
-        issues: list[str] = []
+    def _validate_structure(self) -> None:
+        """执行冻结前的完整静态校验。"""
 
         if not self._nodes:
-            issues.append("graph must contain at least one node")
-        if not self._flows:
-            issues.append("graph must contain at least one flow")
+            raise GraphValidationError("graph must contain at least one node")
+        if self._entrypoint not in self._nodes:
+            raise GraphValidationError("graph entrypoint must reference a node")
 
-        for edge in self._edges:
-            if edge.source not in self._nodes:
-                issues.append(
-                    f"edge source {edge.source!r} is not a registered node"
-                )
-            if edge.target not in self._nodes:
-                issues.append(
-                    f"edge target {edge.target!r} is not a registered node"
-                )
-
-            source = self._nodes.get(edge.source)
-            target = self._nodes.get(edge.target)
-            source_ports = self._ports_for(source, "output", edge.source, issues)
-            target_ports = self._ports_for(target, "input", edge.target, issues)
-            if source_ports is not None and edge.source_port not in source_ports:
-                issues.append(
-                    f"edge source port {edge.source}.{edge.source_port} "
-                    "is not declared"
-                )
-            if target_ports is not None and edge.target_port not in target_ports:
-                issues.append(
-                    f"edge target port {edge.target}.{edge.target_port} "
-                    "is not declared"
-                )
-            if (
-                source_ports is not None
-                and target_ports is not None
-                and edge.source_port in source_ports
-                and edge.target_port in target_ports
-                and not is_type_compatible(
-                    source_ports[edge.source_port],
-                    target_ports[edge.target_port],
-                )
-            ):
-                issues.append(
-                    f"edge {edge.source}.{edge.source_port} produces "
-                    f"{source_ports[edge.source_port].__name__}, but "
-                    f"{edge.target}.{edge.target_port} requires "
-                    f"{target_ports[edge.target_port].__name__}"
-                )
-
+        specs: dict[str, NodeSpec] = {}
         for node_id, node in self._nodes.items():
-            input_ports = self._ports_for(node, "input", node_id, issues)
-            self._ports_for(node, "output", node_id, issues)
-            policy = getattr(node, "input_policy", None)
+            inputs = node.input_ports
+            outputs = node.output_ports
+            policy = node.input_policy
+            if not isinstance(inputs, Ports) or not isinstance(outputs, Ports):
+                raise GraphValidationError(
+                    f"node {node_id!r} ports must be Ports"
+                )
             if not isinstance(policy, InputPolicy):
-                issues.append(
+                raise GraphValidationError(
                     f"node {node_id!r} input_policy must be InputPolicy"
                 )
-            elif input_ports is not None:
-                try:
-                    policy.groups_for(input_ports)
-                except ValueError as error:
-                    issues.append(
-                        f"node {node_id!r} has invalid input policy: {error}"
-                    )
+            self._validate_execute_style(node_id, node)
+            self._validate_policy(node_id, inputs, policy)
+            specs[node_id] = NodeSpec(inputs, outputs, policy)
 
-        for flow in self._flows.values():
-            if flow.entrypoint not in self._nodes:
-                issues.append(
-                    f"flow {flow.name!r} entrypoint "
-                    f"{flow.entrypoint!r} is not a registered node"
+        adjacency: dict[str, set[str]] = defaultdict(set)
+        for edge in self._edges:
+            if edge.source not in self._nodes or edge.target not in self._nodes:
+                raise GraphValidationError(f"edge references unknown node: {edge!r}")
+            source_ports = specs[edge.source].output_ports
+            target_ports = specs[edge.target].input_ports
+            if edge.source_port not in source_ports:
+                raise GraphValidationError(
+                    f"node {edge.source!r} has no output port {edge.source_port!r}"
                 )
+            if edge.target_port not in target_ports:
+                raise GraphValidationError(
+                    f"node {edge.target!r} has no input port {edge.target_port!r}"
+                )
+            if not Ports.is_type_compatible(
+                source_ports[edge.source_port], target_ports[edge.target_port]
+            ):
+                raise GraphValidationError(
+                    f"incompatible edge {edge.source}.{edge.source_port} -> "
+                    f"{edge.target}.{edge.target_port}"
+                )
+            adjacency[edge.source].add(edge.target)
 
-            for endpoint in flow.endpoints:
-                if endpoint.node_id not in self._nodes:
-                    issues.append(
-                        f"flow {flow.name!r} endpoint node "
-                        f"{endpoint.node_id!r} is not registered"
-                    )
-                else:
-                    output_ports = self._ports_for(
-                        self._nodes[endpoint.node_id],
-                        "output",
-                        endpoint.node_id,
-                        issues,
-                    )
-                    if (
-                        output_ports is not None
-                        and endpoint.port not in output_ports
-                    ):
-                        issues.append(
-                            f"flow {flow.name!r} endpoint port "
-                            f"{endpoint.node_id}.{endpoint.port} "
-                            "is not declared"
-                        )
-
-            if flow.entrypoint in self._nodes:
-                reachable = self._reachable_nodes(flow.entrypoint)
-                if not any(
-                    endpoint.node_id in reachable
-                    for endpoint in flow.endpoints
-                ):
-                    issues.append(
-                        f"flow {flow.name!r} cannot reach any endpoint "
-                        f"from {flow.entrypoint!r}"
-                    )
-
-        return list(dict.fromkeys(issues))
+        self._validate_acyclic(adjacency)
+        reachable = self._reachable(adjacency)
+        unreachable = set(self._nodes) - reachable
+        if unreachable:
+            raise GraphValidationError(
+                f"nodes are unreachable from entrypoint: {sorted(unreachable)!r}"
+            )
+        self._node_specs = specs
 
     @staticmethod
-    def _ports_for(
-        node: Node | None,
-        direction: str,
-        node_id: str,
-        issues: list[str],
-    ) -> Ports | None:
-        """读取并校验 Node 的端口声明。
+    def _validate_execute_style(node_id: str, node: Node) -> None:
+        """保证 Node 类型与 execute 的同步风格一致。
 
         参数：
-            node: 需要读取声明的 Node；未知 Node 时为 None。
-            direction: 需要读取的 input 或 output 方向。
-            node_id: Node 在 Graph 中的 ID。
-            issues: 用于追加问题描述的校验结果列表。
-
-        返回：
-            声明合法时返回 Ports，否则返回 None。
+            node_id: 用于错误定位的 Node ID。
+            node: 等待校验的 Node。
         """
 
-        if node is None:
-            return None
-        ports = getattr(node, f"{direction}_ports", None)
-        if not isinstance(ports, Ports):
-            issues.append(
-                f"node {node_id!r} {direction}_ports must be Ports"
+        execute = type(node).execute
+        asynchronous = iscoroutinefunction(execute)
+        if isinstance(node, AsyncNode) != asynchronous:
+            expected = "async" if isinstance(node, AsyncNode) else "sync"
+            raise GraphValidationError(
+                f"node {node_id!r} must implement {expected} execute()"
             )
-            return None
-        return ports
 
-    def _reachable_nodes(self, entrypoint: str) -> set[str]:
-        """计算从入口出发可以到达的 Node ID。
+    @staticmethod
+    def _validate_policy(
+        node_id: str,
+        ports: Ports,
+        policy: InputPolicy,
+    ) -> None:
+        """校验策略和声明端口是否匹配。
 
         参数：
-            entrypoint: 广度优先遍历使用的起始 Node ID。
-
-        返回：
-            包含 entrypoint 自身的可达 Node ID 集合。
+            node_id: 用于错误定位的 Node ID。
+            ports: Node 的 input ports。
+            policy: Node 的输入策略。
         """
 
-        reachable: set[str] = set()
-        pending = deque([entrypoint])
-        adjacency: dict[str, list[str]] = defaultdict(list)
-        for edge in self._edges:
-            if edge.source in self._nodes and edge.target in self._nodes:
-                adjacency[edge.source].append(edge.target)
+        declared = tuple(ports)
+        if policy is InputPolicy.ON_START:
+            if declared:
+                raise GraphValidationError(
+                    f"node {node_id!r} on_start policy requires zero inputs"
+                )
+            return
+        if not declared:
+            raise GraphValidationError(
+                f"zero-input node {node_id!r} must use InputPolicy.ON_START"
+            )
 
+    def _validate_acyclic(self, adjacency: Mapping[str, set[str]]) -> None:
+        """拒绝图内环；动态循环应通过跨图事件表达。
+
+        参数：
+            adjacency: Node ID 到直接下游的邻接表。
+        """
+
+        indegree = {node_id: 0 for node_id in self._nodes}
+        for targets in adjacency.values():
+            for target in targets:
+                indegree[target] += 1
+        ready = deque(node for node, degree in indegree.items() if degree == 0)
+        visited = 0
+        while ready:
+            source = ready.popleft()
+            visited += 1
+            for target in adjacency.get(source, set()):
+                indegree[target] -= 1
+                if indegree[target] == 0:
+                    ready.append(target)
+        if visited != len(self._nodes):
+            raise GraphValidationError(
+                "graph must be acyclic; use events to express repeated work"
+            )
+
+    def _reachable(self, adjacency: Mapping[str, set[str]]) -> set[str]:
+        """计算从入口可达的 Node。
+
+        参数：
+            adjacency: Node ID 到直接下游的邻接表。
+
+        返回：
+            包含入口的可达 Node ID 集合。
+        """
+
+        reached: set[str] = set()
+        pending = [self.entrypoint]
         while pending:
-            node_id = pending.popleft()
-            if node_id in reachable:
+            node_id = pending.pop()
+            if node_id in reached:
                 continue
-            reachable.add(node_id)
-            pending.extend(adjacency[node_id])
+            reached.add(node_id)
+            pending.extend(adjacency.get(node_id, set()))
+        return reached
 
-        return reachable
+    def _ensure_mutable(self) -> None:
+        """拒绝冻结后的修改。"""
+
+        if self._frozen:
+            raise GraphFrozenError("graph is frozen")
+
+    def _ensure_frozen(self) -> None:
+        """拒绝在冻结前读取执行快照。"""
+
+        if not self._frozen:
+            raise GraphError("graph is not frozen")

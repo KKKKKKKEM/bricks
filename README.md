@@ -1,97 +1,55 @@
 # Bricks
 
-Bricks 正在重新构建为一个领域无关的 Python 图执行引擎。
-
-它以少量、稳定的执行原语为核心，让 Agent、ETL、Spider 等领域框架通过继承、组合和插件建立在
-Engine 之上，而不把任何领域策略写入内核。
+Bricks 是一个 Python typed graph runtime：Graph 内以 `Output` 和 `Edge` 传递局部数据，Graph 间以
+`Event` 和 `Runtime` 连接领域工作流。
 
 ```text
-RunRequest
-    ↓
-Flow(entrypoint, endpoints)
-    ↓
-Graph(typed Node ports, Edge)
-    ↓
-InputPolicy → NodeInputs → NodeResult → Output
+Node -- Output / Edge --> Node
+Graph -- Event / Runtime --> Graph
 ```
 
-## 当前状态
+顶层 API 只有十个概念：`Ports`、`Node`、`AsyncNode`、`InputPolicy`、`Output`、`Edge`、`Graph`、
+`Event`、`Context` 与 `Runtime`。
 
-项目处于 1.0 重构早期阶段。当前已经完成 typed dataflow 抽象：
-
-- `Ports`：不可变的 `port -> Python type` 声明。
-- `Node`：声明 typed input/output ports、输入策略和执行行为。
-- `NodeInputs`：一次执行实际消费的只读输入。
-- `InputPolicy`：用组内 AND、组间 OR 统一表达 all、any 和 required inputs。
-- `Output`：带 port 的图内输出。
-- `NodeResult`：零到多个、支持异步渐进产生的 Output。
-- `Edge`：连接上游 output port 和下游 input port。
-- `Flow`：同一 Graph 上的一项执行能力，声明入口和终止 Endpoint。
-- `Graph`：构建后冻结的拓扑，以及严格的引用和可达性校验。
-- `ExecutionContext`：传给 Node 的只读运行身份和元数据。
-
-`InputBuffer`、`Run`、`Task` 和 `Engine` 执行循环尚未实现。当前代码用于先稳定抽象契约，不提供旧版
-`GraphBuilder` 或 `Machine` API。
-
-## 抽象示例
+## 最小示例
 
 ```python
-from bricks.engine import (
-    Endpoint,
-    Flow,
-    Graph,
-    Node,
-    NodeInputs,
-    NodeResult,
-    Ports,
-)
+from bricks import Graph, Node, Output, Ports, Runtime
 
 
-class TransformNode(Node):
-    input_ports = Ports(source=str)
+class Upper(Node):
+    input_ports = Ports(text=str)
     output_ports = Ports(result=str)
 
-    async def execute(self, inputs: NodeInputs, context):
-        """原样返回输入，演示最小 Node 实现。
-
-        参数：
-            inputs: 本次执行消费的 source 输入。
-            context: 当前执行的只读上下文。
-
-        返回：
-            从 result 端口产生的节点结果。
-        """
-
-        return NodeResult.one(inputs["source"], port="result")
+    def execute(self, inputs, context):
+        del context
+        return Output(inputs["text"].upper(), "result")
 
 
-transform = TransformNode()
+graph = Graph(entrypoint="upper").add("upper", Upper())
 
-graph = Graph("etl")
-graph.add_node("transform", transform)
-graph.add_flow(
-    Flow(
-        name="transform",
-        entrypoint="transform",
-        endpoints=frozenset({Endpoint("transform", "result")}),
-    )
-)
-graph.freeze()
+with Runtime() as runtime:
+    runtime.register("upper.graph", graph)
+    print(runtime.run("upper.graph", "bricks"))
 ```
 
-同一 Graph 可以提供不同 Flow。不同 Flow 可以从不同节点进入、共享部分路径，并在不同
-`Endpoint(node_id, port)` 终止。
+更多内容从[文档首页](docs/README.md)开始：
 
-## 设计文档
+- [快速开始](docs/getting-started.md)
+- [核心概念](docs/core-concepts.md)
+- [运行语义](docs/runtime-semantics.md)
+- [Runtime 扩展](docs/extending-runtime.md)
+- [常见编排方式](docs/examples.md)
 
-- [核心概念入门](docs/core-concepts.md)
-- [Engine 设计](docs/engine-design.md)
-- [Engine 宪法](docs/constitution.md)
+## 当前范围
 
-## 开发
+默认实现提供内存事件分发、线程池队列并发、Graph 冻结与类型校验，以及可替换的 EventBus、TaskBackend、
+GraphExecutor 协议。它不提供持久化、ack、进程恢复、定时器、死信队列或 exactly-once 语义。
 
 ```bash
-uv run --with pytest python -m pytest -q
+uv run python examples/linear.py
+uv run python examples/fan_in.py
+uv run python examples/event_routing.py
+uv run python examples/async_node.py
+uv run --with pytest pytest -q
 ```
-
-项目使用 MIT License。
