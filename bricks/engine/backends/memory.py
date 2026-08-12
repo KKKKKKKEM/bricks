@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict, deque
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import partial
 from threading import Condition, RLock
 
 from ..core import _validate_timeout, require_non_empty_string
 from ..events import Event
+from ..slots import SlotPool
 from .protocols import EventHandler, Work, WorkHandler
 
 
@@ -61,6 +64,8 @@ class MemoryEventBus:
             raise TypeError("event bus accepts only Event")
         with self._condition:
             if self._closed:
+                if event._slot_lease is not None:
+                    event._slot_lease.release()
                 raise RuntimeError("event bus is closed")
             handlers = self._select_handlers(event.type)
             if event.type != "*":
@@ -78,6 +83,8 @@ class MemoryEventBus:
             if failure is not None:
                 raise failure
         finally:
+            if event._slot_lease is not None:
+                event._slot_lease.release()
             with self._condition:
                 self._active_dispatches -= 1
                 self._condition.notify_all()
@@ -111,6 +118,8 @@ class _Consumer:
     handler: WorkHandler
     concurrency: int
     executor: ThreadPoolExecutor
+    slots: SlotPool
+    active: int = 0
 
 
 @dataclass(slots=True)
@@ -128,6 +137,9 @@ class MemoryTaskBackend:
         self._pending: set[Future[None]] = set()
         self._failures: deque[BaseException] = deque()
         self._condition = Condition(RLock())
+        self._slot_subscriptions: dict[int, tuple[SlotPool, Callable[[], None]]] = {}
+        self._owned_slot_pools: list[SlotPool] = []
+        self._next_channel = 0
         self._closed = False
 
     @property
@@ -143,6 +155,7 @@ class MemoryTaskBackend:
         handler: WorkHandler,
         *,
         concurrency: int,
+        slots: SlotPool | None = None,
     ) -> None:
         queue = require_non_empty_string(queue, "task queue")
         if not callable(handler):
@@ -151,18 +164,23 @@ class MemoryTaskBackend:
             raise TypeError("queue concurrency must be an integer")
         if concurrency < 1:
             raise ValueError("queue concurrency must be at least 1")
+        if slots is not None and not isinstance(slots, SlotPool):
+            raise TypeError("slots must be a SlotPool or None")
         with self._condition:
             if self._closed:
                 raise RuntimeError("task backend is closed")
+            if slots is None:
+                slots = SlotPool(concurrency)
+                self._owned_slot_pools.append(slots)
             executor = ThreadPoolExecutor(
                 max_workers=concurrency,
                 thread_name_prefix=f"bricks-{queue}",
             )
-            consumer = _Consumer(handler, concurrency, executor)
+            consumer = _Consumer(handler, concurrency, executor, slots)
             channel = self._channels.setdefault(queue, _Channel([], deque()))
             channel.consumers.append(consumer)
-            while channel.queued:
-                self._dispatch(channel, channel.queued.popleft())
+            self._subscribe_slots(slots)
+            self._drain_channel(channel)
             self._condition.notify_all()
 
     def submit(self, queue: str, work: Work) -> None:
@@ -173,10 +191,8 @@ class MemoryTaskBackend:
             if self._closed:
                 raise RuntimeError("task backend is closed")
             channel = self._channels.setdefault(queue, _Channel([], deque()))
-            if not channel.consumers:
-                channel.queued.append(work)
-                return
-            self._dispatch(channel, work)
+            channel.queued.append(work)
+            self._drain_channel(channel)
 
     def wait_idle(self, timeout: float | None = None) -> None:
         _validate_timeout(timeout)
@@ -212,22 +228,108 @@ class MemoryTaskBackend:
             )
         for consumer in consumers:
             consumer.executor.shutdown(wait=True)
+        for _, unsubscribe in tuple(self._slot_subscriptions.values()):
+            unsubscribe()
+        for slots in reversed(self._owned_slot_pools):
+            slots.close()
         if failure is not None:
             raise failure
 
-    def _done(self, future: Future[None]) -> None:
+    def _done(
+        self,
+        consumer: _Consumer,
+        work: Work,
+        future: Future[None],
+    ) -> None:
         failure = future.exception()
         with self._condition:
             self._pending.discard(future)
+            consumer.active -= 1
             if failure is not None:
                 self._failures.append(failure)
+        if work._slot_lease is not None:
+            work._slot_lease.release()
+        with self._condition:
+            self._drain_all()
             self._condition.notify_all()
 
-    def _dispatch(self, channel: _Channel, work: Work) -> None:
-        consumer = channel.consumers[
-            channel.next_consumer % len(channel.consumers)
-        ]
-        channel.next_consumer += 1
-        future = consumer.executor.submit(consumer.handler, work)
+    def _dispatch(self, consumer: _Consumer, work: Work) -> None:
+        consumer.active += 1
+        try:
+            future = consumer.executor.submit(consumer.handler, work)
+        except BaseException:
+            consumer.active -= 1
+            if work._slot_lease is not None:
+                work._slot_lease.release()
+            raise
         self._pending.add(future)
-        future.add_done_callback(self._done)
+        future.add_done_callback(partial(self._done, consumer, work))
+
+    def _drain_all(self) -> None:
+        channels = tuple(self._channels.values())
+        if not channels:
+            return
+        start = self._next_channel % len(channels)
+        for offset in range(len(channels)):
+            self._drain_channel(channels[(start + offset) % len(channels)])
+        self._next_channel = (start + 1) % len(channels)
+
+    def _drain_channel(self, channel: _Channel) -> None:
+        while channel.queued and channel.consumers:
+            available = self._available_consumers(channel)
+            if not available:
+                return
+            continuation = next(
+                (
+                    index
+                    for index, work in enumerate(channel.queued)
+                    if work._slot_lease is not None
+                ),
+                None,
+            )
+            if continuation is not None:
+                work = channel.queued[continuation]
+                del channel.queued[continuation]
+                consumer = available[0]
+                self._advance_consumer(channel, consumer)
+                self._dispatch(consumer, work)
+                continue
+
+            work = channel.queued[0]
+            assigned: tuple[_Consumer, Work] | None = None
+            for consumer in available:
+                lease = consumer.slots._try_acquire()
+                if lease is not None:
+                    assigned = (consumer, replace(work, _slot_lease=lease))
+                    break
+            if assigned is None:
+                return
+            channel.queued.popleft()
+            consumer, work = assigned
+            self._advance_consumer(channel, consumer)
+            self._dispatch(consumer, work)
+
+    @staticmethod
+    def _advance_consumer(channel: _Channel, consumer: _Consumer) -> None:
+        index = channel.consumers.index(consumer)
+        channel.next_consumer = index + 1
+
+    @staticmethod
+    def _available_consumers(channel: _Channel) -> list[_Consumer]:
+        count = len(channel.consumers)
+        start = channel.next_consumer % count
+        ordered = channel.consumers[start:] + channel.consumers[:start]
+        return [consumer for consumer in ordered if consumer.active < consumer.concurrency]
+
+    def _subscribe_slots(self, slots: SlotPool) -> None:
+        key = id(slots)
+        if key in self._slot_subscriptions:
+            return
+
+        def available() -> None:
+            with self._condition:
+                if not self._closed:
+                    self._drain_all()
+                    self._condition.notify_all()
+
+        self._slot_subscriptions[key] = (slots, slots._subscribe(available))

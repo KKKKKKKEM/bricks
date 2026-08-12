@@ -33,6 +33,7 @@ from .hooks import (
     StopGraph,
 )
 from .runner import LocalRunner
+from .slots import Slot
 
 Emit = Callable[[Event], None]
 
@@ -58,6 +59,8 @@ class Engine:
         inputs: Any,
         emit: Emit,
         plan: ExecutionPlan | None = None,
+        *,
+        slot: Slot | None = None,
     ) -> tuple[Output, ...]:
         """执行一张 Graph 并返回终端 Output。"""
 
@@ -66,6 +69,8 @@ class Engine:
             raise TypeError("graph must be a Graph")
         if not callable(emit):
             raise TypeError("emit must be callable")
+        if slot is not None and not isinstance(slot, Slot):
+            raise TypeError("slot must be a Slot or None")
         if not graph.frozen:
             raise RuntimeError("Engine requires a frozen Graph")
         if plan is not None:
@@ -77,7 +82,7 @@ class Engine:
         prepared = self._coerce_inputs(graph, inputs)
         snapshot = self.hooks.snapshot(name)
         try:
-            return self._run(name, graph, prepared, emit, snapshot, plan)
+            return self._run(name, graph, prepared, emit, snapshot, plan, slot)
         except StopGraph as signal:
             return self._coerce_outputs(signal.outputs, name, None, "StopGraph")
 
@@ -107,6 +112,7 @@ class Engine:
         emit: Emit,
         hook_snapshot: tuple[Any, ...],
         plan: ExecutionPlan | None,
+        slot: Slot | None,
     ) -> tuple[Output, ...]:
         active_nodes = set(graph.nodes) if plan is None else plan.nodes
         specs = {
@@ -154,7 +160,7 @@ class Engine:
                         node_id,
                         node,
                         MappingProxyType(consumed),
-                        Context(emit),
+                        Context(emit, slot),
                         hooks,
                         spec.input_ports,
                     )

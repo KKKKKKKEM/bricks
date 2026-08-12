@@ -6,6 +6,7 @@ Bricks 只区分两种流动：Graph 内的值流动，以及 Graph 间的事件
 | --- | --- | --- |
 | 单张 Graph | `Output`、`Edge` | 把一个 Node 的值交给下游 Node |
 | 多张 Graph | `Event`、`Context.emit()`、`Runtime.on()` | 发布领域事实并异步启动工作 |
+| 逻辑执行链 | `Slot`、`SlotPool`、`Context.slot` | 跨 Work 与 Consumer 复用执行状态 |
 | 动态执行扩展 | `Runtime.attach()`、`NodeHook` | 不修改冻结 Graph，转换 Node 输入、结果和流程 |
 
 ## Ports 与 Node
@@ -104,6 +105,20 @@ class CreateTask(Node):
 
 `Context` 不提供数据库、HTTP 客户端、Runtime 或队列。把这些依赖通过 Node 构造器显式注入。Node 本身应保持
 可重入；单次执行状态放在输入、事件 payload 或领域 Store 中。
+
+队列执行时，`Context.slot` 是当前逻辑执行链独占的 `Slot`。它是一个长期存在的可变 Mapping，适合保存代理、
+Cookie、连接或插件缓存：
+
+```python
+proxy = context.slot.get("proxy")
+if proxy is None:
+    proxy = proxy_pool.acquire()
+    context.slot["proxy"] = proxy
+```
+
+Slot 不绑定线程、Worker 或 Consumer。Node 通过 `context.emit()` 创建下游 Work 时，Runtime 会传递同一个 Slot；
+最后一个下游分支结束后才将它归还 `SlotPool`。一个 Slot 同一时间只执行一个 Graph，因此分支共享状态但不会
+并发修改。`Runtime.run()` 是直接调用，不经过任务队列，其 `context.slot` 为 `None`。
 
 事件一旦被 Runtime 接受就是渐进提交：源 Node 随后失败不会撤销已发布事件。核心不会比较 payload、自动去重
 或自动重试；这些是领域或后端的责任。

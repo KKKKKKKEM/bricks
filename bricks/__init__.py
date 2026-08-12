@@ -4,14 +4,16 @@ from .engine import (
     AsyncNode,
     Context,
     Edge,
-    ExecutionPlan,
     Event,
+    ExecutionPlan,
     Graph,
     InputPolicy,
     Node,
     Output,
     Ports,
     Runtime,
+    Slot,
+    SlotPool,
 )
 
 __all__ = [
@@ -26,4 +28,6 @@ __all__ = [
     "Output",
     "Ports",
     "Runtime",
+    "Slot",
+    "SlotPool",
 ]

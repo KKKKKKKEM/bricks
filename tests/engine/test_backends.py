@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable
+from dataclasses import replace
 from threading import Event as ThreadEvent
 from threading import Thread
 from uuid import UUID
@@ -11,6 +12,7 @@ from uuid import UUID
 import pytest
 
 from bricks import Event, Graph, InputPolicy, Node, Output, Ports, Runtime
+from bricks.engine import EventRouter, GraphWorker, HookRegistry
 from bricks.engine.backends import (
     EventHandler,
     MemoryEventBus,
@@ -18,7 +20,7 @@ from bricks.engine.backends import (
     Work,
     WorkHandler,
 )
-from bricks.engine import EventRouter, GraphWorker, HookRegistry
+from bricks.engine.slots import SlotPool
 
 
 class EmptyNode(Node):
@@ -57,8 +59,12 @@ class RecordingBus:
     def publish(self, event: Event) -> None:
         self.events.append(event)
         handlers = tuple(self.handlers[event.type]) + tuple(self.handlers["*"])
-        for handler in handlers:
-            handler(event)
+        try:
+            for handler in handlers:
+                handler(event)
+        finally:
+            if event._slot_lease is not None:
+                event._slot_lease.release()
 
     def wait_idle(self, timeout: float | None = None) -> None:
         del timeout
@@ -85,9 +91,19 @@ class RecordingTasks:
         handler: WorkHandler,
         *,
         concurrency: int,
+        slots: SlotPool | None = None,
     ) -> None:
-        del concurrency
-        self.handlers[queue] = handler
+        if slots is None:
+            slots = SlotPool(concurrency)
+
+        def handle(work: Work) -> None:
+            lease = work._slot_lease or slots._acquire()
+            try:
+                handler(replace(work, _slot_lease=lease))
+            finally:
+                lease.release()
+
+        self.handlers[queue] = handle
 
     def submit(self, queue: str, work: Work) -> None:
         self.submitted.append((queue, work))
@@ -113,8 +129,10 @@ class RecordingExecutor:
         graph: Graph,
         inputs: object,
         emit: Callable[[Event], None],
+        *,
+        slot=None,
     ) -> tuple[Output, ...]:
-        del graph, emit
+        del graph, emit, slot
         self.calls.append((name, inputs))
         return ()
 

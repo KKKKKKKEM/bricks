@@ -8,8 +8,8 @@ Node -- Output / Edge --> Node
 Graph -- Event / Runtime --> Graph
 ```
 
-顶层 API 只有十一个概念：`Ports`、`Node`、`AsyncNode`、`InputPolicy`、`Output`、`Edge`、`Graph`、
-`ExecutionPlan`、`Event`、`Context` 与 `Runtime`。
+顶层 API 还提供 `Slot` 与 `SlotPool`：队列 Work 可以跨 Consumer 传递并复用代理、Cookie、连接等执行状态，
+而不依赖具体线程。
 
 ## 最小示例
 

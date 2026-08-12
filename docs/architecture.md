@@ -208,7 +208,7 @@ flowchart LR
 
 | 层次 | 核心概念 | 责任 |
 | --- | --- | --- |
-| 用户模型 | `Ports`、`Node`、`Output`、`Edge`、`Graph`、`Event`、`Context` | 描述业务行为、图内数据和跨图事实 |
+| 用户模型 | `Ports`、`Node`、`Output`、`Edge`、`Graph`、`Event`、`Context`、`Slot` | 描述业务行为、数据流和逻辑执行状态 |
 | 顶层门面 | `Runtime` | 注册和直接执行 Graph，组合事件路由与本地消费，管理生命周期 |
 | 内部角色 | `EventRouter`、`GraphWorker` | 分别组装事件发布/Work 投递，以及 Work 消费/Graph 执行 |
 | 能力端口 | `EventBus`、`TaskPublisher`、`TaskConsumer`、`GraphExecutor` | 隔离事件传输、任务通道和执行实现 |
@@ -227,11 +227,12 @@ flowchart LR
 5. Node 可以通过 `Context.emit()` 发布 `Event`，应用也可以通过 `Runtime.emit()` 发布；Event 不会隐式变成
    Graph 内的 Output。
 6. `observe(event, handler)` 是普通 EventBus 订阅，直接调用同步 handler，不创建 Work，也不执行 Graph。
-7. `on(event, graph, queue, concurrency)` 组合 `route()` 和 `consume()`：route 把匹配的 Event 转成 `Work` 并
-   submit 到命名 queue；consume 以本实例 concurrency 绑定 queue。
+7. `on(event, graph, queue, concurrency, slots)` 组合 `route()` 和 `consume()`：route 把匹配的 Event 转成
+   `Work` 并 submit 到命名 queue；consume 以本实例 concurrency 和 SlotPool 绑定 queue。
 8. TaskConsumer 取得 Work 后调用 GraphWorker；Worker 根据 Work 中的 Graph 注册名找到冻结 Graph，再交给
    GraphExecutor 执行。目标 Graph 不在源 Node 的 `emit()` 调用栈中执行。
-9. 目标 Graph 可以继续 emit Event，形成跨 Graph 的事件链。`wait_idle()` 等待当前 Runtime 能观察到的事件与
+9. 目标 Graph 可以继续 emit Event，形成跨 Graph 的事件链；当前 Slot 随下游 Work 跨 Consumer 传递，所有分支
+   结束后归还池。`wait_idle()` 等待当前 Runtime 能观察到的事件与
    Work 级联静止；`close()` 先排空再按所有权关闭组件。
 
 ## API 意图

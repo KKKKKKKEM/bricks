@@ -23,6 +23,8 @@ def test_top_level_api_contains_only_core_vocabulary() -> None:
         "Output",
         "Ports",
         "Runtime",
+        "Slot",
+        "SlotPool",
     ]
 
 

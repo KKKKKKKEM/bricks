@@ -29,6 +29,7 @@ from .hooks import (
     StopGraph,
 )
 from .runtime import EventRouter, GraphWorker, Runtime
+from .slots import Slot, SlotPool
 
 # 兼容旧版本的直接导入；不再通过 __all__ 推荐这个易混淆名称。
 RuntimeError = BricksRuntimeError
@@ -40,15 +41,15 @@ __all__ = [
     "Context",
     "Edge",
     "Event",
-    "EventRouter",
     "EventDispatchError",
+    "EventRouter",
     "ExecutionError",
     "ExecutionPlan",
     "Graph",
-    "GraphWorker",
     "GraphError",
     "GraphFrozenError",
     "GraphValidationError",
+    "GraphWorker",
     "HookExecutionError",
     "HookHandle",
     "HookPhase",
@@ -66,6 +67,8 @@ __all__ = [
     "Runtime",
     "RuntimeClosedError",
     "ShortCircuit",
+    "Slot",
+    "SlotPool",
     "StopGraph",
     "UnknownGraphError",
 ]

@@ -11,6 +11,7 @@ from ..core import Output, require_non_empty_string
 from ..events import Event
 from ..graph import ExecutionPlan, Graph
 from ..hooks import HookHandle, HookPhase, NodeHook
+from ..slots import Slot, SlotPool, _SlotLease
 
 EventHandler = Callable[[Event], None]
 
@@ -22,6 +23,12 @@ class Work:
     graph: str
     inputs: Any = None
     trigger: Event | None = field(default=None, compare=False, repr=False)
+    _slot_lease: _SlotLease | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+        kw_only=True,
+    )
     id: str = field(default_factory=lambda: str(uuid4()), kw_only=True)
 
     def __post_init__(self) -> None:
@@ -81,8 +88,9 @@ class TaskConsumer(Protocol):
         handler: WorkHandler,
         *,
         concurrency: int,
+        slots: SlotPool | None = None,
     ) -> None:
-        """绑定通道；concurrency 是当前消费实例的本地并发。"""
+        """绑定通道，并为不携带 Slot 的根 Work 分配执行槽。"""
 
     def wait_idle(self, timeout: float | None = None) -> None:
         """等待当前实例已接受的 Work 完成。"""
@@ -108,6 +116,8 @@ class GraphExecutor(Protocol):
         inputs: Any,
         emit: Emit,
         plan: ExecutionPlan | None = None,
+        *,
+        slot: Slot | None = None,
     ) -> tuple[Output, ...]:
         """执行 Graph 并返回终端 Output。"""
 

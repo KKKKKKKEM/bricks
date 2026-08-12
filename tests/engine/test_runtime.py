@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from threading import Lock
+from threading import Lock, current_thread
 
 import pytest
 
@@ -15,6 +15,8 @@ from bricks import (
     Output,
     Ports,
     Runtime,
+    Slot,
+    SlotPool,
 )
 from bricks.engine import (
     Context,
@@ -461,6 +463,343 @@ def test_event_can_drive_a_chain_of_graphs() -> None:
         runtime.wait_idle()
 
     assert received == ["value"]
+
+
+def test_slot_follows_work_across_consumers() -> None:
+    """下游 Worker 沿用上游 Work 的 Slot，而不是从自己的池重新获取。"""
+
+    seen: list[tuple[str, str, str]] = []
+
+    class Producer(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports()
+
+        def execute(self, inputs, context: Context) -> None:
+            assert context.slot is not None
+            context.slot["value"] = inputs["value"]
+            seen.append(("source", context.slot.id, current_thread().name))
+            context.emit("slot.forwarded", inputs["value"])
+
+    class Consumer(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports()
+
+        def execute(self, inputs, context: Context) -> None:
+            assert context.slot is not None
+            assert context.slot["value"] == inputs["value"]
+            seen.append(("sink", context.slot.id, current_thread().name))
+
+    shared = SlotPool(slots=[Slot(id="shared")])
+    with Runtime() as runtime:
+        runtime.register("source.graph", Graph(entrypoint="source").add(source=Producer()))
+        runtime.register("sink.graph", Graph(entrypoint="sink").add(sink=Consumer()))
+        runtime.on(
+            "slot.started",
+            graph="source.graph",
+            queue="sources",
+            concurrency=2,
+            slots=shared,
+        )
+        runtime.on(
+            "slot.forwarded",
+            graph="sink.graph",
+            queue="sinks",
+            concurrency=4,
+            slots=shared,
+        )
+        runtime.emit("slot.started", 7)
+        runtime.wait_idle()
+
+    assert [(stage, slot_id) for stage, slot_id, _ in seen] == [
+        ("source", "shared"),
+        ("sink", "shared"),
+    ]
+    assert seen[0][2].startswith("bricks-sources")
+    assert seen[1][2].startswith("bricks-sinks")
+    assert shared.available == 1
+
+
+def test_default_slot_pool_matches_consumer_concurrency() -> None:
+    """不传 slots 时自动池限制逻辑执行链数量，并在 Work 后复用 Slot。"""
+
+    slot_ids: list[str] = []
+    active = 0
+    maximum = 0
+    lock = Lock()
+
+    class Capture(AsyncNode):
+        input_ports = Ports(value=int)
+        output_ports = Ports()
+
+        async def execute(self, inputs, context: Context) -> None:
+            nonlocal active, maximum
+            del inputs
+            assert context.slot is not None
+            with lock:
+                slot_ids.append(context.slot.id)
+                active += 1
+                maximum = max(maximum, active)
+            try:
+                await asyncio.sleep(0.01)
+            finally:
+                with lock:
+                    active -= 1
+
+    with Runtime() as runtime:
+        runtime.register("capture.graph", Graph(entrypoint="capture").add(capture=Capture()))
+        runtime.on(
+            "capture.requested",
+            graph="capture.graph",
+            queue="captures",
+            concurrency=2,
+        )
+        for value in range(6):
+            runtime.emit("capture.requested", value)
+        runtime.wait_idle()
+
+    assert maximum == 2
+    assert len(set(slot_ids)) == 2
+
+
+def test_slot_lease_waits_for_all_event_branches() -> None:
+    """一个 Work 发出的多个分支共享 Slot，所有分支结束后才归还。"""
+
+    seen: list[tuple[str, str]] = []
+
+    class Fork(Node):
+        input_ports = Ports(value=str)
+        output_ports = Ports()
+
+        def execute(self, inputs, context: Context) -> None:
+            assert context.slot is not None
+            context.emit("branch.left", inputs["value"])
+            context.emit("branch.right", inputs["value"])
+
+    class Branch(Node):
+        input_ports = Ports(value=str)
+        output_ports = Ports()
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def execute(self, inputs, context: Context) -> None:
+            del inputs
+            assert context.slot is not None
+            seen.append((self.name, context.slot.id))
+
+    shared = SlotPool(slots=[Slot(id="branch-slot")])
+    with Runtime() as runtime:
+        runtime.register("fork.graph", Graph(entrypoint="fork").add(fork=Fork()))
+        runtime.register(
+            "left.graph", Graph(entrypoint="left").add(left=Branch("left"))
+        )
+        runtime.register(
+            "right.graph", Graph(entrypoint="right").add(right=Branch("right"))
+        )
+        runtime.on("fork", graph="fork.graph", queue="forks", slots=shared)
+        runtime.on("branch.left", graph="left.graph", queue="left", slots=shared)
+        runtime.on("branch.right", graph="right.graph", queue="right", slots=shared)
+        runtime.emit("fork", "value")
+        runtime.wait_idle()
+
+    assert sorted(seen) == [("left", "branch-slot"), ("right", "branch-slot")]
+    assert shared.available == 1
+
+
+def test_failed_work_releases_its_slot() -> None:
+    """Graph 异常不能泄漏 Slot，后续根 Work 仍可获得它。"""
+
+    class Broken(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports()
+
+        def execute(self, inputs, context: Context) -> None:
+            del inputs, context
+            raise ValueError("broken slot work")
+
+    shared = SlotPool(1)
+    runtime = Runtime()
+    runtime.register("broken.graph", Graph(entrypoint="broken").add(broken=Broken()))
+    runtime.on("broken", graph="broken.graph", queue="broken", slots=shared)
+    runtime.emit("broken", 1)
+
+    with pytest.raises(Exception, match="broken slot work"):
+        runtime.wait_idle()
+    assert shared.available == 1
+    runtime.close()
+
+
+def test_waiting_roots_do_not_starve_slot_continuations() -> None:
+    """根 Work 等 Slot 时不占 Worker，携带 lease 的下游 Work 可继续执行。"""
+
+    received: list[int] = []
+
+    class Relay(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports()
+
+        def execute(self, inputs, context: Context) -> None:
+            context.emit("continued", inputs["value"])
+
+    class Sink(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports()
+
+        def execute(self, inputs, context: Context) -> None:
+            del context
+            received.append(inputs["value"])
+
+    shared = SlotPool(1)
+    with Runtime() as runtime:
+        runtime.register("relay.graph", Graph(entrypoint="relay").add(relay=Relay()))
+        runtime.register("sink.graph", Graph(entrypoint="sink").add(sink=Sink()))
+        runtime.on(
+            "root",
+            graph="relay.graph",
+            queue="roots",
+            concurrency=4,
+            slots=shared,
+        )
+        runtime.on(
+            "continued",
+            graph="sink.graph",
+            queue="continuations",
+            concurrency=2,
+            slots=shared,
+        )
+        for value in range(8):
+            runtime.emit("root", value)
+        runtime.wait_idle(2)
+
+    assert sorted(received) == list(range(8))
+    assert shared.available == 1
+
+
+def test_shared_pool_works_when_consumer_and_slot_sizes_differ() -> None:
+    """Consumer 并发与共享池大小相互独立，实际链路并发取二者约束的结果。"""
+
+    active = 0
+    maximum = 0
+    lock = Lock()
+
+    class Slow(AsyncNode):
+        input_ports = Ports(value=int)
+        output_ports = Ports()
+
+        async def execute(self, inputs, context: Context) -> None:
+            nonlocal active, maximum
+            del inputs
+            assert context.slot is not None
+            with lock:
+                active += 1
+                maximum = max(maximum, active)
+            try:
+                await asyncio.sleep(0.01)
+            finally:
+                with lock:
+                    active -= 1
+
+    slots = SlotPool(2)
+    with Runtime() as runtime:
+        runtime.register("slow.graph", Graph(entrypoint="slow").add(slow=Slow()))
+        runtime.on(
+            "slow.slot",
+            graph="slow.graph",
+            queue="slow-slots",
+            concurrency=5,
+            slots=slots,
+        )
+        for value in range(8):
+            runtime.emit("slow.slot", value)
+        runtime.wait_idle()
+
+    assert maximum == 2
+    assert slots.available == 2
+
+
+def test_multiple_routes_retain_one_slot_until_every_work_finishes() -> None:
+    """同一 Event 的多个 route 各自接管 lease，最后一个 Work 后才归还。"""
+
+    seen: list[tuple[str, str]] = []
+
+    class FanOut(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports()
+
+        def execute(self, inputs, context: Context) -> None:
+            context.emit("fanout", inputs["value"])
+
+    class Sink(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports()
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def execute(self, inputs, context: Context) -> None:
+            del inputs
+            assert context.slot is not None
+            seen.append((self.name, context.slot.id))
+
+    slots = SlotPool(slots=[Slot(id="fanout-slot")])
+    with Runtime() as runtime:
+        runtime.register("fanout.graph", Graph(entrypoint="fanout").add(fanout=FanOut()))
+        runtime.register("sink-a.graph", Graph(entrypoint="sink").add(sink=Sink("a")))
+        runtime.register("sink-b.graph", Graph(entrypoint="sink").add(sink=Sink("b")))
+        runtime.on("root.fanout", graph="fanout.graph", queue="fanout", slots=slots)
+        runtime.consume("sink-a", slots=slots)
+        runtime.consume("sink-b", slots=slots)
+        runtime.route("fanout", graph="sink-a.graph", queue="sink-a")
+        runtime.route("fanout", graph="sink-b.graph", queue="sink-b")
+        runtime.emit("root.fanout", 1)
+        runtime.wait_idle()
+
+    assert sorted(seen) == [("a", "fanout-slot"), ("b", "fanout-slot")]
+    assert slots.available == 1
+
+
+def test_queue_rejects_a_different_slot_pool_when_already_bound() -> None:
+    """同一 Worker 的同一 queue 不能在重复配置时偷偷切换 SlotPool。"""
+
+    with Runtime() as runtime:
+        runtime.consume("queue", concurrency=2, slots=SlotPool(1))
+        with pytest.raises(Exception, match="different SlotPool"):
+            runtime.consume("queue", concurrency=2, slots=SlotPool(1))
+
+
+def test_slot_pool_rejects_duplicate_ids() -> None:
+    """池内 Slot ID 唯一，便于日志、观测和插件定位逻辑槽。"""
+
+    with pytest.raises(ValueError, match="duplicate Slot ids"):
+        SlotPool(slots=[Slot(id="same"), Slot(id="same")])
+
+
+def test_returned_slot_keeps_state_for_later_root_work() -> None:
+    """Slot 归还池时不清空状态，后续 Work 可继续复用其中资源。"""
+
+    counts: list[int] = []
+
+    class Reuse(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports()
+
+        def execute(self, inputs, context: Context) -> None:
+            del inputs
+            assert context.slot is not None
+            context.slot["uses"] = context.slot.get("uses", 0) + 1
+            counts.append(context.slot["uses"])
+
+    slots = SlotPool(1)
+    with Runtime() as runtime:
+        runtime.register("reuse.graph", Graph(entrypoint="reuse").add(reuse=Reuse()))
+        runtime.on("reuse", graph="reuse.graph", queue="reuse", slots=slots)
+        runtime.emit("reuse", 1)
+        runtime.wait_idle()
+        runtime.emit("reuse", 2)
+        runtime.wait_idle()
+
+    assert counts == [1, 2]
+    assert slots.available == 1
 
 
 def test_runtime_validates_entry_value_type() -> None:

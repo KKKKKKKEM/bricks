@@ -5,7 +5,7 @@
 
 ## 第一条：Less is more
 
-1. 顶层公共模型只保留 Graph 基础类型、Event、Context 和 Runtime。
+1. 顶层公共模型只保留 Graph 基础类型、Event、Context、Slot 和 Runtime。
 2. 内部责任划分不自动升级为用户概念。
 3. 删除错误抽象优先于维护错误抽象的兼容层。
 4. 新能力能由 Graph、Event、Runtime 和领域组件组合时，不进入核心。
@@ -15,7 +15,7 @@
 
 ```text
 Ports、Node、AsyncNode、InputPolicy、Output、Edge、Graph、ExecutionPlan、
-Event、Context、Runtime
+Event、Context、Slot、SlotPool、Runtime
 ```
 
 ## 第二条：局部数据流与跨图事件分离
@@ -63,14 +63,14 @@ Event、Context、Runtime
 
 ## 第七条：可靠性不得夸大
 
-1. 当前内存实现不得宣称持久 broker、ack、lease、恢复或 exactly-once。
+1. 当前内存实现不得宣称持久 broker、消息 ack、跨进程租约、恢复或 exactly-once。
 2. 核心不自动重试；emit 后的失败不会撤回已发布 Event。
 3. Redis/MQ 适配器必须明确自身 delivery、ack、retry 和 failure 语义。
 4. URL、tool_call_id、batch_id 和外部副作用幂等属于领域 Graph/Store。
 
 ## 第八条：Context 保持狭窄
 
-1. Context 只提供 `emit()`。
+1. Context 只提供 `emit()` 和当前逻辑执行链的 `slot`。
 2. 数据库、HTTP client、LLM provider、领域 Store 和 tracing 通过 Node 构造器或观察者注入。
 3. Node 不得获得 Runtime 内部工作请求、TaskBackend 或 executor。
 
@@ -80,9 +80,17 @@ Event、Context、Runtime
 2. Graph.freeze() 校验 Node 类目与 execute 风格一致。
 3. queue concurrency 限制完整 Graph execution，而不是单个 Node。
 4. 同步和异步 Node 共享同一 InputPolicy、Output、Edge 和 Event 语义。
-5. Node 默认必须无状态且可重入；execution 状态不得隐式存放在共享 Node 实例中。
+5. Node 默认必须无状态且可重入；跨 Work execution 状态放入 Slot，不得隐式存放在共享 Node 实例中。
 
-## 第十条：公共行为必须可验证
+## 第十条：Slot 跟随逻辑执行链
+
+1. Slot 不绑定线程、Worker 或 Consumer；Work 跨 Consumer 流转时必须携带同一个 Slot。
+2. 根 Work 从 Consumer 配置的 SlotPool 获取 Slot，整个逻辑链结束后自动归还。
+3. 分支 Work 可以共享 Slot，但同一个 Slot 的 Graph execution 不得并发执行。
+4. `concurrency` 限制 Consumer 的本地 Graph execution；`slots.size` 限制池中的逻辑执行链，两者相互独立。
+5. 等待 Slot 的根 Work 不得占用 Consumer 的执行线程，也不得阻塞已携带 Slot 的延续 Work。
+
+## 第十一条：公共行为必须可验证
 
 1. Graph 冻结与执行约束必须有失败测试。
 2. Event 提交、跨图连接、并发和错误传播必须有契约测试。
@@ -97,7 +105,7 @@ Event、Context、Runtime
 审计曾把 Trigger、Task、TaskQueue、Scheduler、GraphInstance 和 Engine 全部提升为顶层对象。虽然内部职责更
 清楚，但用户连接两张 Graph 时被迫理解运行实现，违背 less is more。
 
-本次修订恢复十个顶层名字，用 `Runtime.route()` 表达事件到 Graph 的连接、用 `observe()` 表达事件观察；
+本次修订恢复精简顶层词汇，用 `Runtime.route()` 表达事件到 Graph 的连接、用 `observe()` 表达事件观察；
 运行职责退回内部。与此同时引入 EventBus、TaskPublisher、TaskConsumer、TaskBackend、GraphExecutor
 高级结构协议，默认内存实现
 通过 Runtime 构造器注入。由此把“用户模型精简”和“基础设施可替换”分开解决。

@@ -25,7 +25,7 @@ Event 和 Runtime 门面用法不需要因此改变。`Runtime()` 仍会创建�
 | --- | --- | --- |
 | `EventBus` | Event 订阅、发布、投递空闲与关闭 | `MemoryEventBus` |
 | `TaskPublisher` | 向命名队列提交 Work | `MemoryTaskBackend` |
-| `TaskConsumer` | 消费 Work，并控制当前实例的本地并发 | `MemoryTaskBackend` |
+| `TaskConsumer` | 调度带 Slot 的 Work，并控制当前实例的本地并发 | `MemoryTaskBackend` |
 | `TaskBackend` | 同时实现发布与消费的组合协议 | `MemoryTaskBackend` |
 | `GraphExecutor` | 执行已冻结 Graph 并返回终端 Output | `Engine` |
 | `HookableGraphExecutor` | GraphExecutor 的可选动态 Hook 能力 | `Engine` |
@@ -38,11 +38,13 @@ TaskPublisher 的 `submit()` 正常返回即表示后端已接受 Work，同时�
 
 - EventBus 的 `subscribe(event_type, handler, subscription=...)` 需要支持精确类型和 `"*"` 通配订阅。同名
   subscription 的多个实例竞争消费，不同 subscription 各自收到一份；省略 subscription 的观察者相互独立。
+  Event 携带内部 Slot lease 时，EventBus 从 `publish()` 调用开始接管该引用，并在所有 handler 投递结束或发布
+  失败时释放；默认 `MemoryEventBus` 已实现该约束。
 - TaskPublisher 把 Work 提交到命名 queue，`submit()` 正常返回表示后端已经接受；TaskConsumer 的
-  `bind(queue, handler, concurrency=...)` 把 Work 交给 handler，其中 concurrency 只限制当前 Runtime/Worker
-  实例。
+  `bind(queue, handler, concurrency=..., slots=...)` 在调度根 Work 前从 SlotPool 获取 lease，延续 Work 则保留
+  自身 lease。等待 Slot 的根 Work 不能占用 concurrency，Work 完成或失败后必须释放它持有的 lease。
 - GraphExecutor 接收注册名、冻结 Graph、入口输入和 Event emitter；若替换执行器，就必须保留 Graph 的
-  Ports、InputPolicy、Output、Edge 和 Event 语义。自定义执行器若还实现 `HookableGraphExecutor` 的 `attach()`，
+  Ports、InputPolicy、Output、Edge、Event 和 `slot=` 语义。自定义执行器若还实现 `HookableGraphExecutor` 的 `attach()`，
   `Runtime.attach()` 会按结构化能力委托给它，并不要求执行器继承默认 `Engine`。
 
 可参考 [test_backends.py](../tests/engine/test_backends.py) 中的同步替身：它验证三个能力可独立替换，也验证
@@ -61,6 +63,9 @@ Runtime 不依赖默认内存实现的私有字段。
 
 不要仅因后端名为 Redis 或 MQ 就暗示这些能力已经存在。领域 ID、去重和外部副作用的幂等性仍应由领域模型
 显式实现。
+
+`Slot` 保存进程内对象，默认不能随 Work 跨进程序列化。远程 TaskBackend 若要保留相同语义，必须让同一逻辑
+执行链路由到持有该 Slot 的执行进程，或自行实现可序列化的状态引用及其租约协议；否则应明确声明不支持 Slot。
 
 ## 分离 Router 与 Worker
 

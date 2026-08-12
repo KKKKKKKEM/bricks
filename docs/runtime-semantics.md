@@ -41,6 +41,26 @@ runtime.wait_idle()
 栈执行。默认 `MemoryTaskBackend` 使用线程池。`concurrency` 限制当前 Runtime/Worker 实例同时执行的完整
 Graph 数量，而不是集群全局并发，也不是其中某一个 Node 的并发数。
 
+## Slot 与逻辑并发
+
+不传 `slots` 时，`consume()` 自动创建一个大小等于 `concurrency` 的池；显式传入同一个池即可让多个 Consumer
+共享逻辑执行槽：
+
+```python
+from bricks import SlotPool
+
+slots = SlotPool(size=10)
+runtime.consume("requests", concurrency=20, slots=slots)
+runtime.consume("responses", concurrency=6, slots=slots)
+```
+
+`concurrency` 是某个 Consumer 最多同时执行的 Graph 数，`slots.size` 是共享池最多同时承载的独立逻辑执行链
+数，两者不要求相等。没有 Slot 的根 Work 会等待，不占用线程池 Worker；携带 Slot 的下游 Work 优先继续执行。
+一个 Work 发出多个事件时，各分支共享同一个 Slot，并在全部结束后自动归还。
+
+Slot 与 Work 链绑定而不是与线程绑定。它可由一个 Consumer 的 Worker 交给另一个 Consumer 的任意 Worker，
+`Context.slot` 中的状态保持不变。显式 SlotPool 的生命周期由创建者管理；自动池由 GraphWorker 关闭。
+
 `wait_idle(timeout)` 会交替等待事件总线和任务后端，直到由事件继续产生的工作也已完成。传 `0` 可以进行即时
 空闲检查。
 
@@ -64,5 +84,5 @@ Graph 数量，而不是集群全局并发，也不是其中某一个 Node 的�
 推荐使用上下文管理器。`close()` 会先等待已接受的事件与任务完成，再依次关闭任务后端、事件总线和执行器。
 关闭后，注册、运行或发布会抛出 `RuntimeClosedError`。
 
-默认实现仅在进程内有效：没有持久化、事务、ack、lease、恢复、定时调度、死信队列、背压或 exactly-once
+默认实现仅在进程内有效：没有持久化、事务、消息 ack、跨进程恢复、定时调度、死信队列、背压或 exactly-once
 保证。不要把 `wait_idle()` 理解为跨进程消息确认。

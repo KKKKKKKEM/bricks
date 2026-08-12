@@ -32,6 +32,7 @@ from .events import Event
 from .executor import Engine
 from .graph import ExecutionPlan, Graph
 from .hooks import HookHandle, HookPhase, NodeHook
+from .slots import SlotPool, _SlotLease
 
 EventHandler = Callable[[Event], None]
 
@@ -123,7 +124,12 @@ class EventRouter:
     def publish(self, event: Event) -> None:
         """向 EventBus 发布一项 Event，供 GraphWorker emitter 使用。"""
 
-        self._ensure_open()
+        try:
+            self._ensure_open()
+        except BaseException:
+            if event._slot_lease is not None:
+                event._slot_lease.release()
+            raise
         try:
             self._events.publish(event)
         except EventDispatchError:
@@ -171,7 +177,23 @@ class EventRouter:
                 raise
 
     def _submit(self, graph: str, queue: str, event: Event) -> None:
-        self._publisher.submit(queue, Work(graph, event.payload, trigger=event))
+        lease = event._slot_lease
+        if lease is not None:
+            lease.retain()
+        try:
+            self._publisher.submit(
+                queue,
+                Work(
+                    graph,
+                    event.payload,
+                    trigger=event,
+                    _slot_lease=lease,
+                ),
+            )
+        except BaseException:
+            if lease is not None:
+                lease.release()
+            raise
 
     def _ensure_open(self) -> None:
         with self._lock:
@@ -204,7 +226,8 @@ class GraphWorker:
         self._owned_components = owned
         self._close_injected = close_injected
         self._graphs: dict[str, Graph] = {}
-        self._queues: dict[str, int] = {}
+        self._queues: dict[str, tuple[int, SlotPool]] = {}
+        self._owned_slot_pools: list[SlotPool] = []
         self._lock = RLock()
         self._closed = False
 
@@ -229,8 +252,14 @@ class GraphWorker:
             self._graphs[name] = graph
         return self
 
-    def consume(self, queue: str, *, concurrency: int = 1) -> GraphWorker:
-        """消费队列；concurrency 是当前 Worker 实例的本地并发。"""
+    def consume(
+        self,
+        queue: str,
+        *,
+        concurrency: int = 1,
+        slots: SlotPool | None = None,
+    ) -> GraphWorker:
+        """消费队列；concurrency 控制本地执行，slots 控制逻辑执行链。"""
 
         self._ensure_open()
         queue = require_non_empty_string(queue, "task queue")
@@ -238,21 +267,41 @@ class GraphWorker:
             raise TypeError("queue concurrency must be an integer")
         if concurrency < 1:
             raise ValueError("queue concurrency must be at least 1")
+        if slots is not None and not isinstance(slots, SlotPool):
+            raise TypeError("slots must be a SlotPool or None")
         with self._lock:
             configured = self._queues.get(queue)
             if configured is not None:
-                if configured != concurrency:
+                configured_concurrency, configured_slots = configured
+                if configured_concurrency != concurrency:
                     raise BricksRuntimeError(
                         f"queue {queue!r} already uses local concurrency "
-                        f"{configured}"
+                        f"{configured_concurrency}"
+                    )
+                if slots is not None and slots is not configured_slots:
+                    raise BricksRuntimeError(
+                        f"queue {queue!r} already uses a different SlotPool"
                     )
                 return self
-            self._consumer.bind(
-                queue,
-                self._execute_work,
-                concurrency=concurrency,
-            )
-            self._queues[queue] = concurrency
+            if slots is None:
+                slots = SlotPool(concurrency)
+                owned_slots = slots
+            else:
+                owned_slots = None
+            try:
+                self._consumer.bind(
+                    queue,
+                    self._execute_work,
+                    concurrency=concurrency,
+                    slots=slots,
+                )
+            except BaseException:
+                if owned_slots is not None:
+                    owned_slots.close()
+                raise
+            if owned_slots is not None:
+                self._owned_slot_pools.append(owned_slots)
+            self._queues[queue] = (concurrency, slots)
         return self
 
     def run(
@@ -334,6 +383,7 @@ class GraphWorker:
             else tuple(self._owned_components)
         )
         failure = _close_components(reversed(components), failure)
+        failure = _close_components(reversed(self._owned_slot_pools), failure)
         if failure is not None:
             raise failure
 
@@ -351,12 +401,33 @@ class GraphWorker:
 
     def _execute_work(self, work: Work) -> None:
         graph = self._get_graph(work.graph)
+        lease = work._slot_lease
+        if lease is None:
+            raise BricksRuntimeError("TaskConsumer dispatched Work without a Slot")
         try:
-            self._executor.execute(work.graph, graph, work.inputs, self._emit)
+            with lease.slot._execution_lock:
+                emit = partial(self._emit_with_lease, lease)
+                self._executor.execute(
+                    work.graph,
+                    graph,
+                    work.inputs,
+                    emit,
+                    slot=lease.slot,
+                )
         except ExecutionError as exc:
             if exc.event is None:
                 exc.event = work.trigger
             raise
+
+    def _emit_with_lease(self, lease: _SlotLease, event: Event) -> None:
+        # EventBus owns this reference until it finishes dispatching the Event.
+        lease.retain()
+        forwarded = Event(
+            event.type,
+            event.payload,
+            _slot_lease=lease,
+        )
+        self._emit(forwarded)
 
     def _get_graph(self, name: str) -> Graph:
         name = require_non_empty_string(name, "registered graph name")
@@ -434,8 +505,14 @@ class Runtime:
         )
         return self
 
-    def consume(self, queue: str, *, concurrency: int = 1) -> Runtime:
-        self.worker.consume(queue, concurrency=concurrency)
+    def consume(
+        self,
+        queue: str,
+        *,
+        concurrency: int = 1,
+        slots: SlotPool | None = None,
+    ) -> Runtime:
+        self.worker.consume(queue, concurrency=concurrency, slots=slots)
         return self
 
     def emit(self, event_or_type: Event | str, payload: Any = None) -> Event:
@@ -476,12 +553,13 @@ class Runtime:
         graph: str,
         queue: str,
         concurrency: int = 1,
+        slots: SlotPool | None = None,
         subscription: str | None = None,
     ) -> Runtime:
         """组合注册 Event route，并启动对应 queue 的本地消费者。"""
 
         # Expose the route only after its local consumer is ready.
-        self.consume(queue, concurrency=concurrency)
+        self.consume(queue, concurrency=concurrency, slots=slots)
         return self.route(
             event_type,
             graph=graph,
@@ -536,7 +614,8 @@ class Runtime:
 
 
 def _reject_emit(event: Event) -> None:
-    del event
+    if event._slot_lease is not None:
+        event._slot_lease.release()
     raise BricksRuntimeError("GraphWorker has no Event emitter")
 
 
