@@ -2,6 +2,9 @@
 
 from .memory import MemoryEventBus, MemoryTaskBackend
 from .protocols import (
+    Delivery,
+    DeliveryOutcome,
+    DeliveryResult,
     Emit,
     EventBus,
     EventHandler,
@@ -15,6 +18,9 @@ from .protocols import (
 )
 
 __all__ = [
+    "Delivery",
+    "DeliveryOutcome",
+    "DeliveryResult",
     "Emit",
     "EventBus",
     "EventHandler",

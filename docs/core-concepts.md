@@ -82,7 +82,7 @@ graph = (
 ```
 
 执行器默认不会截断循环：execution 的 `max_steps=0` 和 Graph `timeout=None` 表示无限制，每个 Node 的
-`timeout=None` 也表示单次 firing 不限时。调用方可在 `run()`、`arun()`、`start()` 或事件 route 上设置整图限制，
+`timeout=None` 也表示单次 firing 不限时。调用方可在 `run()`、`arun()`、`start()`、`iter()`、`aiter()` 或事件 route 上设置整图限制，
 Node 时限则由各 Node 分别声明。只要回路继续产生可消费的数据，本次 execution 就继续运行；所有可执行 Node 和
 端口队列都清空后，Graph 才自然结束。
 
@@ -147,7 +147,7 @@ if proxy is None:
 
 Slot 不绑定线程、Worker 或 Consumer。Node 通过 `context.emit()` 创建下游 Work 时，Runtime 会传递同一个 Slot；
 最后一个下游分支结束后才将它归还 `SlotPool`。一个 Slot 同一时间只执行一个 Graph，因此分支共享状态但不会
-并发修改。`Runtime.run()` 是直接调用，不经过任务队列，其 `context.slot` 为 `None`。
+并发修改。`Runtime.run()`、`start()`、`iter()` 和 `aiter()` 是直接调用，不经过任务队列，其 `context.slot` 为 `None`。
 
 事件一旦被 Runtime 接受就是渐进提交：源 Node 随后失败不会撤销已发布事件。核心不会比较 payload、自动去重
 或自动重试；这些是领域或后端的责任。

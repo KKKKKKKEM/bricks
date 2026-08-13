@@ -135,6 +135,137 @@ def test_start_returns_successful_queryable_execution() -> None:
         assert runtime.get_execution(execution.id) is execution
 
 
+def test_execution_is_awaitable() -> None:
+    async def scenario() -> tuple[Output, ...]:
+        with Runtime() as runtime:
+            runtime.register(
+                "increment.graph",
+                Graph(entrypoint="increment").add(increment=Increment()),
+            )
+            return await runtime.start("increment.graph", 2)
+
+    assert asyncio.run(scenario()) == (Output(3, "value"),)
+
+
+def test_runtime_iter_streams_terminal_outputs_and_keeps_final_result() -> None:
+    class Many(Node):
+        input_ports = Ports(count=int)
+        output_ports = Ports(value=int)
+
+        def execute(self, inputs, context):
+            del context
+            return tuple(Output(value, "value") for value in range(inputs["count"]))
+
+    with Runtime() as runtime:
+        runtime.register("many.graph", Graph(entrypoint="many").add(many=Many()))
+        execution = runtime.start("many.graph", 3)
+
+        assert tuple(execution) == (
+            Output(0, "value"),
+            Output(1, "value"),
+            Output(2, "value"),
+        )
+        assert execution.result() == tuple(execution)
+        assert tuple(runtime.iter("many.graph", 2)) == (
+            Output(0, "value"),
+            Output(1, "value"),
+        )
+
+
+def test_async_output_iteration() -> None:
+    class Many(Node):
+        input_ports = Ports(count=int)
+        output_ports = Ports(value=int)
+
+        def execute(self, inputs, context):
+            del context
+            return tuple(Output(value, "value") for value in range(inputs["count"]))
+
+    async def scenario() -> list[Output]:
+        with Runtime() as runtime:
+            runtime.register("many.graph", Graph(entrypoint="many").add(many=Many()))
+            return [output async for output in runtime.aiter("many.graph", 3)]
+
+    assert asyncio.run(scenario()) == [
+        Output(0, "value"),
+        Output(1, "value"),
+        Output(2, "value"),
+    ]
+
+
+def test_stream_yields_committed_outputs_before_later_failure() -> None:
+    class EmitThenFail(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports(result=int, next=int)
+
+        def execute(self, inputs, context):
+            del context
+            return Output(inputs["value"], "result"), Output(inputs["value"], "next")
+
+    class Fail(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports()
+
+        def execute(self, inputs, context):
+            del inputs, context
+            raise ValueError("after output")
+
+    graph = (
+        Graph(entrypoint="source")
+        .add(source=EmitThenFail(), fail=Fail())
+        .connect("source", "fail", source_port="next", target_port="value")
+    )
+    runtime = Runtime()
+    runtime.register("partial.graph", graph)
+    stream = runtime.iter("partial.graph", 7)
+
+    assert next(stream) == Output(7, "result")
+    with pytest.raises(ExecutionError, match="after output"):
+        next(stream)
+    runtime.close()
+
+
+def test_active_stream_applies_bounded_backpressure() -> None:
+    class Many(Node):
+        input_ports = Ports(count=int)
+        output_ports = Ports(value=int)
+
+        def execute(self, inputs, context):
+            del context
+            return tuple(Output(value, "value") for value in range(inputs["count"]))
+
+    with Runtime() as runtime:
+        runtime.register("many.graph", Graph(entrypoint="many").add(many=Many()))
+        execution = runtime.start("many.graph", 3, output_buffer=1)
+        stream = iter(execution)
+
+        assert next(stream) == Output(0, "value")
+        time.sleep(0.05)
+        assert not execution.done
+        assert next(stream) == Output(1, "value")
+        assert next(stream) == Output(2, "value")
+        with pytest.raises(StopIteration):
+            next(stream)
+        assert execution.done
+
+
+def test_unconsumed_stream_can_be_closed_without_blocking_execution() -> None:
+    class Many(Node):
+        input_ports = Ports(count=int)
+        output_ports = Ports(value=int)
+
+        def execute(self, inputs, context):
+            del context
+            return tuple(Output(value, "value") for value in range(inputs["count"]))
+
+    runtime = Runtime()
+    runtime.register("many.graph", Graph(entrypoint="many").add(many=Many()))
+    stream = runtime.iter("many.graph", 3, output_buffer=1)
+    stream.close()
+    runtime.wait_idle(1)
+    runtime.close()
+
+
 def test_async_node_timeout_interrupts_awaitable() -> None:
     class Slow(AsyncNode):
         input_ports = Ports(value=int)

@@ -34,6 +34,7 @@ from .hooks import (
     ShortCircuit,
     StopGraph,
 )
+from .observation import ObservationHub, RuntimeEvent, RuntimeEventKind
 from .runner import LocalRunner
 from .slots import Slot
 
@@ -48,11 +49,13 @@ class Engine:
         *,
         hooks: HookRegistry | None = None,
         runner: LocalRunner | None = None,
+        observations: ObservationHub | None = None,
     ) -> None:
         """组装动态 Hook 注册表和同步/异步调用 Runner。"""
 
         self.hooks = HookRegistry() if hooks is None else hooks
         self._runner = LocalRunner() if runner is None else runner
+        self._observations = ObservationHub() if observations is None else observations
 
     def execute(
         self,
@@ -179,16 +182,18 @@ class Engine:
         terminal: list[Output] = []
         ready: deque[str] = deque((graph.entrypoint,))
         scheduled = {graph.entrypoint}
+        local_state: dict[str, dict[str, Any]] = {}
+        finalizers: list[Callable[[], None]] = []
 
         def schedule_if_ready(node_id: str) -> None:
             if node_id in scheduled:
                 return
             spec = specs[node_id]
-            if spec.input_policy is InputPolicy.ON_START:
+            if spec.input_policy.on_start:
                 runnable = node_id == graph.entrypoint and node_id not in started
             else:
                 runnable = (
-                    spec.input_policy._select(input_ports[node_id], queues[node_id])
+                    spec.input_policy.select(input_ports[node_id], queues[node_id])
                     is not None
                 )
             if runnable:
@@ -202,11 +207,11 @@ class Engine:
             node = nodes[node_id]
             spec = specs[node_id]
             policy = spec.input_policy
-            if policy is InputPolicy.ON_START:
+            if policy.on_start:
                 started.add(node_id)
                 consumed: dict[str, Any] = {}
             else:
-                selection = policy._select(input_ports[node_id], queues[node_id])
+                selection = policy.select(input_ports[node_id], queues[node_id])
                 if selection is None:
                     continue
                 consumed = {
@@ -218,25 +223,56 @@ class Engine:
                 slot,
                 checkpoint=execution.checkpoint,
                 is_cancelled=lambda: execution.cancel_requested,
+                local=local_state,
+                finalizers=finalizers,
+                scope=node_id,
             )
-            with execution.step(node_id):
-                try:
-                    outputs = self._call_node(
-                        graph_name,
-                        node_id,
-                        node,
-                        MappingProxyType(consumed),
-                        context,
-                        hooks_by_node[node_id],
-                        spec.input_ports,
-                        execution,
-                    )
-                except ShortCircuit as exc:
-                    raise HookExecutionError(
-                        "ShortCircuit is only valid during hook enter",
+            self._observations.publish(
+                RuntimeEvent(
+                    RuntimeEventKind.NODE_STARTED,
+                    graph=graph_name,
+                    execution_id=execution.id,
+                    node=node_id,
+                    attributes={"step": execution.steps + 1},
+                )
+            )
+            node_error: BaseException | None = None
+            try:
+                with execution.step(node_id):
+                    try:
+                        outputs = self._call_node(
+                            graph_name,
+                            node_id,
+                            node,
+                            MappingProxyType(consumed),
+                            context,
+                            hooks_by_node[node_id],
+                            spec.input_ports,
+                            execution,
+                        )
+                    except ShortCircuit as exc:
+                        raise HookExecutionError(
+                            "ShortCircuit is only valid during hook enter",
+                            graph=graph_name,
+                            node=node_id,
+                        ) from exc
+            except BaseException as exc:
+                node_error = exc
+                raise
+            finally:
+                self._observations.publish(
+                    RuntimeEvent(
+                        RuntimeEventKind.NODE_FINISHED,
                         graph=graph_name,
+                        execution_id=execution.id,
                         node=node_id,
-                    ) from exc
+                        status="failed" if node_error is not None else "succeeded",
+                        error_type=(
+                            None if node_error is None else type(node_error).__name__
+                        ),
+                        attributes={"step": execution.steps},
+                    )
+                )
             for output in outputs:
                 declared = spec.output_ports
                 if output.port not in declared:
@@ -256,6 +292,7 @@ class Engine:
                 edges = outgoing_for(node_id, output.port)
                 if not edges:
                     terminal.append(output)
+                    execution._publish_output(output)
                     continue
                 for edge in edges:
                     target_type = specs[edge.target].input_ports[edge.target_port]
@@ -284,6 +321,8 @@ class Engine:
                 f"graph stopped with incomplete inputs: {leftovers!r}",
                 graph=graph_name,
             )
+        for finalize in tuple(finalizers):
+            finalize()
         return tuple(terminal)
 
     def _call_node(

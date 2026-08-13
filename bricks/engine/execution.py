@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import enum
+import itertools
 import math
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -65,6 +67,71 @@ class ExecutionStatus(str, enum.Enum):
         return self not in (ExecutionStatus.PENDING, ExecutionStatus.RUNNING)
 
 
+class _OutputIterator(Iterator[Output]):
+    def __init__(self, execution: Execution, stream_id: int) -> None:
+        self._execution = execution
+        self._stream_id = stream_id
+        self._closed = False
+
+    def __next__(self) -> Output:
+        if self._closed:
+            raise StopIteration
+        try:
+            output = self._execution._next_output(self._stream_id)
+        except BaseException:
+            self.close()
+            raise
+        if output is None:
+            self.close()
+            raise StopIteration
+        return output
+
+    def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self._execution._detach_stream(self._stream_id)
+
+    def __del__(self) -> None:
+        self.close()
+
+
+class _AsyncOutputIterator(AsyncIterator[Output]):
+    def __init__(self, execution: Execution, stream_id: int) -> None:
+        self._execution = execution
+        self._stream_id = stream_id
+        self._closed = False
+
+    def __aiter__(self) -> _AsyncOutputIterator:
+        return self
+
+    async def __anext__(self) -> Output:
+        if self._closed:
+            raise StopAsyncIteration
+        try:
+            while True:
+                output, pending = self._execution._poll_output(self._stream_id)
+                if output is not None:
+                    return output
+                if not pending:
+                    self.close()
+                    raise StopAsyncIteration
+                await asyncio.sleep(0.01)
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self._execution._detach_stream(self._stream_id)
+
+    async def aclose(self) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        self.close()
+
+
 class Execution:
     """保存单次执行的身份、进度、结果，并提供协作式取消。"""
 
@@ -74,6 +141,7 @@ class Execution:
         *,
         limits: ExecutionLimits | None = None,
         id: str | None = None,
+        output_buffer: int = 64,
     ) -> None:
         self.id = require_non_empty_string(
             str(uuid4()) if id is None else id,
@@ -85,6 +153,9 @@ class Execution:
         if not isinstance(limits, ExecutionLimits):
             raise TypeError("limits must be ExecutionLimits or None")
         self.limits = limits
+        if type(output_buffer) is not int or output_buffer < 1:
+            raise ValueError("output_buffer must be an integer greater than zero")
+        self.output_buffer = output_buffer
         self.created_at = datetime.now(timezone.utc)
 
         self._condition = Condition(RLock())
@@ -100,6 +171,9 @@ class Execution:
         self._outputs: tuple[Output, ...] | None = None
         self._error: BaseException | None = None
         self._cancel_requested = False
+        self._published_outputs: list[Output] = []
+        self._stream_counter = itertools.count()
+        self._stream_cursors: dict[int, int] = {}
 
     @property
     def status(self) -> ExecutionStatus:
@@ -184,6 +258,29 @@ class Execution:
                 raise self._error
             assert self._outputs is not None
             return self._outputs
+
+    def __await__(self):
+        """异步等待最终结果；取消等待方会协作式取消 execution。"""
+
+        return self._await_result().__await__()
+
+    def __iter__(self) -> Iterator[Output]:
+        """按产生顺序迭代 terminal Output；结束时传播执行异常。"""
+
+        stream_id = next(self._stream_counter)
+        with self._condition:
+            self._stream_cursors[stream_id] = 0
+            self._condition.notify_all()
+        return _OutputIterator(self, stream_id)
+
+    def __aiter__(self) -> AsyncIterator[Output]:
+        """异步迭代 terminal Output，语义与同步迭代一致。"""
+
+        stream_id = next(self._stream_counter)
+        with self._condition:
+            self._stream_cursors[stream_id] = 0
+            self._condition.notify_all()
+        return _AsyncOutputIterator(self, stream_id)
 
     def checkpoint(self) -> None:
         """协作式检查取消、Graph timeout 和当前 Node timeout。"""
@@ -368,6 +465,68 @@ class Execution:
         self._step_timeout = None
         self._finished_at = datetime.now(timezone.utc)
         self._condition.notify_all()
+
+    def _publish_output(self, output: Output) -> None:
+        """发布 terminal Output；活跃消费者落后时施加有界背压。"""
+
+        if not isinstance(output, Output):
+            raise TypeError("execution can publish only Output")
+        with self._condition:
+            while self._stream_cursors and any(
+                len(self._published_outputs) - cursor >= self.output_buffer
+                for cursor in self._stream_cursors.values()
+            ):
+                self._checkpoint()
+                self._condition.wait(0.05)
+            self._published_outputs.append(output)
+            self._condition.notify_all()
+
+    def _complete_outputs(self, outputs: tuple[Output, ...]) -> None:
+        """为不支持增量 sink 的 GraphExecutor 补发尚未发布的最终结果。"""
+
+        with self._condition:
+            published = len(self._published_outputs)
+        for output in outputs[published:]:
+            self._publish_output(output)
+
+    async def _await_result(self) -> tuple[Output, ...]:
+        try:
+            return await asyncio.to_thread(self.result)
+        except asyncio.CancelledError:
+            self.cancel()
+            raise
+
+    def _next_output(self, stream_id: int) -> Output | None:
+        with self._condition:
+            while True:
+                cursor = self._stream_cursors[stream_id]
+                if cursor < len(self._published_outputs):
+                    output = self._published_outputs[cursor]
+                    self._stream_cursors[stream_id] = cursor + 1
+                    self._condition.notify_all()
+                    return output
+                if self.done:
+                    self.result(0)
+                    return None
+                self._condition.wait()
+
+    def _poll_output(self, stream_id: int) -> tuple[Output | None, bool]:
+        with self._condition:
+            cursor = self._stream_cursors[stream_id]
+            if cursor < len(self._published_outputs):
+                output = self._published_outputs[cursor]
+                self._stream_cursors[stream_id] = cursor + 1
+                self._condition.notify_all()
+                return output, True
+            if self.done:
+                self.result(0)
+                return None, False
+            return None, True
+
+    def _detach_stream(self, stream_id: int) -> None:
+        with self._condition:
+            self._stream_cursors.pop(stream_id, None)
+            self._condition.notify_all()
 
     def _callbacks(self) -> tuple[Callable[[], None], Callable[[], float | None]]:
         return self.checkpoint, self._wait_timeout

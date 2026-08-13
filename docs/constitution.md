@@ -29,7 +29,7 @@ Event、Context、Execution、ExecutionLimits、ExecutionStatus、Slot、SlotPoo
 ## 第三条：Graph 是静态有向定义
 
 1. Node 声明 typed input/output Ports。
-2. InputPolicy 只判断端口组合，不读取领域值。
+2. InputPolicy 和受控 selector contribution 只根据端口与可用 token 数量选择组合，不读取领域值。
 3. Graph 进入 Runtime 前必须冻结并校验可达性和类型兼容；普通 Edge 可以组成环。
 4. Node ID 属于 Graph binding，Node 不保存某次 execution 状态。
 5. Graph 内循环由 Output 沿回边继续传值，并在不再产生可执行数据时自然结束。
@@ -97,8 +97,18 @@ Event、Context、Execution、ExecutionLimits、ExecutionStatus、Slot、SlotPoo
 3. 取消和同步 Node timeout 是协作式语义；核心不得宣称能够安全强杀任意 Python 函数。
 4. 控制异常不得被 Node Hook 当作普通业务异常恢复。
 5. 跨 Graph 的每个 Work 是独立 execution，独立计步和计时。
+6. Execution 是同步等待、异步等待和 terminal Output 流的统一句柄；便利接口不得维护不同执行语义。
+7. 已交给流消费者的 terminal Output 不因后续 Graph 失败而撤回。
 
-## 第十二条：公共行为必须可验证
+## 第十二条：扩展点保持受控
+
+1. Runtime 生命周期通过只读事件观察；观察者失败不得改变业务执行结果。
+2. selector contribution 必须使用命名空间 ID，只能选择当前非空端口，每个 firing 对每个端口最多消费一个 token。
+3. Graph 冻结时绑定 selector 实现快照；缺失 contribution 必须在冻结阶段失败。
+4. TaskConsumer 以 DeliveryResult 明确表达 ACK、RETRY 或 REJECT；broker lease、重投递和死信实现留给 backend。
+5. keyed join、窗口和领域状态属于扩展 Node，不进入 Engine 的固定调度语义。
+
+## 第十三条：公共行为必须可验证
 
 1. Graph 冻结与执行约束必须有失败测试。
 2. Event 提交、跨图连接、并发和错误传播必须有契约测试。

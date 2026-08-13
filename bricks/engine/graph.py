@@ -18,6 +18,7 @@ from .core import (
     require_non_empty_string,
 )
 from .errors import GraphError, GraphFrozenError, GraphValidationError
+from .policies import BoundPolicy, PolicyRef, PolicyRegistry
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +45,7 @@ class NodeSpec:
 
     input_ports: Ports
     output_ports: Ports
-    input_policy: InputPolicy
+    input_policy: BoundPolicy
     timeout: float | None
 
 
@@ -199,7 +200,12 @@ class Graph:
         self._edge_set.add(edge)
         return self
 
-    def plan(self, *, include: Iterable[str]) -> ExecutionPlan:
+    def plan(
+        self,
+        *,
+        include: Iterable[str],
+        policies: PolicyRegistry | None = None,
+    ) -> ExecutionPlan:
         """选择由原有节点和边组成的严格执行子图。
 
         未选节点不会执行，也不会自动连接其前后节点。首次创建计划时会
@@ -217,7 +223,7 @@ class Graph:
         if any(not isinstance(node_id, str) or not node_id for node_id in selected):
             raise TypeError("plan node IDs must be non-empty strings")
         if not self._frozen:
-            self.freeze()
+            self.freeze(policies)
 
         unknown = selected - set(self._nodes)
         if unknown:
@@ -251,7 +257,10 @@ class Graph:
             )
         for node_id in selected:
             spec = self._node_specs[node_id]
-            if node_id == self.entrypoint or spec.input_policy is not InputPolicy.ALL:
+            if (
+                node_id == self.entrypoint
+                or spec.input_policy.ref.name != "bricks.core/all"
+            ):
                 continue
             missing = set(spec.input_ports) - incoming_ports[node_id]
             if missing:
@@ -268,7 +277,7 @@ class Graph:
             MappingProxyType({key: tuple(value) for key, value in outgoing.items()}),
         )
 
-    def freeze(self) -> Graph:
+    def freeze(self, policies: PolicyRegistry | None = None) -> Graph:
         """校验并冻结 Graph。
 
         返回：
@@ -280,7 +289,11 @@ class Graph:
 
         if self._frozen:
             return self
-        self._validate_structure()
+        if policies is None:
+            policies = PolicyRegistry()
+        if not isinstance(policies, PolicyRegistry):
+            raise TypeError("policies must be a PolicyRegistry or None")
+        self._validate_structure(policies)
         outgoing: dict[tuple[str, str], list[Edge]] = defaultdict(list)
         for edge in self._edges:
             outgoing[(edge.source, edge.source_port)].append(edge)
@@ -318,7 +331,7 @@ class Graph:
         self._ensure_frozen()
         return self._outgoing.get((node_id, port), ())
 
-    def _validate_structure(self) -> None:
+    def _validate_structure(self, policies: PolicyRegistry) -> None:
         """执行冻结前的完整静态校验。"""
 
         if not self._nodes:
@@ -336,9 +349,9 @@ class Graph:
                 raise GraphValidationError(
                     f"node {node_id!r} ports must be Ports"
                 )
-            if not isinstance(policy, InputPolicy):
+            if not isinstance(policy, (InputPolicy, PolicyRef)):
                 raise GraphValidationError(
-                    f"node {node_id!r} input_policy must be InputPolicy"
+                    f"node {node_id!r} input_policy must be InputPolicy or PolicyRef"
                 )
             if timeout is not None:
                 if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
@@ -350,8 +363,14 @@ class Graph:
                         f"node {node_id!r} timeout must be finite and greater than zero"
                     )
             self._validate_execute_style(node_id, node)
-            self._validate_policy(node_id, inputs, policy)
-            specs[node_id] = NodeSpec(inputs, outputs, policy, timeout)
+            try:
+                bound_policy = policies.bind(policy)
+            except (TypeError, ValueError) as exc:
+                raise GraphValidationError(
+                    f"node {node_id!r} has invalid input policy: {exc}"
+                ) from exc
+            self._validate_policy(node_id, inputs, bound_policy)
+            specs[node_id] = NodeSpec(inputs, outputs, bound_policy, timeout)
 
         adjacency: dict[str, set[str]] = defaultdict(set)
         incoming_ports: dict[str, set[str]] = defaultdict(set)
@@ -385,7 +404,10 @@ class Graph:
                 f"nodes are unreachable from entrypoint: {sorted(unreachable)!r}"
             )
         for node_id, spec in specs.items():
-            if node_id == self.entrypoint or spec.input_policy is not InputPolicy.ALL:
+            if (
+                node_id == self.entrypoint
+                or spec.input_policy.ref.name != "bricks.core/all"
+            ):
                 continue
             missing = set(spec.input_ports) - incoming_ports[node_id]
             if missing:
@@ -416,7 +438,7 @@ class Graph:
     def _validate_policy(
         node_id: str,
         ports: Ports,
-        policy: InputPolicy,
+        policy: BoundPolicy,
     ) -> None:
         """校验策略和声明端口是否匹配。
 
@@ -427,7 +449,7 @@ class Graph:
         """
 
         declared = tuple(ports)
-        if policy is InputPolicy.ON_START:
+        if policy.on_start:
             if declared:
                 raise GraphValidationError(
                     f"node {node_id!r} on_start policy requires zero inputs"

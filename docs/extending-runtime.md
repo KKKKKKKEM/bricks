@@ -103,6 +103,32 @@ Runtime 显式拥有传入的角色，`Runtime.close()` 会依次关闭 Worker �
 由 Runtime 统一关闭，避免共享 TaskBackend 被重复管理。
 
 TaskConsumer 的 `idle` 和 `wait_idle()` 只描述当前消费实例能够跟踪的工作，不是分布式系统的全局完成屏障；
+
+## 可确认的 Work 交付
+
+新版 TaskConsumer 向 handler 交付 `Delivery`，其中包含 `work` 和从 1 开始的 `attempt`。handler 返回：
+
+- `DeliveryResult.ack()`：执行成功，可以确认；
+- `DeliveryResult.retry(error)`：请求重新投递；
+- `DeliveryResult.reject(error)`：永久拒绝，并向等待方报告错误。
+
+默认内存 backend 支持立即重试，默认最多交付 3 次，可用 `MemoryTaskBackend(max_delivery_attempts=...)` 调整。旧
+handler 仍可通过 Delivery 的只读 Work 属性并返回 `None`，该形式按 ACK 处理。
+持久 backend 应自行实现 consumer lease、visibility timeout、redelivery、最大重试次数和 dead-letter 策略；核心协议不宣称
+这些能力已经由接口自动提供。
+
+## Runtime 观测
+
+`Runtime.observe_runtime(observer)` 订阅 execution、Node、Event 和 Work 的只读生命周期事实。事件不包含业务输入输出，
+observer 抛出的异常会被隔离，因此日志、Tracing 和指标插件不能改变 Graph 结果。返回的 handle 可用 `detach()` 卸载。
+
+## 输入策略 contribution
+
+高级插件可以从 `bricks.engine` 导入 `PolicyRef`，并通过 `runtime.register_policy(name, selector)` 注册 namespaced
+selector。selector 只能读取端口名称、各端口可用 token 数和冻结配置，返回本次各消费一个 token 的端口元组或 `None`。
+Graph 注册时会绑定 selector 快照；缺失、重复、空端口或不存在端口的选择都会失败。默认 Runtime 中应先
+`runtime.register()` 冻结 Graph，再调用 `graph.plan()`；自行组装 Runtime 时也可以显式将同一 `PolicyRegistry` 交给
+GraphWorker 和 `graph.plan(..., policies=registry)`。
 TaskPublisher 不等待远端消费者执行完成。
 
 ## 动态 Node Hook

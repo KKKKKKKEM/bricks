@@ -14,11 +14,46 @@ with Runtime() as runtime:
 的值；即使它是 Mapping 也不会被拆开。入口有多个端口时，必须传入端口名完全匹配的 Mapping。零输入入口只
 接受 `None` 或 `{}`。
 
-`Runtime.arun()` 会在后台执行 Graph，避免阻塞异步调用方；取消调用方 Task 时会协作式取消对应 execution。
+`Execution` 同时支持同步和异步等待。异步代码推荐启动后直接 await：
+
+```python
+execution = runtime.start("parse.graph", payload)
+outputs = await execution
+```
+
+取消等待该 Execution 的 asyncio Task 时，会协作式取消底层 execution。`Runtime.arun()` 保留为等价便利接口，内部也是
+`await runtime.start(...)`，不再维护独立的执行路径。
+
+## Terminal Output 流
+
+除最终 `tuple[Output, ...]` 外，调用方可以按产生顺序消费所有没有下游 Edge 的 Output：
+
+```python
+for output in runtime.iter("crawl.graph", payload):
+    consume(output)
+
+async for output in runtime.aiter("crawl.graph", payload):
+    await consume(output)
+```
+
+也可以直接迭代 Execution：
+
+```python
+execution = runtime.start("crawl.graph", payload, output_buffer=64)
+for output in execution:
+    consume(output)
+
+all_outputs = execution.result()
+```
+
+Execution 保留完整 terminal Output，因此迭代可以重放，`result()` 仍返回完整 tuple。活跃迭代器存在时，生产者与每个
+消费者之间最多保留 `output_buffer` 个未读 Output；没有流消费者时不会为了背压阻塞 `result()`。若 Graph 在发布部分
+Output 后失败，已发布 Output 不撤回，迭代器在读完它们后抛出执行异常。停止迭代不会隐式取消 Graph，需要调用
+`execution.cancel()` 显式取消。
 
 ## 执行控制
 
-`run()`、`arun()` 和 `start()` 接受相同的整图控制参数：
+`run()`、`arun()`、`start()`、`iter()` 和 `aiter()` 接受相同的整图控制参数：
 
 ```python
 outputs = runtime.run(

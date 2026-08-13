@@ -8,6 +8,7 @@ uv run python examples/fan_in.py
 uv run python examples/cycle.py
 uv run python examples/event_routing.py
 uv run python examples/async_node.py
+uv run python examples/output_stream.py
 ```
 
 ## 1. 线性处理
@@ -45,6 +46,20 @@ graph = (
 ```
 
 若 `ALL` Node 只收到部分输入，Graph 停止时会抛出 `IncompleteInputsError`，而不是悄悄丢弃数据。
+
+## Keyed join
+
+`ALL` 是按每个端口 FIFO 取值的 positional join，不会读取业务 key。乱序相关数据应使用官方扩展：
+
+```python
+from bricks.extensions import KeyedJoin, KeyedValue
+
+join = KeyedJoin(max_pending=10_000)
+```
+
+`KeyedJoin` 接收 `left` 和 `right` 两个 `KeyedValue`，只配对 key 相同的值；同 key 的重复值保持 FIFO。状态隔离在
+当前 execution 和 node binding 内。图静止时仍有未配对值会抛出 `IncompleteInputsError`，缓存超过 `max_pending`
+则抛出 `OverflowError`，不会静默错配或无限增长。
 
 `InputPolicy.ANY` 适合“任一输入到达即可处理”的消费者；它按 Ports 声明顺序从第一个就绪端口取一个值，因此
 Node 必须能根据实际存在的 key 区分输入来源。
@@ -103,3 +118,28 @@ class DelayedUpper(AsyncNode):
 
 队列路由中的 `concurrency` 限制整张 Graph 的同时执行数。对于单个需要等待 I/O 的 Node，继承 `AsyncNode`；
 对于多份彼此独立的工作，使用 Event 路由和命名队列。
+
+## 6. 流式终端输出
+
+[`examples/output_stream.py`](../examples/output_stream.py) 展示一个 Graph 产生多个 terminal Output 时的同步与异步
+消费方式：
+
+```python
+execution = runtime.start("output-stream", 4, output_buffer=2)
+
+for output in execution:
+    print(output.value)
+
+all_outputs = execution.result()
+```
+
+异步代码可以直接迭代 Runtime 便利接口，也可以 await Execution 获取最终结果：
+
+```python
+async for output in runtime.aiter("output-stream", 4):
+    print(output.value)
+
+outputs = await runtime.start("output-stream", 4)
+```
+
+`output_buffer` 限制活跃消费者的未读窗口。流式迭代结束后，Execution 仍保留完整 terminal Output tuple。

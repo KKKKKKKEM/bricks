@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import enum
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -40,6 +41,70 @@ class Work:
             raise TypeError("work limits must be ExecutionLimits")
 
 
+@dataclass(frozen=True, slots=True)
+class Delivery:
+    """一次可确认的 Work 投递；attempt 从 1 开始并随重投递递增。"""
+
+    work: Work
+    attempt: int = 1
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.work, Work):
+            raise TypeError("delivery work must be Work")
+        if type(self.attempt) is not int or self.attempt < 1:
+            raise ValueError("delivery attempt must be an integer greater than zero")
+
+    @property
+    def graph(self) -> str:
+        return self.work.graph
+
+    @property
+    def inputs(self) -> Any:
+        return self.work.inputs
+
+    @property
+    def trigger(self) -> Event | None:
+        return self.work.trigger
+
+    @property
+    def id(self) -> str:
+        return self.work.id
+
+    @property
+    def limits(self) -> ExecutionLimits:
+        return self.work.limits
+
+
+class DeliveryOutcome(str, enum.Enum):
+    ACK = "ack"
+    RETRY = "retry"
+    REJECT = "reject"
+
+
+@dataclass(frozen=True, slots=True)
+class DeliveryResult:
+    """由 handler 返回给 backend 的唯一交付决定。"""
+
+    outcome: DeliveryOutcome
+    error: BaseException | None = field(default=None, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.outcome, DeliveryOutcome):
+            raise TypeError("delivery outcome must be DeliveryOutcome")
+
+    @classmethod
+    def ack(cls) -> DeliveryResult:
+        return cls(DeliveryOutcome.ACK)
+
+    @classmethod
+    def retry(cls, error: BaseException | None = None) -> DeliveryResult:
+        return cls(DeliveryOutcome.RETRY, error)
+
+    @classmethod
+    def reject(cls, error: BaseException | None = None) -> DeliveryResult:
+        return cls(DeliveryOutcome.REJECT, error)
+
+
 class EventBus(Protocol):
     """发布和订阅 Event 的替换协议。"""
 
@@ -66,7 +131,7 @@ class EventBus(Protocol):
         """关闭传输。"""
 
 
-WorkHandler = Callable[[Work], None]
+WorkHandler = Callable[[Delivery], DeliveryResult | None]
 
 
 class TaskPublisher(Protocol):

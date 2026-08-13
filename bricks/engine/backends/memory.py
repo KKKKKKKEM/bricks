@@ -13,7 +13,14 @@ from threading import Condition, RLock
 from ..core import _validate_timeout, require_non_empty_string
 from ..events import Event
 from ..slots import SlotPool
-from .protocols import EventHandler, Work, WorkHandler
+from .protocols import (
+    Delivery,
+    DeliveryOutcome,
+    DeliveryResult,
+    EventHandler,
+    Work,
+    WorkHandler,
+)
 
 
 class MemoryEventBus:
@@ -125,16 +132,21 @@ class _Consumer:
 @dataclass(slots=True)
 class _Channel:
     consumers: list[_Consumer]
-    queued: deque[Work]
+    queued: deque[Delivery]
     next_consumer: int = 0
 
 
 class MemoryTaskBackend:
     """使用内存队列和线程池执行 Work 的默认实现。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_delivery_attempts: int = 3) -> None:
+        if type(max_delivery_attempts) is not int or max_delivery_attempts < 1:
+            raise ValueError(
+                "max_delivery_attempts must be an integer greater than zero"
+            )
+        self._max_delivery_attempts = max_delivery_attempts
         self._channels: dict[str, _Channel] = {}
-        self._pending: set[Future[None]] = set()
+        self._pending: set[Future[DeliveryResult | None]] = set()
         self._failures: deque[BaseException] = deque()
         self._condition = Condition(RLock())
         self._slot_subscriptions: dict[int, tuple[SlotPool, Callable[[], None]]] = {}
@@ -191,7 +203,7 @@ class MemoryTaskBackend:
             if self._closed:
                 raise RuntimeError("task backend is closed")
             channel = self._channels.setdefault(queue, _Channel([], deque()))
-            channel.queued.append(work)
+            channel.queued.append(Delivery(work))
             self._drain_channel(channel)
 
     def wait_idle(self, timeout: float | None = None) -> None:
@@ -238,32 +250,60 @@ class MemoryTaskBackend:
     def _done(
         self,
         consumer: _Consumer,
-        work: Work,
-        future: Future[None],
+        delivery: Delivery,
+        future: Future[DeliveryResult | None],
     ) -> None:
         failure = future.exception()
+        result = None if failure is not None else future.result()
         with self._condition:
             self._pending.discard(future)
             consumer.active -= 1
             if failure is not None:
                 self._failures.append(failure)
-        if work._slot_lease is not None:
-            work._slot_lease.release()
+            elif result is None:
+                pass  # Backward-compatible implicit ACK.
+            elif not isinstance(result, DeliveryResult):
+                failure = TypeError("work handler must return DeliveryResult")
+                self._failures.append(failure)
+            elif result.outcome is DeliveryOutcome.RETRY:
+                if delivery.attempt >= self._max_delivery_attempts:
+                    self._failures.append(
+                        result.error
+                        or RuntimeError(
+                            f"work {delivery.id!r} exhausted "
+                            f"max_delivery_attempts={self._max_delivery_attempts}"
+                        )
+                    )
+                else:
+                    if delivery.work._slot_lease is not None:
+                        delivery.work._slot_lease.retain()
+                    channel = next(
+                        channel
+                        for channel in self._channels.values()
+                        if consumer in channel.consumers
+                    )
+                    channel.queued.appendleft(
+                        Delivery(delivery.work, delivery.attempt + 1)
+                    )
+            elif result.outcome is DeliveryOutcome.REJECT and result.error is not None:
+                self._failures.append(result.error)
+        if delivery.work._slot_lease is not None:
+            delivery.work._slot_lease.release()
         with self._condition:
             self._drain_all()
             self._condition.notify_all()
 
-    def _dispatch(self, consumer: _Consumer, work: Work) -> None:
+    def _dispatch(self, consumer: _Consumer, delivery: Delivery) -> None:
         consumer.active += 1
         try:
-            future = consumer.executor.submit(consumer.handler, work)
+            future = consumer.executor.submit(consumer.handler, delivery)
         except BaseException:
             consumer.active -= 1
-            if work._slot_lease is not None:
-                work._slot_lease.release()
+            if delivery.work._slot_lease is not None:
+                delivery.work._slot_lease.release()
             raise
         self._pending.add(future)
-        future.add_done_callback(partial(self._done, consumer, work))
+        future.add_done_callback(partial(self._done, consumer, delivery))
 
     def _drain_all(self) -> None:
         channels = tuple(self._channels.values())
@@ -282,32 +322,38 @@ class MemoryTaskBackend:
             continuation = next(
                 (
                     index
-                    for index, work in enumerate(channel.queued)
-                    if work._slot_lease is not None
+                    for index, delivery in enumerate(channel.queued)
+                    if delivery.work._slot_lease is not None
                 ),
                 None,
             )
             if continuation is not None:
-                work = channel.queued[continuation]
+                delivery = channel.queued[continuation]
                 del channel.queued[continuation]
                 consumer = available[0]
                 self._advance_consumer(channel, consumer)
-                self._dispatch(consumer, work)
+                self._dispatch(consumer, delivery)
                 continue
 
-            work = channel.queued[0]
-            assigned: tuple[_Consumer, Work] | None = None
+            delivery = channel.queued[0]
+            assigned: tuple[_Consumer, Delivery] | None = None
             for consumer in available:
                 lease = consumer.slots._try_acquire()
                 if lease is not None:
-                    assigned = (consumer, replace(work, _slot_lease=lease))
+                    assigned = (
+                        consumer,
+                        replace(
+                            delivery,
+                            work=replace(delivery.work, _slot_lease=lease),
+                        ),
+                    )
                     break
             if assigned is None:
                 return
             channel.queued.popleft()
-            consumer, work = assigned
+            consumer, delivery = assigned
             self._advance_consumer(channel, consumer)
-            self._dispatch(consumer, work)
+            self._dispatch(consumer, delivery)
 
     @staticmethod
     def _advance_consumer(channel: _Channel, consumer: _Consumer) -> None:

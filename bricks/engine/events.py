@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -35,7 +35,15 @@ Emit = Callable[[Event], None]
 class Context:
     """向当前 Node 暴露事件、Slot 和协作式执行检查点。"""
 
-    __slots__ = ("_checkpoint", "_emit", "_is_cancelled", "_slot")
+    __slots__ = (
+        "_checkpoint",
+        "_emit",
+        "_finalizers",
+        "_is_cancelled",
+        "_local",
+        "_scope",
+        "_slot",
+    )
 
     def __init__(
         self,
@@ -44,6 +52,9 @@ class Context:
         *,
         checkpoint: Callable[[], None] | None = None,
         is_cancelled: Callable[[], bool] | None = None,
+        local: MutableMapping[str, MutableMapping[str, Any]] | None = None,
+        finalizers: list[Callable[[], None]] | None = None,
+        scope: str = "",
     ) -> None:
         """绑定 Runtime 的内部事件接收函数。"""
 
@@ -55,6 +66,9 @@ class Context:
         self._slot = slot
         self._checkpoint = _noop if checkpoint is None else checkpoint
         self._is_cancelled = _false if is_cancelled is None else is_cancelled
+        self._local = {} if local is None else local
+        self._finalizers = [] if finalizers is None else finalizers
+        self._scope = scope
         if not callable(self._checkpoint) or not callable(self._is_cancelled):
             raise TypeError("context control callbacks must be callable")
 
@@ -81,6 +95,20 @@ class Context:
         """让同步 Node 协作式响应取消、总超时和单 Node 超时。"""
 
         self._checkpoint()
+
+    def state(self, namespace: str) -> MutableMapping[str, Any]:
+        """返回当前 execution 内、按插件命名空间隔离的临时状态。"""
+
+        namespace = require_non_empty_string(namespace, "context state namespace")
+        scoped = f"{self._scope}:{namespace}" if self._scope else namespace
+        return self._local.setdefault(scoped, {})
+
+    def on_quiescence(self, callback: Callable[[], None]) -> None:
+        """注册一次 execution 静止后的校验或清理回调。"""
+
+        if not callable(callback):
+            raise TypeError("quiescence callback must be callable")
+        self._finalizers.append(callback)
 
 
 def _noop() -> None:

@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from functools import partial
 from threading import RLock
 from typing import Any
 
 from .backends import (
+    Delivery,
+    DeliveryResult,
     Emit,
     EventBus,
     GraphExecutor,
@@ -35,6 +36,15 @@ from .execution import Execution, ExecutionLimits, ExecutionStatus
 from .executor import Engine
 from .graph import ExecutionPlan, Graph
 from .hooks import HookHandle, HookPhase, NodeHook
+from .observation import (
+    CompositeObserverHandle,
+    ObservationHub,
+    ObserverHandle,
+    RuntimeEvent,
+    RuntimeEventKind,
+    RuntimeObserver,
+)
+from .policies import InputSelector, PolicyRegistry
 from .slots import Slot, SlotPool, _SlotLease
 
 EventHandler = Callable[[Event], None]
@@ -49,6 +59,7 @@ class EventRouter:
         publisher: TaskPublisher,
         events: EventBus | None = None,
         close_injected: bool = False,
+        observations: ObservationHub | None = None,
     ) -> None:
         if type(close_injected) is not bool:
             raise TypeError("close_injected must be a boolean")
@@ -60,6 +71,7 @@ class EventRouter:
         self._publisher = publisher
         self._owned_components = owned
         self._close_injected = close_injected
+        self._observations = ObservationHub() if observations is None else observations
         self._routes: set[tuple[str, str, str]] = set()
         self._lock = RLock()
         self._closed = False
@@ -145,6 +157,9 @@ class EventRouter:
             if isinstance(exc, Exception):
                 raise EventDispatchError(event, exc) from exc
             raise
+        self._observations.publish(
+            RuntimeEvent(RuntimeEventKind.EVENT_PUBLISHED, event_type=event.type)
+        )
 
     def wait_idle(self, timeout: float | None = None) -> None:
         """等待当前 Router 已接受的 Event 投递完成。"""
@@ -196,15 +211,22 @@ class EventRouter:
         if lease is not None:
             lease.retain()
         try:
-            self._publisher.submit(
-                queue,
-                Work(
-                    graph,
-                    event.payload,
-                    trigger=event,
-                    _slot_lease=lease,
-                    limits=limits,
-                ),
+            work = Work(
+                graph,
+                event.payload,
+                trigger=event,
+                _slot_lease=lease,
+                limits=limits,
+            )
+            self._publisher.submit(queue, work)
+            self._observations.publish(
+                RuntimeEvent(
+                    RuntimeEventKind.WORK_SUBMITTED,
+                    graph=graph,
+                    work_id=work.id,
+                    event_type=event.type,
+                    attributes={"queue": queue},
+                )
             )
         except BaseException:
             if lease is not None:
@@ -227,12 +249,16 @@ class GraphWorker:
         executor: GraphExecutor | None = None,
         emit: Emit | None = None,
         close_injected: bool = False,
+        observations: ObservationHub | None = None,
+        policies: PolicyRegistry | None = None,
     ) -> None:
         if type(close_injected) is not bool:
             raise TypeError("close_injected must be a boolean")
         owned: list[object] = []
+        if observations is None:
+            observations = ObservationHub()
         if executor is None:
-            executor = Engine()
+            executor = Engine(observations=observations)
             owned.append(executor)
         self._consumer = consumer
         self._executor = executor
@@ -241,6 +267,8 @@ class GraphWorker:
             raise TypeError("worker emitter must be callable")
         self._owned_components = owned
         self._close_injected = close_injected
+        self._observations = observations
+        self._policies = PolicyRegistry() if policies is None else policies
         self._graphs: dict[str, Graph] = {}
         self._queues: dict[str, tuple[int, SlotPool]] = {}
         self._owned_slot_pools: list[SlotPool] = []
@@ -272,7 +300,7 @@ class GraphWorker:
         if not isinstance(graph, Graph):
             raise TypeError("graph must be a Graph")
         if not graph.frozen:
-            graph.freeze()
+            graph.freeze(self._policies)
         with self._lock:
             if name in self._graphs:
                 raise BricksRuntimeError(f"duplicate registered graph {name!r}")
@@ -318,7 +346,7 @@ class GraphWorker:
             try:
                 self._consumer.bind(
                     queue,
-                    self._execute_work,
+                    self._execute_delivery,
                     concurrency=concurrency,
                     slots=slots,
                 )
@@ -339,15 +367,18 @@ class GraphWorker:
         plan: ExecutionPlan | None = None,
         max_steps: int = 0,
         timeout: float | None = None,
+        output_buffer: int = 64,
     ) -> tuple[Output, ...]:
         """同步直接执行一个已注册 Graph。"""
 
-        execution = self._new_execution(
+        return self.start(
             graph,
+            inputs,
+            plan=plan,
             max_steps=max_steps,
             timeout=timeout,
-        )
-        return self._execute_direct(execution, inputs, plan)
+            output_buffer=output_buffer,
+        ).result()
 
     def start(
         self,
@@ -357,6 +388,7 @@ class GraphWorker:
         plan: ExecutionPlan | None = None,
         max_steps: int = 0,
         timeout: float | None = None,
+        output_buffer: int = 64,
     ) -> Execution:
         """在后台启动 Graph，并立即返回可等待和取消的 Execution。"""
 
@@ -364,7 +396,17 @@ class GraphWorker:
             graph,
             max_steps=max_steps,
             timeout=timeout,
+            output_buffer=output_buffer,
         )
+        self._submit_direct(execution, inputs, plan)
+        return execution
+
+    def _submit_direct(
+        self,
+        execution: Execution,
+        inputs: Any,
+        plan: ExecutionPlan | None,
+    ) -> None:
         with self._lock:
             try:
                 future = self._direct_executor.submit(
@@ -378,7 +420,6 @@ class GraphWorker:
                 raise
             self._direct_pending.add(future)
             future.add_done_callback(self._direct_done)
-        return execution
 
     async def arun(
         self,
@@ -388,6 +429,7 @@ class GraphWorker:
         plan: ExecutionPlan | None = None,
         max_steps: int = 0,
         timeout: float | None = None,
+        output_buffer: int = 64,
     ) -> tuple[Output, ...]:
         """在线程中直接执行 Graph，避免阻塞异步调用方。"""
 
@@ -397,12 +439,53 @@ class GraphWorker:
             plan=plan,
             max_steps=max_steps,
             timeout=timeout,
+            output_buffer=output_buffer,
         )
-        try:
-            return await asyncio.to_thread(execution.result)
-        except asyncio.CancelledError:
-            execution.cancel()
-            raise
+        return await execution
+
+    def iter(
+        self,
+        graph: str,
+        inputs: Any = None,
+        *,
+        plan: ExecutionPlan | None = None,
+        max_steps: int = 0,
+        timeout: float | None = None,
+        output_buffer: int = 64,
+    ) -> Iterator[Output]:
+        """启动 Graph 并同步迭代 terminal Output。"""
+
+        execution = self._new_execution(
+            graph,
+            max_steps=max_steps,
+            timeout=timeout,
+            output_buffer=output_buffer,
+        )
+        stream = iter(execution)
+        self._submit_direct(execution, inputs, plan)
+        return stream
+
+    def aiter(
+        self,
+        graph: str,
+        inputs: Any = None,
+        *,
+        plan: ExecutionPlan | None = None,
+        max_steps: int = 0,
+        timeout: float | None = None,
+        output_buffer: int = 64,
+    ) -> AsyncIterator[Output]:
+        """启动 Graph 并异步迭代 terminal Output。"""
+
+        execution = self._new_execution(
+            graph,
+            max_steps=max_steps,
+            timeout=timeout,
+            output_buffer=output_buffer,
+        )
+        stream = execution.__aiter__()
+        self._submit_direct(execution, inputs, plan)
+        return stream
 
     def get_execution(self, execution_id: str) -> Execution:
         """按 ID 返回当前进程保留的 Execution。"""
@@ -448,6 +531,16 @@ class GraphWorker:
             graph=graph,
             node=node,
         )
+
+    def register_policy(self, name: str, selector: InputSelector) -> GraphWorker:
+        """注册 selector contribution；使用它的 Graph 必须尚未冻结。"""
+
+        self._ensure_open()
+        self._policies.register(name, selector)
+        return self
+
+    def observe_runtime(self, observer: RuntimeObserver) -> ObserverHandle:
+        return self._observations.attach(observer)
 
     def wait_idle(self, timeout: float | None = None) -> None:
         """等待当前 Worker 已接受的 Work 完成。"""
@@ -518,6 +611,41 @@ class GraphWorker:
             if exc_value is None:
                 raise
 
+    def _execute_delivery(self, item: Delivery | Work) -> DeliveryResult:
+        """执行可确认交付，并兼容旧 backend 直接传入 Work。"""
+
+        legacy = isinstance(item, Work)
+        delivery = Delivery(item) if legacy else item
+        work = delivery.work
+        try:
+            self._execute_work(work)
+        except BaseException as exc:
+            self._observations.publish(
+                RuntimeEvent(
+                    RuntimeEventKind.WORK_FINISHED,
+                    graph=work.graph,
+                    execution_id=work.id,
+                    work_id=work.id,
+                    status="rejected",
+                    error_type=type(exc).__name__,
+                    attributes={"attempt": delivery.attempt},
+                )
+            )
+            if legacy:
+                raise
+            return DeliveryResult.reject(exc)
+        self._observations.publish(
+            RuntimeEvent(
+                RuntimeEventKind.WORK_FINISHED,
+                graph=work.graph,
+                execution_id=work.id,
+                work_id=work.id,
+                status="acked",
+                attributes={"attempt": delivery.attempt},
+            )
+        )
+        return DeliveryResult.ack()
+
     def _execute_work(self, work: Work) -> None:
         execution = Execution(
             work.graph,
@@ -553,12 +681,14 @@ class GraphWorker:
         *,
         max_steps: int,
         timeout: float | None,
+        output_buffer: int,
     ) -> Execution:
         self._ensure_open()
         self._get_graph(graph)
         execution = Execution(
             graph,
             limits=ExecutionLimits(max_steps, timeout),
+            output_buffer=output_buffer,
         )
         self._record_execution(execution)
         return execution
@@ -591,6 +721,13 @@ class GraphWorker:
         execution._bind_node_timeouts(graph._execution_timeouts())
         if not execution._start():
             return execution.result(0)
+        self._observations.publish(
+            RuntimeEvent(
+                RuntimeEventKind.EXECUTION_STARTED,
+                graph=execution.graph,
+                execution_id=execution.id,
+            )
+        )
         try:
             outputs = self._executor.execute(
                 execution.graph,
@@ -601,10 +738,30 @@ class GraphWorker:
                 slot=slot,
                 execution=execution,
             )
+            execution._complete_outputs(outputs)
         except BaseException as exc:
             execution._fail(exc)
+            self._observations.publish(
+                RuntimeEvent(
+                    RuntimeEventKind.EXECUTION_FINISHED,
+                    graph=execution.graph,
+                    execution_id=execution.id,
+                    status=execution.status.value,
+                    error_type=type(exc).__name__,
+                    attributes={"steps": execution.steps},
+                )
+            )
             raise
         execution._succeed(outputs)
+        self._observations.publish(
+            RuntimeEvent(
+                RuntimeEventKind.EXECUTION_FINISHED,
+                graph=execution.graph,
+                execution_id=execution.id,
+                status=execution.status.value,
+                attributes={"steps": execution.steps},
+            )
+        )
         return execution.result(0)
 
     def _record_execution(self, execution: Execution) -> None:
@@ -667,17 +824,22 @@ class Runtime:
             raise TypeError("Runtime requires both router and worker")
         owned: tuple[object, ...] = ()
         if router is None:
+            observations = ObservationHub()
+            policies = PolicyRegistry()
             events = MemoryEventBus()
             backend = MemoryTaskBackend()
-            executor = Engine()
+            executor = Engine(observations=observations)
             router = EventRouter(
                 events=events,
                 publisher=backend,
+                observations=observations,
             )
             worker = GraphWorker(
                 consumer=backend,
                 executor=executor,
                 emit=router.publish,
+                observations=observations,
+                policies=policies,
             )
             owned = (events, backend, executor)
         if not isinstance(router, EventRouter):
@@ -739,6 +901,7 @@ class Runtime:
         plan: ExecutionPlan | None = None,
         max_steps: int = 0,
         timeout: float | None = None,
+        output_buffer: int = 64,
     ) -> tuple[Output, ...]:
         return self.worker.run(
             graph,
@@ -746,6 +909,45 @@ class Runtime:
             plan=plan,
             max_steps=max_steps,
             timeout=timeout,
+            output_buffer=output_buffer,
+        )
+
+    def iter(
+        self,
+        graph: str,
+        inputs: Any = None,
+        *,
+        plan: ExecutionPlan | None = None,
+        max_steps: int = 0,
+        timeout: float | None = None,
+        output_buffer: int = 64,
+    ) -> Iterator[Output]:
+        return self.worker.iter(
+            graph,
+            inputs,
+            plan=plan,
+            max_steps=max_steps,
+            timeout=timeout,
+            output_buffer=output_buffer,
+        )
+
+    def aiter(
+        self,
+        graph: str,
+        inputs: Any = None,
+        *,
+        plan: ExecutionPlan | None = None,
+        max_steps: int = 0,
+        timeout: float | None = None,
+        output_buffer: int = 64,
+    ) -> AsyncIterator[Output]:
+        return self.worker.aiter(
+            graph,
+            inputs,
+            plan=plan,
+            max_steps=max_steps,
+            timeout=timeout,
+            output_buffer=output_buffer,
         )
 
     def start(
@@ -756,6 +958,7 @@ class Runtime:
         plan: ExecutionPlan | None = None,
         max_steps: int = 0,
         timeout: float | None = None,
+        output_buffer: int = 64,
     ) -> Execution:
         return self.worker.start(
             graph,
@@ -763,6 +966,7 @@ class Runtime:
             plan=plan,
             max_steps=max_steps,
             timeout=timeout,
+            output_buffer=output_buffer,
         )
 
     async def arun(
@@ -773,6 +977,7 @@ class Runtime:
         plan: ExecutionPlan | None = None,
         max_steps: int = 0,
         timeout: float | None = None,
+        output_buffer: int = 64,
     ) -> tuple[Output, ...]:
         return await self.worker.arun(
             graph,
@@ -780,6 +985,7 @@ class Runtime:
             plan=plan,
             max_steps=max_steps,
             timeout=timeout,
+            output_buffer=output_buffer,
         )
 
     def get_execution(self, execution_id: str) -> Execution:
@@ -797,6 +1003,17 @@ class Runtime:
         node: str | None = None,
     ) -> HookHandle:
         return self.worker.attach(hook, phase=phase, graph=graph, node=node)
+
+    def register_policy(self, name: str, selector: InputSelector) -> Runtime:
+        self.worker.register_policy(name, selector)
+        return self
+
+    def observe_runtime(self, observer: RuntimeObserver) -> CompositeObserverHandle:
+        """订阅只读执行、Node、Event 和 Work 生命周期事件。"""
+
+        hubs = {id(self.router._observations): self.router._observations}
+        hubs[id(self.worker._observations)] = self.worker._observations
+        return CompositeObserverHandle(tuple(hub.attach(observer) for hub in hubs.values()))
 
     def on(
         self,
