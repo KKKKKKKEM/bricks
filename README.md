@@ -11,6 +11,9 @@ Graph -- Event / Runtime --> Graph
 顶层 API 还提供 `Slot` 与 `SlotPool`：队列 Work 可以跨 Consumer 传递并复用代理、Cookie、连接等执行状态，
 而不依赖具体线程。
 
+执行默认不限步数和时长；`run()`、`start()` 和事件 route 可按需设置 `max_steps` 与 Graph `timeout`，单次
+Node firing 的时限由该 Node 的 `timeout` 属性声明。`start()` 返回可查询和协作式取消的 `Execution`。
+
 ## 最小示例
 
 ```python
@@ -20,6 +23,7 @@ from bricks import Graph, Node, Output, Ports, Runtime
 class Upper(Node):
     input_ports = Ports(text=str)
     output_ports = Ports(result=str)
+    timeout = 5
 
     def execute(self, inputs, context):
         del context

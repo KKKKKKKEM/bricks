@@ -225,7 +225,8 @@ Executor 使用 FIFO 就绪队列，每次只让一个 Node 消费一组输入�
 1. 应用用 `Graph.add(node_id, node)` 或 `Graph.add(parse=..., store=...)` 建图；Node ID 只标识 Graph 中的
    binding，Node 行为本身可以复用。
 2. `Runtime.register(name, graph)` 冻结并校验 Graph，包括入口、可达性、Ports 类型和 InputPolicy；Graph 可以含环。
-3. `Runtime.run()` 直接把注册名和输入交给 GraphExecutor；`ExecutionPlan` 可以把本次执行限制在严格子图中。
+3. `Runtime.run()` 直接把注册名、输入与 Execution 控制交给 GraphExecutor；`ExecutionPlan` 可以把本次执行限制
+   在严格子图中，`Runtime.start()` 则返回可查询和取消的 Execution。
 4. Executor 按 InputPolicy 组合输入并调用 Node。Node 返回的 `Output` 沿 `Edge` 进入下游端口；没有下游的
    Output 成为 `run()` 的返回值。
 5. Node 可以通过 `Context.emit()` 发布 `Event`，应用也可以通过 `Runtime.emit()` 发布；Event 不会隐式变成

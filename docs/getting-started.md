@@ -9,6 +9,7 @@ from bricks import Graph, Node, Output, Ports, Runtime
 class Upper(Node):
     input_ports = Ports(text=str)
     output_ports = Ports(result=str)
+    timeout = 5  # None 表示该 Node 的单次执行不限时
 
     def execute(self, inputs, context):
         del context
@@ -26,6 +27,17 @@ assert outputs == (Output("BRICKS", port="result"),)
 
 单节点没有下游 Edge，因此它产生的 `Output` 会作为 `Runtime.run()` 的返回值。若把 output port 连接给另一个
 Node，它只在同一张 Graph 内传播。
+
+默认不限制执行步数和时长。需要约束循环或外部调用时，可以显式配置：
+
+```python
+outputs = runtime.run(
+    "upper.graph",
+    "bricks",
+    max_steps=10,       # 0 表示无限步
+    timeout=30,         # None 表示 Graph 总时长不限
+)
+```
 
 ## 运行仓库中的示例
 

@@ -43,9 +43,11 @@ TaskPublisher 的 `submit()` 正常返回即表示后端已接受 Work，同时�
 - TaskPublisher 把 Work 提交到命名 queue，`submit()` 正常返回表示后端已经接受；TaskConsumer 的
   `bind(queue, handler, concurrency=..., slots=...)` 在调度根 Work 前从 SlotPool 获取 lease，延续 Work 则保留
   自身 lease。等待 Slot 的根 Work 不能占用 concurrency，Work 完成或失败后必须释放它持有的 lease。
-- GraphExecutor 接收注册名、冻结 Graph、入口输入和 Event emitter；若替换执行器，就必须保留 Graph 的
-  Ports、InputPolicy、Output、Edge、Event 和 `slot=` 语义。自定义执行器若还实现 `HookableGraphExecutor` 的 `attach()`，
-  `Runtime.attach()` 会按结构化能力委托给它，并不要求执行器继承默认 `Engine`。
+- GraphExecutor 接收注册名、冻结 Graph、入口输入、Event emitter、可选 ExecutionPlan，以及关键字参数
+  `slot=` 和 `execution=`。GraphWorker 会把冻结后的 Node timeout 快照绑定到 Execution；替换执行器必须为每次
+  Node firing 使用 `with execution.step(node_id): ...` 包住完整调用，并在调度边界调用
+  `execution.checkpoint()`，从而保留步数、取消和 timeout 语义。自定义执行器若还实现
+  `HookableGraphExecutor` 的 `attach()`，`Runtime.attach()` 会按结构化能力委托给它。
 
 可参考 [test_backends.py](../tests/engine/test_backends.py) 中的同步替身：它验证三个能力可独立替换，也验证
 Runtime 不依赖默认内存实现的私有字段。
@@ -60,6 +62,7 @@ Runtime 不依赖默认内存实现的私有字段。
 - `wait_idle()` 在分布式场景下具体表示什么；
 - `close()` 是停止接收、排空本地任务，还是等待远程 broker 完成；
 - payload 的序列化限制，以及幂等性由谁保证。
+- `Work.limits` 与 execution ID 如何跨进程传递，取消请求如何送达执行进程。
 
 不要仅因后端名为 Redis 或 MQ 就暗示这些能力已经存在。领域 ID、去重和外部副作用的幂等性仍应由领域模型
 显式实现。

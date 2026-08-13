@@ -129,10 +129,15 @@ class RecordingExecutor:
         graph: Graph,
         inputs: object,
         emit: Callable[[Event], None],
+        plan=None,
         *,
         slot=None,
+        execution=None,
     ) -> tuple[Output, ...]:
-        del graph, emit, slot
+        del emit, plan, slot
+        if execution is not None:
+            with execution.step(graph.entrypoint):
+                pass
         self.calls.append((name, inputs))
         return ()
 

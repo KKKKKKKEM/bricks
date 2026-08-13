@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import inspect
+from collections.abc import Callable
 from threading import Event as ThreadEvent
 from threading import RLock, Thread, current_thread
 from typing import Any
@@ -25,7 +27,13 @@ class LocalRunner:
         self._thread.start()
         self._ready.wait()
 
-    def resolve(self, value: Any) -> Any:
+    def resolve(
+        self,
+        value: Any,
+        *,
+        checkpoint: Callable[[], None] | None = None,
+        wait_timeout: Callable[[], float | None] | None = None,
+    ) -> Any:
         """原样返回同步值，或同步等待后台 loop 上的 awaitable。"""
 
         if not inspect.isawaitable(value):
@@ -44,7 +52,22 @@ class LocalRunner:
             future = asyncio.run_coroutine_threadsafe(
                 self._await(value), self._loop
             )
-        return future.result()
+        if checkpoint is None:
+            return future.result()
+        try:
+            while True:
+                checkpoint()
+                remaining = None if wait_timeout is None else wait_timeout()
+                poll = 0.05 if remaining is None else min(0.05, remaining)
+                try:
+                    return future.result(timeout=poll)
+                except concurrent.futures.TimeoutError:
+                    if future.done():
+                        return future.result()
+                    checkpoint()
+        except BaseException:
+            future.cancel()
+            raise
 
     def close(self) -> None:
         """停止后台 loop，并等待专用线程退出。"""

@@ -65,6 +65,26 @@ def test_graph_freezes_typed_dag() -> None:
     assert len(graph.edges) == 1
 
 
+def test_graph_rejects_all_node_without_every_required_incoming_port() -> None:
+    """ALL Node 的必需端口没有任何入边时应在冻结阶段失败。"""
+
+    class Join(Node):
+        input_ports = Ports(left=str, right=str)
+        output_ports = Ports()
+
+        def execute(self, inputs, context: Context) -> None:
+            del inputs, context
+
+    graph = (
+        Graph(entrypoint="source")
+        .add(source=Source(), join=Join())
+        .connect("source", "join", source_port="value", target_port="left")
+    )
+
+    with pytest.raises(GraphValidationError, match="join.*right"):
+        graph.freeze()
+
+
 def test_graph_adds_keyword_node_bindings() -> None:
     """关键字名称直接作为 Graph 内的 Node ID。"""
 
@@ -153,6 +173,18 @@ def test_graph_rejects_sync_async_mismatch() -> None:
 
     graph = Graph(entrypoint="wrong").add("wrong", Wrong())
     with pytest.raises(GraphValidationError, match="sync execute"):
+        graph.freeze()
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan"), True, "1"])
+def test_graph_rejects_invalid_node_timeout(timeout: object) -> None:
+    """Node timeout 必须是 None 或有限正数。"""
+
+    source = Source()
+    source.timeout = timeout  # type: ignore[assignment]
+    graph = Graph(entrypoint="source").add(source=source)
+
+    with pytest.raises(GraphValidationError, match="source.*timeout"):
         graph.freeze()
 
 

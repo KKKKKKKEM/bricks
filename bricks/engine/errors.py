@@ -53,6 +53,26 @@ class ExecutionError(BricksRuntimeError):
         self.event = event
 
 
+class ExecutionControlError(ExecutionError):
+    """执行因调用方配置的控制条件而终止。"""
+
+
+class ExecutionCancelledError(ExecutionControlError):
+    """执行收到协作式取消请求。"""
+
+
+class ExecutionTimeoutError(ExecutionControlError, TimeoutError):
+    """整张 Graph 超过允许的总执行时长。"""
+
+
+class NodeTimeoutError(ExecutionControlError, TimeoutError):
+    """一次 Node firing 超过允许的执行时长。"""
+
+
+class StepLimitExceededError(ExecutionControlError):
+    """Graph 尝试执行超过允许步数的 Node firing。"""
+
+
 class HookExecutionError(ExecutionError):
     """Hook 返回非法数据、修改调用身份或在非法阶段发出信号。"""
 

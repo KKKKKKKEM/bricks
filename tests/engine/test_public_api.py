@@ -9,14 +9,17 @@ from bricks import Event, Ports
 
 
 def test_top_level_api_contains_only_core_vocabulary() -> None:
-    """顶层 API 不再暴露运行账本和 checkpoint DTO。"""
+    """顶层只增加可控执行句柄，不暴露内部调度与 checkpoint DTO。"""
 
     assert bricks.__all__ == [
         "AsyncNode",
         "Context",
         "Edge",
         "Event",
+        "Execution",
+        "ExecutionLimits",
         "ExecutionPlan",
+        "ExecutionStatus",
         "Graph",
         "InputPolicy",
         "Node",

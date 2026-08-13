@@ -90,7 +90,7 @@ class _Registration:
 class HookHandle:
     """控制一项动态 Hook 注册。"""
 
-    __slots__ = ("_registry", "_registration_id")
+    __slots__ = ("_registration_id", "_registry")
 
     def __init__(self, registry: HookRegistry, registration_id: int) -> None:
         self._registry = registry
@@ -101,7 +101,7 @@ class HookHandle:
 
         self._registry._detach(self._registration_id)
 
-    def __enter__(self) -> HookHandle:
+    def __enter__(self) -> HookHandle:  # noqa: PYI034
         return self
 
     def __exit__(self, *args: object) -> None:
@@ -116,17 +116,17 @@ class _FunctionHook(NodeHook):
         self._function = function
         self._phase = phase
 
-    def enter(self, call: NodeCall) -> object:
+    def enter(self, call: NodeCall) -> Any:
         if self._phase is HookPhase.ENTER:
             return self._function(call)
         return call
 
-    def exit(self, call: NodeCall, outputs: Outputs) -> object:
+    def exit(self, call: NodeCall, outputs: Outputs) -> Any:
         if self._phase is HookPhase.EXIT:
             return self._function(call, outputs)
         return outputs
 
-    def error(self, call: NodeCall, error: Exception) -> object:
+    def error(self, call: NodeCall, error: Exception) -> Any:
         if self._phase is HookPhase.ERROR:
             return self._function(call, error)
         raise error

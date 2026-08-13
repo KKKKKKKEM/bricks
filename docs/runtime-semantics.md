@@ -14,7 +14,53 @@ with Runtime() as runtime:
 的值；即使它是 Mapping 也不会被拆开。入口有多个端口时，必须传入端口名完全匹配的 Mapping。零输入入口只
 接受 `None` 或 `{}`。
 
-`Runtime.arun()` 会把 `run()` 放到工作线程，避免阻塞异步调用方；它不改变 Graph、Output 或 Event 的语义。
+`Runtime.arun()` 会在后台执行 Graph，避免阻塞异步调用方；取消调用方 Task 时会协作式取消对应 execution。
+
+## 执行控制
+
+`run()`、`arun()` 和 `start()` 接受相同的整图控制参数：
+
+```python
+outputs = runtime.run(
+    "crawl.graph",
+    payload,
+    max_steps=1000,
+    timeout=60,
+)
+```
+
+- `max_steps=0` 表示不限步数；正整数限制 Node firing 次数。Node 每消费一组输入并开始调用一次，计为一步。
+- `timeout=None` 表示 Graph 总执行时长不限；正数表示秒数。
+
+单次 Node firing 的时限是 Node 自身的配置：
+
+```python
+class Fetch(AsyncNode):
+    timeout = 10
+
+    async def execute(self, inputs, context):
+        ...
+```
+
+`Node.timeout=None` 是默认值，表示该 Node 不限时；有限正数表示秒数。一次 firing 的 Hook 与 Node 调用共用这段
+预算。Graph 冻结时会校验并固定该配置，不存在 Runtime 级的统一 Node timeout。
+
+以上默认值保持无限制。超过限制分别抛出 `StepLimitExceededError`、`ExecutionTimeoutError` 或
+`NodeTimeoutError`。限制不会撤回已经发布的 Event。
+
+需要身份、状态、查询或取消时使用 `start()`：
+
+```python
+execution = runtime.start("crawl.graph", payload, timeout=60)
+execution.cancel()
+outputs = execution.result()
+
+same = runtime.get_execution(execution.id)
+```
+
+`Execution` 记录 `id`、`status`、`steps`、当前 Node、起止时间、输出和异常。`cancel()` 是协作式取消：异步
+Node 的 await 会被及时中断；同步 Node 可在长循环中调用 `context.checkpoint()`。无法安全强杀的普通同步函数会
+在返回后检查 deadline，因此超过 timeout 后产生的外部副作用不会被自动撤销。
 
 ## 事件路由与并发
 
@@ -27,6 +73,8 @@ runtime.on(
     graph="crawl.graph",
     queue="crawl",
     concurrency=20,
+    max_steps=1000,
+    timeout=300,
 )
 runtime.emit("crawl.task.created", {"url": "https://example.com"})
 runtime.wait_idle()
@@ -40,6 +88,8 @@ runtime.wait_idle()
 默认 `MemoryEventBus` 在调用 `emit()` 的线程同步调用观察者并提交路由任务；目标 Graph 不在源 Node 的调用
 栈执行。默认 `MemoryTaskBackend` 使用线程池。`concurrency` 限制当前 Runtime/Worker 实例同时执行的完整
 Graph 数量，而不是集群全局并发，也不是其中某一个 Node 的并发数。
+`on()` 与 `route()` 的执行限制会写入每个 Work；跨 Graph 事件链中的每个 Work 都是独立 execution，独立计步和
+计时。
 
 ## Slot 与逻辑并发
 
@@ -70,6 +120,9 @@ Slot 与 Work 链绑定而不是与线程绑定。它可由一个 Consumer 的 W
 | --- | --- |
 | Graph 定义错误 | `GraphValidationError`（在 `freeze()` / `register()` 时） |
 | Node 抛异常 | `ExecutionError`，带有 `graph` 和 `node` 信息 |
+| 取消 execution | `ExecutionCancelledError` |
+| Graph 或 Node 超时 | `ExecutionTimeoutError` / `NodeTimeoutError` |
+| 超过最大步数 | `StepLimitExceededError` |
 | 输入或输出类型不匹配 | `PortValueTypeError` |
 | Node 返回非法值或端口 | `InvalidOutputError` |
 | 半组输入遗留 | `IncompleteInputsError` |

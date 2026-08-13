@@ -9,6 +9,7 @@ import pytest
 
 from bricks import (
     AsyncNode,
+    Event,
     Graph,
     InputPolicy,
     Node,
@@ -20,10 +21,12 @@ from bricks import (
 )
 from bricks.engine import (
     Context,
+    GraphWorker,
     IncompleteInputsError,
     InvalidOutputError,
     PortValueTypeError,
 )
+from bricks.engine.backends import MemoryTaskBackend
 
 
 class Split(Node):
@@ -292,7 +295,7 @@ def test_cycle_quiescence_reports_incomplete_inputs() -> None:
 
     class Loop(Node):
         input_ports = Ports(value=int)
-        output_ports = Ports(again=int, partial=int, done=int)
+        output_ports = Ports(again=int, partial=int, absent=int, done=int)
 
         def execute(self, inputs, context: Context):
             del context
@@ -317,6 +320,7 @@ def test_cycle_quiescence_reports_incomplete_inputs() -> None:
         .add(loop=Loop(), join=Join())
         .connect("loop", "loop", source_port="again", target_port="value")
         .connect("loop", "join", source_port="partial", target_port="left")
+        .connect("loop", "join", source_port="absent", target_port="right")
     )
 
     with Runtime() as runtime:
@@ -857,6 +861,56 @@ def test_failed_work_releases_its_slot() -> None:
     runtime.close()
 
 
+def test_rejected_emitted_event_releases_its_retained_slot() -> None:
+    """Emitter 拒绝接管 Event 时回滚为它保留的 Slot 引用。"""
+
+    def reject(event) -> None:
+        del event
+        raise ValueError("rejected event")
+
+    slots = SlotPool(1)
+    lease = slots._acquire()
+    worker = GraphWorker(
+        consumer=MemoryTaskBackend(),
+        emit=reject,
+        close_injected=True,
+    )
+
+    with pytest.raises(ValueError, match="rejected event"):
+        worker._emit_with_lease(lease, Event("rejected"))
+
+    lease.release()
+    assert slots.available == 1
+    worker.close()
+
+
+def test_failed_event_dispatch_releases_forwarded_slot_once() -> None:
+    """EventBus 失败后 Router 与 Worker 交接 lease 时不会重复释放。"""
+
+    class Relay(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports()
+
+        def execute(self, inputs, context: Context) -> None:
+            context.emit("rejected", inputs["value"])
+
+    def reject(event) -> None:
+        del event
+        raise ValueError("rejected event")
+
+    slots = SlotPool(1)
+    runtime = Runtime()
+    runtime.register("relay.graph", Graph(entrypoint="relay").add(relay=Relay()))
+    runtime.observe("rejected", reject)
+    runtime.on("relay", graph="relay.graph", queue="relay", slots=slots)
+    runtime.emit("relay", 1)
+
+    with pytest.raises(Exception, match="rejected event"):
+        runtime.wait_idle()
+    assert slots.available == 1
+    runtime.close()
+
+
 def test_waiting_roots_do_not_starve_slot_continuations() -> None:
     """根 Work 等 Slot 时不占 Worker，携带 lease 的下游 Work 可继续执行。"""
 
@@ -1052,8 +1106,9 @@ def test_runtime_reports_incomplete_join() -> None:
         .add("split", LeftOnly())
         .add("join", Join())
         .connect("split", "join", source_port="left", target_port="left")
+        .connect("split", "join", source_port="right", target_port="right")
     )
-    # Join.right 仍由声明策略覆盖；没有 Edge 不影响静态合法性。
+    # 两个必需端口都有 Edge，但本次 Node firing 只产生 left。
     graph.freeze()
     with Runtime() as runtime:
         runtime.register("incomplete.graph", graph)

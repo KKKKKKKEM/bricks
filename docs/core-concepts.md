@@ -7,6 +7,7 @@ Bricks 只区分两种流动：Graph 内的值流动，以及 Graph 间的事件
 | 单张 Graph | `Output`、`Edge` | 把一个 Node 的值交给下游 Node |
 | 多张 Graph | `Event`、`Context.emit()`、`Runtime.on()` | 发布领域事实并异步启动工作 |
 | 逻辑执行链 | `Slot`、`SlotPool`、`Context.slot` | 跨 Work 与 Consumer 复用执行状态 |
+| 单次执行 | `Execution`、`ExecutionLimits` | 查询状态、控制步数/时长并协作式取消 |
 | 动态执行扩展 | `Runtime.attach()`、`NodeHook` | 不修改冻结 Graph，转换 Node 输入、结果和流程 |
 
 ## Ports 与 Node
@@ -18,6 +19,7 @@ Bricks 只区分两种流动：Graph 内的值流动，以及 Graph 间的事件
 class Parse(Node):
     input_ports = Ports(raw=str)
     output_ports = Ports(length=int)
+    timeout = 5
 
     def execute(self, inputs, context):
         del context
@@ -33,8 +35,9 @@ class Parse(Node):
 输出的端口必须声明在 `output_ports` 中，值也必须满足声明类型。未连接到 Edge 的合法输出会成为本次
 `Runtime.run()` 的终端输出。
 
-同步工作继承 `Node`；需要 await 的工作继承 `AsyncNode` 并把 `execute` 写为 `async def`。冻结时会校验继承
-类别与方法风格匹配。
+同步工作继承 `Node`；需要 await 的工作继承 `AsyncNode` 并把 `execute` 写为 `async def`。`timeout` 是单次
+Node firing 的可选秒数限制，默认 `None` 表示不限时。冻结时会校验继承类别、方法风格和 timeout，并固定这些
+执行元数据。
 
 ## Graph 与 Edge
 
@@ -53,8 +56,8 @@ graph = (
 `add(node_id, node)`；ID 属于 Graph binding，不是 Node 自身属性，因此同一个无状态 Node 行为可以用不同 ID
 复用。
 
-冻结会拒绝以下定义：空图或未知入口、重复节点/边、未知端口、端口类型不兼容、不可从入口到达的节点，以及
-不合法的输入策略。`Runtime.register()` 会自动冻结尚未冻结的 Graph。
+冻结会拒绝以下定义：空图或未知入口、重复节点/边、未知端口、端口类型不兼容、不可从入口到达的节点、`ALL`
+Node 的必需端口没有任何入边，以及不合法的输入策略。`Runtime.register()` 会自动冻结尚未冻结的 Graph。
 
 Graph 是普通有向图，Edge 可以回到上游或形成自环。循环不需要特殊 Edge；Node 通过是否继续产生连接到回路的
 Output 决定循环是否继续：
@@ -78,8 +81,10 @@ graph = (
 )
 ```
 
-执行器不会按步数或运行时间截断循环。只要回路继续产生可消费的数据，本次 execution 就继续运行；所有可执行
-Node 和端口队列都清空后，Graph 才自然结束。
+执行器默认不会截断循环：execution 的 `max_steps=0` 和 Graph `timeout=None` 表示无限制，每个 Node 的
+`timeout=None` 也表示单次 firing 不限时。调用方可在 `run()`、`arun()`、`start()` 或事件 route 上设置整图限制，
+Node 时限则由各 Node 分别声明。只要回路继续产生可消费的数据，本次 execution 就继续运行；所有可执行 Node 和
+端口队列都清空后，Graph 才自然结束。
 
 ### ExecutionPlan：从完整 Graph 选择子路径
 
@@ -127,7 +132,8 @@ class CreateTask(Node):
 ```
 
 `Context` 不提供数据库、HTTP 客户端、Runtime 或队列。把这些依赖通过 Node 构造器显式注入。Node 本身应保持
-可重入；单次执行状态放在输入、事件 payload 或领域 Store 中。
+可重入；单次执行状态放在输入、事件 payload 或领域 Store 中。长时间运行的同步 Node 应周期性调用
+`context.checkpoint()`，以协作式响应取消和 timeout。
 
 队列执行时，`Context.slot` 是当前逻辑执行链独占的 `Slot`。它是一个长期存在的可变 Mapping，适合保存代理、
 Cookie、连接或插件缓存：

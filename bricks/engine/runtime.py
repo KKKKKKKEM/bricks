@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import OrderedDict
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from functools import partial
 from threading import RLock
 from typing import Any
@@ -29,10 +31,11 @@ from .errors import (
     UnknownGraphError,
 )
 from .events import Event
+from .execution import Execution, ExecutionLimits, ExecutionStatus
 from .executor import Engine
 from .graph import ExecutionPlan, Graph
 from .hooks import HookHandle, HookPhase, NodeHook
-from .slots import SlotPool, _SlotLease
+from .slots import Slot, SlotPool, _SlotLease
 
 EventHandler = Callable[[Event], None]
 
@@ -84,6 +87,7 @@ class EventRouter:
         graph: str,
         queue: str,
         subscription: str | None = None,
+        limits: ExecutionLimits | None = None,
     ) -> EventRouter:
         """订阅 Event，并向队列投递目标 Graph 的 Work。"""
 
@@ -91,6 +95,10 @@ class EventRouter:
         event_type = require_non_empty_string(event_type, "subscription event type")
         graph = require_non_empty_string(graph, "route graph")
         queue = require_non_empty_string(queue, "route queue")
+        if limits is None:
+            limits = ExecutionLimits()
+        if not isinstance(limits, ExecutionLimits):
+            raise TypeError("route limits must be ExecutionLimits or None")
         if subscription is None:
             subscription = f"route:{event_type}:{graph}:{queue}"
         else:
@@ -103,7 +111,7 @@ class EventRouter:
                 raise BricksRuntimeError(f"duplicate event route {route!r}")
             self._events.subscribe(
                 event_type,
-                partial(self._submit, graph, queue),
+                partial(self._submit, graph, queue, limits),
                 subscription=subscription,
             )
             self._routes.add(route)
@@ -124,18 +132,19 @@ class EventRouter:
     def publish(self, event: Event) -> None:
         """向 EventBus 发布一项 Event，供 GraphWorker emitter 使用。"""
 
-        try:
-            self._ensure_open()
-        except BaseException:
-            if event._slot_lease is not None:
-                event._slot_lease.release()
-            raise
+        self._ensure_open()
         try:
             self._events.publish(event)
-        except EventDispatchError:
+        except BaseException as exc:
+            # EventBus consumed its reference even when dispatch failed. Restore
+            # it so a rejected emitter call leaves ownership with its caller.
+            if event._slot_lease is not None:
+                event._slot_lease.retain()
+            if isinstance(exc, EventDispatchError):
+                raise
+            if isinstance(exc, Exception):
+                raise EventDispatchError(event, exc) from exc
             raise
-        except Exception as exc:
-            raise EventDispatchError(event, exc) from exc
 
     def wait_idle(self, timeout: float | None = None) -> None:
         """等待当前 Router 已接受的 Event 投递完成。"""
@@ -176,7 +185,13 @@ class EventRouter:
             if exc_value is None:
                 raise
 
-    def _submit(self, graph: str, queue: str, event: Event) -> None:
+    def _submit(
+        self,
+        graph: str,
+        queue: str,
+        limits: ExecutionLimits,
+        event: Event,
+    ) -> None:
         lease = event._slot_lease
         if lease is not None:
             lease.retain()
@@ -188,6 +203,7 @@ class EventRouter:
                     event.payload,
                     trigger=event,
                     _slot_lease=lease,
+                    limits=limits,
                 ),
             )
         except BaseException:
@@ -229,13 +245,24 @@ class GraphWorker:
         self._queues: dict[str, tuple[int, SlotPool]] = {}
         self._owned_slot_pools: list[SlotPool] = []
         self._lock = RLock()
+        self._direct_executor = ThreadPoolExecutor(
+            thread_name_prefix="bricks-direct",
+        )
+        self._direct_pending: set[Future[tuple[Output, ...]]] = set()
+        self._executions: OrderedDict[str, Execution] = OrderedDict()
+        self._history_limit = 1000
         self._closed = False
 
     @property
     def idle(self) -> bool:
         """返回当前 Worker 是否没有正在执行或排队的 Work。"""
 
-        return self._consumer.idle
+        with self._lock:
+            return (
+                self._consumer.idle
+                and not self._direct_pending
+                and all(execution.done for execution in self._executions.values())
+            )
 
     def register(self, name: str, graph: Graph) -> GraphWorker:
         """以稳定名称注册并冻结一张 Graph。"""
@@ -310,16 +337,48 @@ class GraphWorker:
         inputs: Any = None,
         *,
         plan: ExecutionPlan | None = None,
+        max_steps: int = 0,
+        timeout: float | None = None,
     ) -> tuple[Output, ...]:
         """同步直接执行一个已注册 Graph。"""
 
-        self._ensure_open()
-        registered = self._get_graph(graph)
-        if plan is None:
-            return self._executor.execute(graph, registered, inputs, self._emit)
-        return self._executor.execute(
-            graph, registered, inputs, self._emit, plan=plan
+        execution = self._new_execution(
+            graph,
+            max_steps=max_steps,
+            timeout=timeout,
         )
+        return self._execute_direct(execution, inputs, plan)
+
+    def start(
+        self,
+        graph: str,
+        inputs: Any = None,
+        *,
+        plan: ExecutionPlan | None = None,
+        max_steps: int = 0,
+        timeout: float | None = None,
+    ) -> Execution:
+        """在后台启动 Graph，并立即返回可等待和取消的 Execution。"""
+
+        execution = self._new_execution(
+            graph,
+            max_steps=max_steps,
+            timeout=timeout,
+        )
+        with self._lock:
+            try:
+                future = self._direct_executor.submit(
+                    self._execute_direct,
+                    execution,
+                    inputs,
+                    plan,
+                )
+            except BaseException as exc:
+                execution._fail(exc)
+                raise
+            self._direct_pending.add(future)
+            future.add_done_callback(self._direct_done)
+        return execution
 
     async def arun(
         self,
@@ -327,10 +386,41 @@ class GraphWorker:
         inputs: Any = None,
         *,
         plan: ExecutionPlan | None = None,
+        max_steps: int = 0,
+        timeout: float | None = None,
     ) -> tuple[Output, ...]:
         """在线程中直接执行 Graph，避免阻塞异步调用方。"""
 
-        return await asyncio.to_thread(self.run, graph, inputs, plan=plan)
+        execution = self.start(
+            graph,
+            inputs,
+            plan=plan,
+            max_steps=max_steps,
+            timeout=timeout,
+        )
+        try:
+            return await asyncio.to_thread(execution.result)
+        except asyncio.CancelledError:
+            execution.cancel()
+            raise
+
+    def get_execution(self, execution_id: str) -> Execution:
+        """按 ID 返回当前进程保留的 Execution。"""
+
+        execution_id = require_non_empty_string(execution_id, "execution id")
+        with self._lock:
+            try:
+                return self._executions[execution_id]
+            except KeyError as exc:
+                raise BricksRuntimeError(
+                    f"unknown execution {execution_id!r}"
+                ) from exc
+
+    def executions(self) -> tuple[Execution, ...]:
+        """返回当前进程保留的 Execution 快照。"""
+
+        with self._lock:
+            return tuple(self._executions.values())
 
     def attach(
         self,
@@ -362,7 +452,35 @@ class GraphWorker:
     def wait_idle(self, timeout: float | None = None) -> None:
         """等待当前 Worker 已接受的 Work 完成。"""
 
-        self._consumer.wait_idle(timeout)
+        _validate_timeout(timeout)
+        deadline = None if timeout is None else time.monotonic() + timeout
+        failure: BaseException | None = None
+        while True:
+            try:
+                self._consumer.wait_idle(_remaining(deadline))
+            except BaseException as exc:
+                if not self._consumer.idle:
+                    raise
+                if failure is None:
+                    failure = exc
+            with self._lock:
+                pending = tuple(self._direct_pending)
+                active = tuple(
+                    execution
+                    for execution in self._executions.values()
+                    if not execution.done
+                )
+            if pending:
+                _, unfinished = wait(pending, timeout=_remaining(deadline))
+                if unfinished:
+                    raise TimeoutError("GraphWorker did not become idle")
+            for execution in active:
+                if not execution.wait(_remaining(deadline)):
+                    raise TimeoutError("GraphWorker did not become idle")
+            if self.idle:
+                if failure is not None:
+                    raise failure
+                return
 
     def close(self) -> None:
         """排空本地 Work，并关闭当前 Worker 拥有的组件。"""
@@ -383,6 +501,7 @@ class GraphWorker:
             else tuple(self._owned_components)
         )
         failure = _close_components(reversed(components), failure)
+        self._direct_executor.shutdown(wait=True)
         failure = _close_components(reversed(self._owned_slot_pools), failure)
         if failure is not None:
             raise failure
@@ -400,34 +519,124 @@ class GraphWorker:
                 raise
 
     def _execute_work(self, work: Work) -> None:
-        graph = self._get_graph(work.graph)
-        lease = work._slot_lease
-        if lease is None:
-            raise BricksRuntimeError("TaskConsumer dispatched Work without a Slot")
+        execution = Execution(
+            work.graph,
+            limits=work.limits,
+            id=work.id,
+        )
+        self._record_execution(execution)
         try:
+            graph = self._get_graph(work.graph)
+            lease = work._slot_lease
+            if lease is None:
+                raise BricksRuntimeError("TaskConsumer dispatched Work without a Slot")
             with lease.slot._execution_lock:
                 emit = partial(self._emit_with_lease, lease)
-                self._executor.execute(
-                    work.graph,
+                self._execute(
+                    execution,
                     graph,
                     work.inputs,
                     emit,
                     slot=lease.slot,
                 )
-        except ExecutionError as exc:
-            if exc.event is None:
+        except BaseException as exc:
+            if execution.status is ExecutionStatus.PENDING:
+                execution._start()
+            execution._fail(exc)
+            if isinstance(exc, ExecutionError) and exc.event is None:
                 exc.event = work.trigger
             raise
 
+    def _new_execution(
+        self,
+        graph: str,
+        *,
+        max_steps: int,
+        timeout: float | None,
+    ) -> Execution:
+        self._ensure_open()
+        self._get_graph(graph)
+        execution = Execution(
+            graph,
+            limits=ExecutionLimits(max_steps, timeout),
+        )
+        self._record_execution(execution)
+        return execution
+
+    def _execute_direct(
+        self,
+        execution: Execution,
+        inputs: Any,
+        plan: ExecutionPlan | None,
+    ) -> tuple[Output, ...]:
+        graph = self._get_graph(execution.graph)
+        return self._execute(
+            execution,
+            graph,
+            inputs,
+            self._emit,
+            plan=plan,
+        )
+
+    def _execute(
+        self,
+        execution: Execution,
+        graph: Graph,
+        inputs: Any,
+        emit: Emit,
+        *,
+        plan: ExecutionPlan | None = None,
+        slot: Slot | None = None,
+    ) -> tuple[Output, ...]:
+        execution._bind_node_timeouts(graph._execution_timeouts())
+        if not execution._start():
+            return execution.result(0)
+        try:
+            outputs = self._executor.execute(
+                execution.graph,
+                graph,
+                inputs,
+                emit,
+                plan=plan,
+                slot=slot,
+                execution=execution,
+            )
+        except BaseException as exc:
+            execution._fail(exc)
+            raise
+        execution._succeed(outputs)
+        return execution.result(0)
+
+    def _record_execution(self, execution: Execution) -> None:
+        with self._lock:
+            if execution.id in self._executions:
+                raise BricksRuntimeError(f"duplicate execution {execution.id!r}")
+            self._executions[execution.id] = execution
+            while len(self._executions) > self._history_limit:
+                for execution_id, retained in self._executions.items():
+                    if retained.done:
+                        del self._executions[execution_id]
+                        break
+                else:
+                    break
+
+    def _direct_done(self, future: Future[tuple[Output, ...]]) -> None:
+        with self._lock:
+            self._direct_pending.discard(future)
+
     def _emit_with_lease(self, lease: _SlotLease, event: Event) -> None:
-        # EventBus owns this reference until it finishes dispatching the Event.
+        # A successful emitter call transfers this reference to the EventBus.
         lease.retain()
         forwarded = Event(
             event.type,
             event.payload,
             _slot_lease=lease,
         )
-        self._emit(forwarded)
+        try:
+            self._emit(forwarded)
+        except BaseException:
+            lease.release()
+            raise
 
     def _get_graph(self, name: str) -> Graph:
         name = require_non_empty_string(name, "registered graph name")
@@ -496,12 +705,16 @@ class Runtime:
         graph: str,
         queue: str,
         subscription: str | None = None,
+        max_steps: int = 0,
+        timeout: float | None = None,
     ) -> Runtime:
+        limits = ExecutionLimits(max_steps, timeout)
         self.router.route(
             event_type,
             graph=graph,
             queue=queue,
             subscription=subscription,
+            limits=limits,
         )
         return self
 
@@ -524,8 +737,33 @@ class Runtime:
         inputs: Any = None,
         *,
         plan: ExecutionPlan | None = None,
+        max_steps: int = 0,
+        timeout: float | None = None,
     ) -> tuple[Output, ...]:
-        return self.worker.run(graph, inputs, plan=plan)
+        return self.worker.run(
+            graph,
+            inputs,
+            plan=plan,
+            max_steps=max_steps,
+            timeout=timeout,
+        )
+
+    def start(
+        self,
+        graph: str,
+        inputs: Any = None,
+        *,
+        plan: ExecutionPlan | None = None,
+        max_steps: int = 0,
+        timeout: float | None = None,
+    ) -> Execution:
+        return self.worker.start(
+            graph,
+            inputs,
+            plan=plan,
+            max_steps=max_steps,
+            timeout=timeout,
+        )
 
     async def arun(
         self,
@@ -533,8 +771,22 @@ class Runtime:
         inputs: Any = None,
         *,
         plan: ExecutionPlan | None = None,
+        max_steps: int = 0,
+        timeout: float | None = None,
     ) -> tuple[Output, ...]:
-        return await self.worker.arun(graph, inputs, plan=plan)
+        return await self.worker.arun(
+            graph,
+            inputs,
+            plan=plan,
+            max_steps=max_steps,
+            timeout=timeout,
+        )
+
+    def get_execution(self, execution_id: str) -> Execution:
+        return self.worker.get_execution(execution_id)
+
+    def executions(self) -> tuple[Execution, ...]:
+        return self.worker.executions()
 
     def attach(
         self,
@@ -555,6 +807,8 @@ class Runtime:
         concurrency: int = 1,
         slots: SlotPool | None = None,
         subscription: str | None = None,
+        max_steps: int = 0,
+        timeout: float | None = None,
     ) -> Runtime:
         """组合注册 Event route，并启动对应 queue 的本地消费者。"""
 
@@ -565,6 +819,8 @@ class Runtime:
             graph=graph,
             queue=queue,
             subscription=subscription,
+            max_steps=max_steps,
+            timeout=timeout,
         )
 
     def wait_idle(self, timeout: float | None = None) -> None:
@@ -614,8 +870,7 @@ class Runtime:
 
 
 def _reject_emit(event: Event) -> None:
-    if event._slot_lease is not None:
-        event._slot_lease.release()
+    del event
     raise BricksRuntimeError("GraphWorker has no Event emitter")
 
 

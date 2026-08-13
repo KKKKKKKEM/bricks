@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -30,8 +31,8 @@ def _validate_timeout(timeout: float | None) -> None:
         return
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
         raise TypeError("timeout must be a number or None")
-    if timeout < 0:
-        raise ValueError("timeout must not be negative")
+    if not math.isfinite(timeout) or timeout < 0:
+        raise ValueError("timeout must be a finite non-negative number")
 
 
 class InputPolicy(str, enum.Enum):
@@ -48,6 +49,7 @@ class InputPolicy(str, enum.Enum):
     ) -> tuple[str, ...] | None:
         """选择下一次执行需要消费的端口。"""
 
+        groups: tuple[tuple[str, ...], ...]
         if self is InputPolicy.ALL:
             groups = (tuple(ports),)
         elif self is InputPolicy.ANY:
@@ -136,6 +138,7 @@ class Node(ABC):
     input_ports = Ports(default=object)
     output_ports = Ports(default=object)
     input_policy = InputPolicy.ALL
+    timeout: float | None = None
 
     @abstractmethod
     def execute(

@@ -14,6 +14,7 @@ from .core import (
     require_non_empty_string,
 )
 from .errors import (
+    ExecutionControlError,
     ExecutionError,
     HookExecutionError,
     IncompleteInputsError,
@@ -21,6 +22,7 @@ from .errors import (
     PortValueTypeError,
 )
 from .events import Context, Event
+from .execution import Execution, ExecutionStatus
 from .graph import ExecutionPlan, Graph
 from .hooks import (
     HookHandle,
@@ -61,6 +63,7 @@ class Engine:
         plan: ExecutionPlan | None = None,
         *,
         slot: Slot | None = None,
+        execution: Execution | None = None,
     ) -> tuple[Output, ...]:
         """执行一张 Graph 并返回终端 Output。"""
 
@@ -71,6 +74,12 @@ class Engine:
             raise TypeError("emit must be callable")
         if slot is not None and not isinstance(slot, Slot):
             raise TypeError("slot must be a Slot or None")
+        if execution is None:
+            execution = Execution(name)
+        elif not isinstance(execution, Execution):
+            raise TypeError("execution must be an Execution or None")
+        elif execution.graph != name:
+            raise ValueError("execution belongs to a different registered Graph")
         if not graph.frozen:
             raise RuntimeError("Engine requires a frozen Graph")
         if plan is not None:
@@ -78,13 +87,42 @@ class Engine:
                 raise TypeError("plan must be an ExecutionPlan")
             if plan._graph is not graph:
                 raise ValueError("execution plan belongs to a different Graph")
+        execution._bind_node_timeouts(graph._execution_timeouts())
 
-        prepared = self._coerce_inputs(graph, inputs)
-        snapshot = self.hooks.snapshot(name)
+        manages_lifecycle = execution.status is ExecutionStatus.PENDING
+        if manages_lifecycle and not execution._start():
+            return execution.result(0)
+        if not manages_lifecycle and execution.status is not ExecutionStatus.RUNNING:
+            raise RuntimeError("execution must be pending or running")
         try:
-            return self._run(name, graph, prepared, emit, snapshot, plan, slot)
-        except StopGraph as signal:
-            return self._coerce_outputs(signal.outputs, name, None, "StopGraph")
+            prepared = self._coerce_inputs(graph, inputs)
+            snapshot = self.hooks.snapshot(name)
+            try:
+                outputs = self._run(
+                    name,
+                    graph,
+                    prepared,
+                    emit,
+                    snapshot,
+                    plan,
+                    slot,
+                    execution,
+                )
+            except StopGraph as signal:
+                outputs = self._coerce_outputs(
+                    signal.outputs,
+                    name,
+                    None,
+                    "StopGraph",
+                )
+            if manages_lifecycle:
+                execution._succeed(outputs)
+                return execution.result(0)
+            return outputs
+        except BaseException as exc:
+            if manages_lifecycle:
+                execution._fail(exc)
+            raise
 
     def close(self) -> None:
         """关闭 Hook 注册表和后台异步 Runner。"""
@@ -113,6 +151,7 @@ class Engine:
         hook_snapshot: tuple[Any, ...],
         plan: ExecutionPlan | None,
         slot: Slot | None,
+        execution: Execution,
     ) -> tuple[Output, ...]:
         nodes = graph.nodes
         active_nodes = set(nodes) if plan is None else plan.nodes
@@ -157,6 +196,7 @@ class Engine:
                 scheduled.add(node_id)
 
         while ready:
+            execution._checkpoint()
             node_id = ready.popleft()
             scheduled.remove(node_id)
             node = nodes[node_id]
@@ -173,22 +213,30 @@ class Engine:
                     port: queues[node_id][port].popleft() for port in selection
                 }
 
-            try:
-                outputs = self._call_node(
-                    graph_name,
-                    node_id,
-                    node,
-                    MappingProxyType(consumed),
-                    Context(emit, slot),
-                    hooks_by_node[node_id],
-                    spec.input_ports,
-                )
-            except ShortCircuit as exc:
-                raise HookExecutionError(
-                    "ShortCircuit is only valid during hook enter",
-                    graph=graph_name,
-                    node=node_id,
-                ) from exc
+            context = Context(
+                emit,
+                slot,
+                checkpoint=execution.checkpoint,
+                is_cancelled=lambda: execution.cancel_requested,
+            )
+            with execution.step(node_id):
+                try:
+                    outputs = self._call_node(
+                        graph_name,
+                        node_id,
+                        node,
+                        MappingProxyType(consumed),
+                        context,
+                        hooks_by_node[node_id],
+                        spec.input_ports,
+                        execution,
+                    )
+                except ShortCircuit as exc:
+                    raise HookExecutionError(
+                        "ShortCircuit is only valid during hook enter",
+                        graph=graph_name,
+                        node=node_id,
+                    ) from exc
             for output in outputs:
                 declared = spec.output_ports
                 if output.port not in declared:
@@ -224,6 +272,7 @@ class Engine:
             # Consume one input group per turn so a hot cycle cannot starve peers.
             schedule_if_ready(node_id)
 
+        execution.checkpoint()
         leftovers = {
             f"{node_id}.{port}": len(values)
             for node_id, ports in queues.items()
@@ -246,6 +295,7 @@ class Engine:
         context: Context,
         hooks: tuple[NodeHook, ...],
         input_ports: Mapping[str, type[Any]],
+        execution: Execution,
     ) -> tuple[Output, ...]:
         """在 Hook 生命周期内调用 Node，并保留原始异常供 error 处理。"""
 
@@ -254,8 +304,9 @@ class Engine:
         def invoke(index: int, call: NodeCall) -> Outputs:
             if index == len(hooks):
                 try:
-                    result = self._runner.resolve(
-                        node.execute(call.inputs, context)
+                    result = self._resolve(
+                        node.execute(call.inputs, context),
+                        execution,
                     )
                 except (ShortCircuit, StopGraph) as signal:
                     raise HookExecutionError(
@@ -267,13 +318,13 @@ class Engine:
 
             hook = hooks[index]
             try:
-                entered = self._runner.resolve(hook.enter(call))
+                entered = self._resolve(hook.enter(call), execution)
             except ShortCircuit as signal:
                 outputs = self._coerce_outputs(
                     signal.outputs, graph_name, node_id, "ShortCircuit"
                 )
                 return self._resolve_hook_outputs(
-                    hook.exit(call, outputs), graph_name, node_id
+                    hook.exit(call, outputs), graph_name, node_id, execution
                 )
 
             entered = self._validate_hook_call(
@@ -281,12 +332,14 @@ class Engine:
             )
             try:
                 outputs = invoke(index + 1, entered)
-            except Exception as error:
+            except ExecutionControlError:
+                raise
+            except Exception as error:  # noqa: BLE001
                 outputs = self._resolve_hook_outputs(
-                    hook.error(entered, error), graph_name, node_id
+                    hook.error(entered, error), graph_name, node_id, execution
                 )
             return self._resolve_hook_outputs(
-                hook.exit(entered, outputs), graph_name, node_id
+                hook.exit(entered, outputs), graph_name, node_id, execution
             )
 
         try:
@@ -307,9 +360,18 @@ class Engine:
         value: object,
         graph_name: str,
         node_id: str,
+        execution: Execution,
     ) -> Outputs:
-        resolved = self._runner.resolve(value)
+        resolved = self._resolve(value, execution)
         return self._coerce_outputs(resolved, graph_name, node_id, "Hook")
+
+    def _resolve(self, value: object, execution: Execution) -> object:
+        checkpoint, wait_timeout = execution._callbacks()
+        return self._runner.resolve(
+            value,
+            checkpoint=checkpoint,
+            wait_timeout=wait_timeout,
+        )
 
     @staticmethod
     def _coerce_outputs(

@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from ..core import Output, require_non_empty_string
 from ..events import Event
+from ..execution import Execution, ExecutionLimits
 from ..graph import ExecutionPlan, Graph
 from ..hooks import HookHandle, HookPhase, NodeHook
 from ..slots import Slot, SlotPool, _SlotLease
@@ -30,10 +31,13 @@ class Work:
         kw_only=True,
     )
     id: str = field(default_factory=lambda: str(uuid4()), kw_only=True)
+    limits: ExecutionLimits = field(default_factory=ExecutionLimits, kw_only=True)
 
     def __post_init__(self) -> None:
         require_non_empty_string(self.graph, "work graph")
         require_non_empty_string(self.id, "work id")
+        if not isinstance(self.limits, ExecutionLimits):
+            raise TypeError("work limits must be ExecutionLimits")
 
 
 class EventBus(Protocol):
@@ -118,6 +122,7 @@ class GraphExecutor(Protocol):
         plan: ExecutionPlan | None = None,
         *,
         slot: Slot | None = None,
+        execution: Execution | None = None,
     ) -> tuple[Output, ...]:
         """执行 Graph 并返回终端 Output。"""
 

@@ -33,11 +33,18 @@ Emit = Callable[[Event], None]
 
 
 class Context:
-    """只向当前 Node 暴露跨 Graph 事件发布能力。"""
+    """向当前 Node 暴露事件、Slot 和协作式执行检查点。"""
 
-    __slots__ = ("_emit", "_slot")
+    __slots__ = ("_checkpoint", "_emit", "_is_cancelled", "_slot")
 
-    def __init__(self, emit: Emit, slot: Slot | None = None) -> None:
+    def __init__(
+        self,
+        emit: Emit,
+        slot: Slot | None = None,
+        *,
+        checkpoint: Callable[[], None] | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
+    ) -> None:
         """绑定 Runtime 的内部事件接收函数。"""
 
         if not callable(emit):
@@ -46,6 +53,10 @@ class Context:
             raise TypeError("context slot must be a Slot or None")
         self._emit = emit
         self._slot = slot
+        self._checkpoint = _noop if checkpoint is None else checkpoint
+        self._is_cancelled = _false if is_cancelled is None else is_cancelled
+        if not callable(self._checkpoint) or not callable(self._is_cancelled):
+            raise TypeError("context control callbacks must be callable")
 
     @property
     def slot(self) -> Slot | None:
@@ -59,3 +70,22 @@ class Context:
         event = Event(event_type, payload)
         self._emit(event)
         return event
+
+    @property
+    def cancelled(self) -> bool:
+        """返回当前 execution 是否已经收到取消请求。"""
+
+        return self._is_cancelled()
+
+    def checkpoint(self) -> None:
+        """让同步 Node 协作式响应取消、总超时和单 Node 超时。"""
+
+        self._checkpoint()
+
+
+def _noop() -> None:
+    return None
+
+
+def _false() -> bool:
+    return False

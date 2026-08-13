@@ -5,7 +5,7 @@
 
 ## 第一条：Less is more
 
-1. 顶层公共模型只保留 Graph 基础类型、Event、Context、Slot 和 Runtime。
+1. 顶层公共模型只保留 Graph 基础类型、Event、Context、Execution、Slot 和 Runtime。
 2. 内部责任划分不自动升级为用户概念。
 3. 删除错误抽象优先于维护错误抽象的兼容层。
 4. 新能力能由 Graph、Event、Runtime 和领域组件组合时，不进入核心。
@@ -15,7 +15,7 @@
 
 ```text
 Ports、Node、AsyncNode、InputPolicy、Output、Edge、Graph、ExecutionPlan、
-Event、Context、Slot、SlotPool、Runtime
+Event、Context、Execution、ExecutionLimits、ExecutionStatus、Slot、SlotPool、Runtime
 ```
 
 ## 第二条：局部数据流与跨图事件分离
@@ -70,7 +70,7 @@ Event、Context、Slot、SlotPool、Runtime
 
 ## 第八条：Context 保持狭窄
 
-1. Context 只提供 `emit()` 和当前逻辑执行链的 `slot`。
+1. Context 只提供 `emit()`、当前逻辑执行链的 `slot` 和协作式 `checkpoint()`。
 2. 数据库、HTTP client、LLM provider、领域 Store 和 tracing 通过 Node 构造器或观察者注入。
 3. Node 不得获得 Runtime 内部工作请求、TaskBackend 或 executor。
 
@@ -90,7 +90,15 @@ Event、Context、Slot、SlotPool、Runtime
 4. `concurrency` 限制 Consumer 的本地 Graph execution；`slots.size` 限制池中的逻辑执行链，两者相互独立。
 5. 等待 Slot 的根 Work 不得占用 Consumer 的执行线程，也不得阻塞已携带 Slot 的延续 Work。
 
-## 第十一条：公共行为必须可验证
+## 第十一条：Execution 控制必须默认开放
+
+1. 一次 Node firing 计为一步；`max_steps=0` 表示不限制步数。
+2. Graph execution 的 `timeout=None` 和 Node 的 `timeout=None` 表示各自不限制时长，正数统一使用秒。
+3. 取消和同步 Node timeout 是协作式语义；核心不得宣称能够安全强杀任意 Python 函数。
+4. 控制异常不得被 Node Hook 当作普通业务异常恢复。
+5. 跨 Graph 的每个 Work 是独立 execution，独立计步和计时。
+
+## 第十二条：公共行为必须可验证
 
 1. Graph 冻结与执行约束必须有失败测试。
 2. Event 提交、跨图连接、并发和错误传播必须有契约测试。

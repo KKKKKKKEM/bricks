@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -44,6 +45,7 @@ class NodeSpec:
     input_ports: Ports
     output_ports: Ports
     input_policy: InputPolicy
+    timeout: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +150,7 @@ class Graph:
         self._ensure_mutable()
         if args and nodes:
             raise TypeError("add accepts either (node_id, node) or keyword nodes")
+        bindings: tuple[tuple[object, object], ...]
         if args:
             if len(args) != 2:
                 raise TypeError("add expects a node_id and node")
@@ -293,6 +296,14 @@ class Graph:
         self._ensure_frozen()
         return self._node_specs[node_id]
 
+    def _execution_timeouts(self) -> Mapping[str, float | None]:
+        """返回冻结后的 Node timeout 快照。"""
+
+        self._ensure_frozen()
+        return MappingProxyType(
+            {node_id: spec.timeout for node_id, spec in self._node_specs.items()}
+        )
+
     def _outgoing_for(self, node_id: str, port: str) -> tuple[Edge, ...]:
         """返回指定 output port 的有序下游连接。
 
@@ -320,6 +331,7 @@ class Graph:
             inputs = node.input_ports
             outputs = node.output_ports
             policy = node.input_policy
+            timeout = node.timeout
             if not isinstance(inputs, Ports) or not isinstance(outputs, Ports):
                 raise GraphValidationError(
                     f"node {node_id!r} ports must be Ports"
@@ -328,11 +340,21 @@ class Graph:
                 raise GraphValidationError(
                     f"node {node_id!r} input_policy must be InputPolicy"
                 )
+            if timeout is not None:
+                if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+                    raise GraphValidationError(
+                        f"node {node_id!r} timeout must be a number or None"
+                    )
+                if not math.isfinite(timeout) or timeout <= 0:
+                    raise GraphValidationError(
+                        f"node {node_id!r} timeout must be finite and greater than zero"
+                    )
             self._validate_execute_style(node_id, node)
             self._validate_policy(node_id, inputs, policy)
-            specs[node_id] = NodeSpec(inputs, outputs, policy)
+            specs[node_id] = NodeSpec(inputs, outputs, policy, timeout)
 
         adjacency: dict[str, set[str]] = defaultdict(set)
+        incoming_ports: dict[str, set[str]] = defaultdict(set)
         for edge in self._edges:
             if edge.source not in self._nodes or edge.target not in self._nodes:
                 raise GraphValidationError(f"edge references unknown node: {edge!r}")
@@ -354,6 +376,7 @@ class Graph:
                     f"{edge.target}.{edge.target_port}"
                 )
             adjacency[edge.source].add(edge.target)
+            incoming_ports[edge.target].add(edge.target_port)
 
         reachable = self._reachable(adjacency)
         unreachable = set(self._nodes) - reachable
@@ -361,6 +384,15 @@ class Graph:
             raise GraphValidationError(
                 f"nodes are unreachable from entrypoint: {sorted(unreachable)!r}"
             )
+        for node_id, spec in specs.items():
+            if node_id == self.entrypoint or spec.input_policy is not InputPolicy.ALL:
+                continue
+            missing = set(spec.input_ports) - incoming_ports[node_id]
+            if missing:
+                raise GraphValidationError(
+                    f"ALL node {node_id!r} has no incoming edge for inputs: "
+                    f"{sorted(missing)!r}"
+                )
         self._node_specs = specs
 
     @staticmethod
