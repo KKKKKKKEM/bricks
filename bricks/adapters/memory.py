@@ -10,10 +10,10 @@ from dataclasses import dataclass, replace
 from functools import partial
 from threading import Condition, RLock
 
-from ..core import _validate_timeout, require_non_empty_string
-from ..events import Event
-from ..slots import SlotPool
-from .protocols import (
+from ..engine.core import _validate_timeout, require_non_empty_string
+from ..engine.events import Event
+from ..engine.slots import SlotPool
+from ..spi import (
     Delivery,
     DeliveryOutcome,
     DeliveryResult,
@@ -23,7 +23,7 @@ from .protocols import (
 )
 
 
-class MemoryEventBus:
+class EventBus:
     """同步、进程内的 EventBus 默认实现。"""
 
     def __init__(self) -> None:
@@ -136,7 +136,7 @@ class _Channel:
     next_consumer: int = 0
 
 
-class MemoryTaskBackend:
+class TaskBackend:
     """使用内存队列和线程池执行 Work 的默认实现。"""
 
     def __init__(self, *, max_delivery_attempts: int = 3) -> None:

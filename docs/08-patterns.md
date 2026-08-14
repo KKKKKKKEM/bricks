@@ -73,10 +73,10 @@ graph = (
 
 ### 2.1 Keyed join
 
-`ALL` 是按每个端口 FIFO 取值的 positional join，不会读取业务 key。乱序相关数据应使用官方扩展：
+`ALL` 是按每个端口 FIFO 取值的 positional join，不会读取业务 key。乱序相关数据应使用官方可复用 Node：
 
 ```python
-from bricks.extensions import KeyedJoin, KeyedValue
+from bricks.nodes import KeyedJoin, KeyedValue
 
 join = KeyedJoin(max_pending=10_000)
 ```
@@ -168,4 +168,4 @@ outputs = await runtime.start("output-stream", 4)
 
 `output_buffer` 限制活跃消费者的未读窗口。流式迭代结束后，Execution 仍保留完整 terminal Output tuple。
 
-[上一章：插件与扩展开发](07-plugins.md)
+[上一章：插件、SPI 与适配器开发](07-plugins.md)

@@ -9,9 +9,8 @@ from threading import get_ident
 import pytest
 
 from bricks import AsyncNode, Graph, Node, Output, Ports, Runtime
-from bricks.engine import (
-    HookExecutionError,
-    InvalidOutputError,
+from bricks.engine.errors import HookExecutionError, InvalidOutputError
+from bricks.engine.hooks import (
     NodeCall,
     NodeHook,
     ShortCircuit,

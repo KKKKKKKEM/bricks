@@ -1,0 +1,39 @@
+"""Runtime 插件协议、宿主和标准贡献适配器。"""
+
+from .host import (
+    CAP_EVENT_BUS,
+    CAP_EVENT_ROUTER,
+    CAP_GRAPH_EXECUTOR,
+    CAP_GRAPH_WORKER,
+    CAP_INPUT_SELECTOR,
+    CAP_NODE_HOOK,
+    CAP_RUNTIME_OBSERVER,
+    CAP_TASK_BACKEND,
+    Contribution,
+    ContributionPlugin,
+    NodeHookContribution,
+    Plugin,
+    PluginContext,
+    PluginDescriptor,
+    PluginHost,
+    RegistrationHandle,
+)
+
+__all__ = [
+    "CAP_EVENT_BUS",
+    "CAP_EVENT_ROUTER",
+    "CAP_GRAPH_EXECUTOR",
+    "CAP_GRAPH_WORKER",
+    "CAP_INPUT_SELECTOR",
+    "CAP_NODE_HOOK",
+    "CAP_RUNTIME_OBSERVER",
+    "CAP_TASK_BACKEND",
+    "Contribution",
+    "ContributionPlugin",
+    "NodeHookContribution",
+    "Plugin",
+    "PluginContext",
+    "PluginDescriptor",
+    "PluginHost",
+    "RegistrationHandle",
+]

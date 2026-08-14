@@ -6,7 +6,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Hashable
 
-from ..engine import Context, IncompleteInputsError, InputPolicy, Node, Output, Ports
+from ..engine import Context, InputPolicy, Node, Output, Ports
+from ..engine.errors import IncompleteInputsError
 
 
 @dataclass(frozen=True, slots=True)

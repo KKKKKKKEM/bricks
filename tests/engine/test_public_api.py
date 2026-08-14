@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 import bricks
+from bricks import adapters, engine, nodes, plugins, runtime, spi
 from bricks import Event, Ports
 
 
@@ -29,6 +30,30 @@ def test_top_level_api_contains_only_core_vocabulary() -> None:
         "Slot",
         "SlotPool",
     ]
+
+
+def test_advanced_packages_expose_explicit_architecture_boundaries() -> None:
+    """内核、编排、SPI、插件和默认适配器不再聚合到 engine。"""
+
+    assert engine.__all__ == [name for name in bricks.__all__ if name != "Runtime"]
+    assert runtime.__all__ == [
+        "EventRouter",
+        "GraphWorker",
+        "LocalRuntimePlugin",
+        "Runtime",
+    ]
+    assert adapters.__all__ == ["memory"]
+    assert "EventBus" in spi.__all__
+    assert "PluginHost" in plugins.__all__
+    assert "ContributionPlugin" in plugins.__all__
+    assert nodes.__all__ == ["KeyedJoin", "KeyedPair", "KeyedValue"]
+    assert not hasattr(engine, "Runtime")
+    assert not hasattr(engine, "PluginHost")
+    assert adapters.memory.EventBus.__name__ == "EventBus"
+    assert adapters.memory.TaskBackend.__name__ == "TaskBackend"
+    assert not hasattr(adapters.memory, "MemoryEventBus")
+    assert not hasattr(adapters.memory, "MemoryTaskBackend")
+    assert not hasattr(plugins, "ExtensionPlugin")
 
 
 def test_ports_are_immutable_and_ordered() -> None:

@@ -8,12 +8,12 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
 
-from ..core import Output, require_non_empty_string
-from ..events import Event
-from ..execution import Execution, ExecutionLimits
-from ..graph import ExecutionPlan, Graph
-from ..hooks import HookHandle, HookPhase, NodeHook
-from ..slots import Slot, SlotPool, _SlotLease
+from ..engine.core import Output, require_non_empty_string
+from ..engine.events import Event
+from ..engine.execution import Execution, ExecutionLimits
+from ..engine.graph import ExecutionPlan, Graph
+from ..engine.hooks import HookHandle, HookPhase, NodeHook
+from ..engine.slots import Slot, SlotPool, _SlotLease
 
 EventHandler = Callable[[Event], None]
 

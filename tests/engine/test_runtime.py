@@ -9,6 +9,7 @@ import pytest
 
 from bricks import (
     AsyncNode,
+    Context,
     Event,
     Graph,
     InputPolicy,
@@ -19,14 +20,13 @@ from bricks import (
     Slot,
     SlotPool,
 )
-from bricks.engine import (
-    Context,
-    GraphWorker,
+from bricks.adapters import memory
+from bricks.engine.errors import (
     IncompleteInputsError,
     InvalidOutputError,
     PortValueTypeError,
 )
-from bricks.engine.backends import MemoryTaskBackend
+from bricks.runtime import GraphWorker
 
 
 class Split(Node):
@@ -871,7 +871,7 @@ def test_rejected_emitted_event_releases_its_retained_slot() -> None:
     slots = SlotPool(1)
     lease = slots._acquire()
     worker = GraphWorker(
-        consumer=MemoryTaskBackend(),
+        consumer=memory.TaskBackend(),
         emit=reject,
         close_injected=True,
     )

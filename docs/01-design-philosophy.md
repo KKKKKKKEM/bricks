@@ -82,11 +82,11 @@ flowchart LR
 ```mermaid
 flowchart TB
     App[应用 Graph 与 Node]
-    Extensions[受控插件能力]
+    Contributions[受控插件贡献]
     Kernel[微内核语义]
 
     App --> Kernel
-    Extensions -->|只能通过 capability| Kernel
+    Contributions -->|只能通过 capability| Kernel
 
     subgraph Fixed[不可替换]
         Kernel --> Types[Ports / Edge 类型]

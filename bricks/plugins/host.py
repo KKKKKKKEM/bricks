@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from .core import require_non_empty_string
+from ..engine.core import require_non_empty_string
 
 _VERSION = re.compile(r"^[0-9]+(?:\.[0-9]+){0,2}(?:[-+][A-Za-z0-9.-]+)?$")
 
@@ -326,12 +326,12 @@ CAP_TASK_BACKEND = "bricks.runtime/task-backend"
 CAP_GRAPH_EXECUTOR = "bricks.runtime/graph-executor"
 CAP_EVENT_ROUTER = "bricks.runtime/event-router"
 CAP_GRAPH_WORKER = "bricks.runtime/graph-worker"
-CAP_INPUT_SELECTOR = "bricks.extension/input-selector"
-CAP_NODE_HOOK = "bricks.extension/node-hook"
-CAP_RUNTIME_OBSERVER = "bricks.extension/runtime-observer"
+CAP_INPUT_SELECTOR = "bricks.contribution/input-selector"
+CAP_NODE_HOOK = "bricks.contribution/node-hook"
+CAP_RUNTIME_OBSERVER = "bricks.contribution/runtime-observer"
 
 
-class ExtensionPlugin:
+class ContributionPlugin:
     """把常见 Policy、Hook 和 Observer 组合成一个声明式插件。"""
 
     def __init__(

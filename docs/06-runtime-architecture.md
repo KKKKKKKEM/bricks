@@ -5,16 +5,80 @@
 
 ## 分层总览
 
-| 层次 | 对象 | 责任 |
-| --- | --- | --- |
-| 用户模型 | Ports、Node、Output、Edge、Graph、Event、Context、Execution、Slot | 描述业务计算与可观察执行状态 |
-| 用户门面 | Runtime | 注册 Graph，代理执行、事件、观察和控制入口 |
-| 装配宿主 | PluginHost、LocalRuntimePlugin | 解析插件依赖，注册 capability，管理统一生命周期 |
-| 运行角色 | EventRouter、GraphWorker | 分别处理 Event -> Work 与 Work -> Graph execution |
-| 能力端口 | EventBus、TaskPublisher、TaskConsumer、GraphExecutor | 隔离传输、队列和执行实现 |
-| 默认实现 | MemoryEventBus、MemoryTaskBackend、Engine | 提供单进程内存运行时 |
+| 层次 | 源码边界 | 对象 | 责任 |
+| --- | --- | --- | --- |
+| 用户模型 | `bricks.engine`，由 `bricks` 导出 | Ports、Node、Output、Edge、Graph、Event、Context、Execution、Slot | 描述业务计算与可观察执行状态 |
+| 用户门面 | `bricks.runtime`，由 `bricks` 导出 | Runtime | 注册 Graph，代理执行、事件、观察和控制入口 |
+| 装配宿主 | `bricks.plugins`、`bricks.runtime.plugin` | PluginHost、LocalRuntimePlugin | 解析插件依赖，注册 capability，管理统一生命周期 |
+| 运行角色 | `bricks.runtime` | EventRouter、GraphWorker | 分别处理 Event -> Work 与 Work -> Graph execution |
+| 能力端口 | `bricks.spi` | EventBus、TaskPublisher、TaskConsumer、GraphExecutor | 隔离事件传输、任务传输和执行实现 |
+| 默认适配器 | `bricks.adapters.memory`、`bricks.engine.executor` | EventBus、TaskBackend、Engine | 提供单进程内存运行时 |
 
 Runtime 是面向应用的稳定门面，PluginHost 是系统装配根。普通应用不需要看到后四层。
+
+## 源码目录与包职责
+
+源码目录按照架构层次组织，而不是把所有运行时职责都放入 `engine`：
+
+```text
+bricks/
+├── __init__.py              # 宪法规定的顶层公共 API
+├── engine/                  # Graph 执行微内核及受控内核扩展点
+│   ├── core.py              # Ports、Node、AsyncNode、Output、InputPolicy
+│   ├── graph.py             # Edge、Graph、ExecutionPlan 与冻结校验
+│   ├── execution.py         # Execution 句柄、限制与状态
+│   ├── executor.py          # 单张冻结 Graph 的默认执行器 Engine
+│   ├── events.py            # Event 与 Context
+│   ├── slots.py             # Slot 与 SlotPool
+│   ├── hooks.py             # Node Hook 契约和快照注册
+│   ├── policies.py          # selector 契约、引用与冻结绑定
+│   ├── observation.py       # 只读 Runtime 观察模型
+│   ├── errors.py            # 内核和运行控制错误
+│   └── runner.py            # 同步/异步 Node 调用桥接
+├── runtime/                 # Runtime 门面和运行角色
+│   ├── facade.py            # Runtime
+│   ├── router.py            # EventRouter
+│   ├── worker.py            # GraphWorker
+│   ├── plugin.py            # LocalRuntimePlugin
+│   └── _utils.py            # 私有生命周期辅助函数
+├── plugins/                 # PluginHost、descriptor、capability 与 contribution
+├── spi/                     # EventBus、任务传输、GraphExecutor 等窄协议
+├── adapters/                # 随包提供的具体部署适配器
+│   └── memory.py            # memory.EventBus、memory.TaskBackend
+└── nodes/                   # 可复用的非内核 Node，例如 KeyedJoin
+```
+
+`bricks.engine` 不再充当高级 API 聚合入口。普通应用只从 `bricks` 导入；插件、SPI 和基础设施作者根据职责从
+`bricks.runtime`、`bricks.plugins`、`bricks.spi`、`bricks.adapters`、`bricks.nodes` 或具体 `bricks.engine.*` 模块导入。
+仓库不保留旧模块路径的兼容 re-export。
+
+## 依赖方向
+
+包依赖必须保持单向，Runtime 是组合这些层次的门面，而不是被内核反向调用：
+
+```mermaid
+flowchart LR
+    Public[bricks 顶层 API] --> Engine[bricks.engine]
+    Public --> Runtime[bricks.runtime]
+    Runtime --> Engine
+    Runtime --> SPI[bricks.spi]
+    Runtime --> Plugins[bricks.plugins]
+    Runtime --> Adapters[bricks.adapters]
+    SPI --> Engine
+    Adapters --> SPI
+    Adapters --> Engine
+    Plugins --> Engine
+    Nodes[bricks.nodes] --> Engine
+```
+
+这里的关键约束是：
+
+- `engine` 不依赖 `runtime`、`plugins`、`spi`、`adapters` 或可复用 `nodes`；
+- `spi` 只引用协议签名所需的 Graph、Event、Execution、Hook 和 Slot 模型；
+- `adapters` 实现 SPI，可以引用搬运 Event/Work 所需的最小内核类型；
+- `plugins` 管理装配元数据与生命周期，不读取 Runtime 私有状态；
+- `runtime` 可以依赖前述各层并完成组合，但不得把部署算法重新实现到门面中；
+- `nodes` 只放可复用的非内核 Node，只依赖内核公共语义，不能成为 Runtime 的隐式前置条件。
 
 ## 默认装配
 
@@ -22,7 +86,7 @@ Runtime 是面向应用的稳定门面，PluginHost 是系统装配根。普通�
 flowchart TB
     Runtime --> Host[PluginHost]
     Host --> Local[LocalRuntimePlugin]
-    Host --> Extensions[Extension plugins]
+    Host --> Contributions[Contribution plugins]
 
     Local --> Router[EventRouter]
     Local --> Worker[GraphWorker]
@@ -31,9 +95,9 @@ flowchart TB
     Worker --> Consumer[TaskConsumer]
     Worker --> Executor[GraphExecutor]
 
-    Extensions --> Selectors[InputSelector contributions]
-    Extensions --> Hooks[NodeHook contributions]
-    Extensions --> Observers[RuntimeObserver contributions]
+    Contributions --> Selectors[InputSelector contributions]
+    Contributions --> Hooks[NodeHook contributions]
+    Contributions --> Observers[RuntimeObserver contributions]
 ```
 
 `Runtime()` 自动补入 LocalRuntimePlugin。内建实现和应用插件使用相同的依赖解析、capability 注册、启动和停止
@@ -141,6 +205,6 @@ Router 和自己创建的底层组件。注入组件默认由调用方管理，`
 - Worker 不订阅源 Event；
 - GraphExecutor 不管理队列与 Graph 注册表；
 - 插件通过 capability 工作，不读取 Runtime 私有字段；
-- Work、Delivery 和 Backend 位于高级 SPI，不进入顶层 `bricks` API。
+- Work、Delivery 和窄角色协议位于 `bricks.spi`，不进入顶层 `bricks` API；默认内存实现位于 `bricks.adapters`。
 
-[上一章：Execution、并发与失败](05-execution.md) · [下一章：插件与扩展开发](07-plugins.md)
+[上一章：Execution、并发与失败](05-execution.md) · [下一章：插件、SPI 与适配器开发](07-plugins.md)

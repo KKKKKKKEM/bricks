@@ -1,23 +1,20 @@
-"""核心贡献点和官方扩展的契约测试。"""
+"""受控 contribution 和官方可复用 Node 的契约测试。"""
 
 from __future__ import annotations
 
 import pytest
 
 from bricks import Graph, InputPolicy, Node, Output, Ports, Runtime
-from bricks.engine import (
-    GraphValidationError,
-    IncompleteInputsError,
-    PolicyRef,
-    RuntimeEventKind,
-)
-from bricks.engine.backends import (
+from bricks.adapters import memory
+from bricks.spi import (
     DeliveryOutcome,
     DeliveryResult,
-    MemoryTaskBackend,
     Work,
 )
-from bricks.extensions import KeyedJoin, KeyedPair, KeyedValue
+from bricks.engine.errors import GraphValidationError, IncompleteInputsError
+from bricks.engine.observation import RuntimeEventKind
+from bricks.engine.policies import PolicyRef
+from bricks.nodes import KeyedJoin, KeyedPair, KeyedValue
 
 
 class Source(Node):
@@ -101,7 +98,7 @@ def test_missing_contributed_policy_fails_at_registration() -> None:
 
 
 def test_memory_delivery_retries_and_increments_attempt() -> None:
-    backend = MemoryTaskBackend()
+    backend = memory.TaskBackend()
     attempts = []
 
     def handle(delivery):
@@ -119,7 +116,7 @@ def test_memory_delivery_retries_and_increments_attempt() -> None:
 
 
 def test_memory_delivery_reports_rejection() -> None:
-    backend = MemoryTaskBackend()
+    backend = memory.TaskBackend()
     backend.bind(
         "reject",
         lambda delivery: DeliveryResult.reject(ValueError(delivery.work.id)),
@@ -132,7 +129,7 @@ def test_memory_delivery_reports_rejection() -> None:
 
 
 def test_memory_delivery_stops_after_configured_attempts() -> None:
-    backend = MemoryTaskBackend(max_delivery_attempts=2)
+    backend = memory.TaskBackend(max_delivery_attempts=2)
     attempts = []
 
     def retry(delivery):

@@ -6,8 +6,17 @@ from collections.abc import Mapping
 
 import pytest
 
-from bricks import AsyncNode, ExecutionPlan, Graph, InputPolicy, Node, Output, Ports
-from bricks.engine import Context, GraphFrozenError, GraphValidationError
+from bricks import (
+    AsyncNode,
+    Context,
+    ExecutionPlan,
+    Graph,
+    InputPolicy,
+    Node,
+    Output,
+    Ports,
+)
+from bricks.engine.errors import GraphFrozenError, GraphValidationError
 
 
 class Source(Node):

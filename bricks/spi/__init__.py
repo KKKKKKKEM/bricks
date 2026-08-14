@@ -1,7 +1,6 @@
-"""Runtime 的可替换 backend：协议、任务模型和默认内存实现。"""
+"""Runtime 可独立替换和组合的窄角色协议。"""
 
-from .memory import MemoryEventBus, MemoryTaskBackend
-from .protocols import (
+from .runtime import (
     Delivery,
     DeliveryOutcome,
     DeliveryResult,
@@ -26,8 +25,6 @@ __all__ = [
     "EventHandler",
     "GraphExecutor",
     "HookableGraphExecutor",
-    "MemoryEventBus",
-    "MemoryTaskBackend",
     "TaskBackend",
     "TaskConsumer",
     "TaskPublisher",

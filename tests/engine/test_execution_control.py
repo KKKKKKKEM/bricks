@@ -20,15 +20,15 @@ from bricks import (
     Ports,
     Runtime,
 )
-from bricks.engine import (
+from bricks.engine.errors import (
     BricksRuntimeError,
     ExecutionCancelledError,
     ExecutionError,
     ExecutionTimeoutError,
-    NodeHook,
     NodeTimeoutError,
     StepLimitExceededError,
 )
+from bricks.engine.hooks import NodeHook
 
 
 class Increment(Node):

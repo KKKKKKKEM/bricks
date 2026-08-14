@@ -27,7 +27,7 @@
 
 6. [Runtime 内部架构](06-runtime-architecture.md)
    Router、Worker、Backend、Executor 与 PluginHost 的组装和调用序列。
-7. [插件与扩展开发](07-plugins.md)
+7. [插件、SPI 与适配器开发](07-plugins.md)
    插件生命周期、能力贡献、后端协议、Hook 和 Observer。
 8. [编排模式](08-patterns.md)
    线性、分支汇聚、KeyedJoin、循环、事件路由、异步和输出流。
@@ -36,8 +36,9 @@
 
 - 想快速跑起来：读第一、二章。
 - 正在设计业务 Graph：读第三、四、五章。
-- 正在实现插件或远程后端：读第六、七章。
+- 正在实现插件或远程适配器：读第六、七章。
 - 想寻找可复用结构：直接查第八章。
+- 正在维护仓库包结构：读第六章的“源码目录与包职责”和“依赖方向”。
 
 ## 图示约定
 
@@ -48,7 +49,8 @@
 ## 当前能力边界
 
 默认 Runtime 由 PluginHost 安装单进程 LocalRuntimePlugin：事件在内存中同步分发，路由后的 Graph 使用内存队列
-和线程池执行。它支持类型校验、Graph 冻结、命名队列并发、可替换后端和受控插件贡献；不提供持久化、broker
+和线程池执行。它支持类型校验、Graph 冻结、命名队列并发、可独立替换的事件/任务传输与执行器，以及受控插件
+贡献；不提供持久化、broker
 消息确认、进程恢复、定时任务、死信队列或 exactly-once。
 
 [开始阅读：第一章](01-design-philosophy.md)

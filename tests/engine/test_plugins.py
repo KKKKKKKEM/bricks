@@ -5,17 +5,17 @@ from __future__ import annotations
 import pytest
 
 from bricks import Graph, InputPolicy, Node, Output, Ports, Runtime
-from bricks.engine import (
+from bricks.adapters import memory
+from bricks.engine.executor import Engine
+from bricks.engine.policies import PolicyRef
+from bricks.plugins import (
     CAP_INPUT_SELECTOR,
-    ExtensionPlugin,
-    LocalRuntimePlugin,
+    ContributionPlugin,
     NodeHookContribution,
     PluginDescriptor,
     PluginHost,
-    PolicyRef,
 )
-from bricks.engine.backends import MemoryEventBus, MemoryTaskBackend
-from bricks.engine.executor import Engine
+from bricks.runtime import LocalRuntimePlugin
 
 
 class RecordingPlugin:
@@ -150,7 +150,7 @@ class Target(Node):
 
 
 def test_runtime_installs_extension_contributions_before_graph_freeze() -> None:
-    plugin = ExtensionPlugin(
+    plugin = ContributionPlugin(
         "example/plugin",
         selectors={"example.plugin/any": AnySelector()},
         hooks={
@@ -187,8 +187,8 @@ def test_default_runtime_is_composed_by_the_builtin_plugin() -> None:
 
 
 def test_custom_infrastructure_uses_the_same_local_plugin_path() -> None:
-    events = MemoryEventBus()
-    tasks = MemoryTaskBackend()
+    events = memory.EventBus()
+    tasks = memory.TaskBackend()
     executor = Engine()
     local = LocalRuntimePlugin(events=events, tasks=tasks, executor=executor)
 

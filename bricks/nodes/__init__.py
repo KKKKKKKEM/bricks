@@ -1,4 +1,4 @@
-"""由窄核心 API 实现的官方可选扩展。"""
+"""由内核公共 API 实现的官方可复用 Node。"""
 
 from .keyed_join import KeyedJoin, KeyedPair, KeyedValue
 

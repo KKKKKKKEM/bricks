@@ -14,10 +14,10 @@ from .engine import (
     Node,
     Output,
     Ports,
-    Runtime,
     Slot,
     SlotPool,
 )
+from .runtime import Runtime
 
 __all__ = [
     "AsyncNode",

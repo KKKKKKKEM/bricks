@@ -47,7 +47,7 @@ with Runtime() as runtime:
 4. [Event 与跨图工作流](docs/04-events-and-workflows.md)
 5. [Execution、并发与失败](docs/05-execution.md)
 6. [Runtime 内部架构](docs/06-runtime-architecture.md)
-7. [插件与扩展开发](docs/07-plugins.md)
+7. [插件、SPI 与适配器开发](docs/07-plugins.md)
 8. [编排模式](docs/08-patterns.md)
 
 ## 当前范围
@@ -56,6 +56,9 @@ with Runtime() as runtime:
 统一 `PluginHost` 装配。EventBus、任务传输、GraphExecutor、输入策略、Node Hook 和 Runtime Observer 均可受控
 扩展，但 Graph 的类型、冻结和 Execution 语义保持固定。默认实现不提供持久化、broker ack、进程恢复、定时器、
 死信队列或 exactly-once 语义。
+
+源码按 `engine`、`runtime`、`plugins`、`spi`、`adapters` 和可复用 `nodes` 分层；各包职责、目录树和允许的
+依赖方向见[Runtime 内部架构](docs/06-runtime-architecture.md#源码目录与包职责)。
 
 ```bash
 uv run python examples/linear.py

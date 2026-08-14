@@ -1,18 +1,19 @@
-# 第七章：插件与扩展开发
+# 第七章：插件、SPI 与适配器开发
 
 本章面向插件作者和基础设施适配器作者。开始前应先理解[Runtime 内部架构](06-runtime-architecture.md)中的角色与
 能力端口；普通业务 Graph 不需要使用本章 API。
 
 ## 统一插件宿主
 
-应用级扩展优先声明为插件。插件通过 `PluginDescriptor` 声明身份、版本、依赖和 capability，并在 `setup()` 中
+需要向 Runtime 注册 selector、Hook 或 Observer 时，优先声明 contribution 插件。插件通过 `PluginDescriptor`
+声明身份、版本、依赖和 capability，并在 `setup()` 中
 注册能力；全部插件 setup 完成后才依赖顺序调用 `start()`，关闭时逆序调用 `stop()`：
 
 ```python
 from bricks import Runtime
-from bricks.engine import ExtensionPlugin, NodeHookContribution
+from bricks.plugins import ContributionPlugin, NodeHookContribution
 
-extensions = ExtensionPlugin(
+contributions = ContributionPlugin(
     "acme/crawl",
     selectors={"acme.crawl/ready": ready_selector},
     hooks={
@@ -25,7 +26,7 @@ extensions = ExtensionPlugin(
     observers={"acme.crawl/tracing": trace_observer},
 )
 
-runtime = Runtime(plugins=(extensions,))
+runtime = Runtime(plugins=(contributions,))
 ```
 
 `Runtime()` 会自动补入 `LocalRuntimePlugin`。因此 EventBus、TaskBackend、GraphExecutor、Router 和 Worker 的默认
@@ -44,16 +45,16 @@ flowchart TB
     Host[PluginHost]
     Local[LocalRuntimePlugin]
     Infra[基础设施插件]
-    Feature[应用扩展插件]
+    Feature[应用 contribution 插件]
 
     Host --> Local
     Host --> Infra
     Host --> Feature
     Local -->|provide| CoreCaps[EventBus / TaskBackend / GraphExecutor]
     Infra -->|provide 或替换| CoreCaps
-    Feature -->|contribute| Extensions[Selectors / Hooks / Observers]
+    Feature -->|contribute| Contributions[Selectors / Hooks / Observers]
     CoreCaps --> Runtime[Runtime 稳定门面]
-    Extensions --> Runtime
+    Contributions --> Runtime
 ```
 
 ### 自定义基础设施
@@ -62,7 +63,7 @@ flowchart TB
 
 ```python
 from bricks import Runtime
-from bricks.engine import LocalRuntimePlugin
+from bricks.runtime import LocalRuntimePlugin
 
 local = LocalRuntimePlugin(
     events=my_event_bus,
@@ -78,7 +79,7 @@ Router 与 Worker 需要独立部署或不由同一个进程插件管理时，�
 
 ```python
 from bricks import Runtime
-from bricks.engine import EventRouter, GraphWorker
+from bricks.runtime import EventRouter, GraphWorker
 
 router = EventRouter(
     events=my_event_bus,
@@ -92,15 +93,28 @@ worker = GraphWorker(
 runtime = Runtime(router=router, worker=worker)
 ```
 
-`EventRouter`、`GraphWorker` 和底层协议是高级扩展接口，不属于顶层 `bricks` 公共 API。应用侧的 Graph、Node、
+`EventRouter`、`GraphWorker` 和底层协议是高级组合接口，不属于顶层 `bricks` 公共 API。应用侧的 Graph、Node、
 Event 和 Runtime 门面用法不需要因此改变。`Runtime()` 仍会经 LocalRuntimePlugin 创建完整的默认内存组合。
+
+窄角色协议从 `bricks.spi` 导入，随包提供的本地实现从 `bricks.adapters` 导入：
+
+```python
+from bricks.adapters import memory
+from bricks.spi import EventBus, GraphExecutor, TaskConsumer, TaskPublisher
+
+events = memory.EventBus()
+tasks = memory.TaskBackend()
+```
+
+`bricks.spi` 只定义角色和跨适配器数据模型；`bricks.adapters` 只放具体部署实现。`TaskBackend` 仅是
+`TaskPublisher` 与 `TaskConsumer` 的便利组合，不代表 EventBus 或 GraphExecutor。
 
 | 协议 | 负责什么 | 默认实现 |
 | --- | --- | --- |
-| `EventBus` | Event 订阅、发布、投递空闲与关闭 | `MemoryEventBus` |
-| `TaskPublisher` | 向命名队列提交 Work | `MemoryTaskBackend` |
-| `TaskConsumer` | 调度带 Slot 的 Work，并控制当前实例的本地并发 | `MemoryTaskBackend` |
-| `TaskBackend` | 同时实现发布与消费的组合协议 | `MemoryTaskBackend` |
+| `EventBus` | Event 订阅、发布、投递空闲与关闭 | `memory.EventBus` |
+| `TaskPublisher` | 向命名队列提交 Work | `memory.TaskBackend` |
+| `TaskConsumer` | 调度带 Slot 的 Work，并控制当前实例的本地并发 | `memory.TaskBackend` |
+| `TaskBackend` | 同时实现发布与消费的组合协议 | `memory.TaskBackend` |
 | `GraphExecutor` | 执行已冻结 Graph 并返回终端 Output | `Engine` |
 | `HookableGraphExecutor` | GraphExecutor 的可选动态 Hook 能力 | `Engine` |
 
@@ -113,7 +127,7 @@ TaskPublisher 的 `submit()` 正常返回即表示后端已接受 Work，同时�
 - EventBus 的 `subscribe(event_type, handler, subscription=...)` 需要支持精确类型和 `"*"` 通配订阅。同名
   subscription 的多个实例竞争消费，不同 subscription 各自收到一份；省略 subscription 的观察者相互独立。
   Event 携带内部 Slot lease 时，EventBus 从 `publish()` 调用开始接管该引用，并在所有 handler 投递结束或发布
-  失败时释放；默认 `MemoryEventBus` 已实现该约束。
+  失败时释放；默认 `memory.EventBus` 已实现该约束。
 - TaskPublisher 把 Work 提交到命名 queue，`submit()` 正常返回表示后端已经接受；TaskConsumer 的
   `bind(queue, handler, concurrency=..., slots=...)` 在调度根 Work 前从 SlotPool 获取 lease，延续 Work 则保留
   自身 lease。等待 Slot 的根 Work 不能占用 concurrency，Work 完成或失败后必须释放它持有的 lease。
@@ -123,7 +137,7 @@ TaskPublisher 的 `submit()` 正常返回即表示后端已接受 Work，同时�
   `execution.checkpoint()`，从而保留步数、取消和 timeout 语义。自定义执行器若还实现
   `HookableGraphExecutor` 的 `attach()`，`Runtime.attach()` 会按结构化能力委托给它。
 
-可参考 [test_backends.py](../tests/engine/test_backends.py) 中的同步替身：它验证三个能力可独立替换，也验证
+可参考 [test_runtime_spi.py](../tests/engine/test_runtime_spi.py) 中的同步替身：它验证三个能力可独立替换，也验证
 Runtime 不依赖默认内存实现的私有字段。
 
 ## 语义必须由适配器声明
@@ -138,7 +152,7 @@ Runtime 不依赖默认内存实现的私有字段。
 - payload 的序列化限制，以及幂等性由谁保证。
 - `Work.limits` 与 execution ID 如何跨进程传递，取消请求如何送达执行进程。
 
-不要仅因后端名为 Redis 或 MQ 就暗示这些能力已经存在。领域 ID、去重和外部副作用的幂等性仍应由领域模型
+不要仅因适配器名为 Redis 或 MQ 就暗示这些能力已经存在。领域 ID、去重和外部副作用的幂等性仍应由领域模型
 显式实现。
 
 `Slot` 保存进程内对象，默认不能随 Work 跨进程序列化。远程 TaskBackend 若要保留相同语义，必须让同一逻辑
@@ -190,7 +204,7 @@ sequenceDiagram
     H->>A: stop()
 ```
 
-LocalRuntimePlugin 自己创建的 MemoryEventBus、MemoryTaskBackend 和 Engine 由插件关闭；通过其构造器注入的组件
+LocalRuntimePlugin 自己创建的 `memory.EventBus`、`memory.TaskBackend` 和 Engine 由插件关闭；通过其构造器注入的组件
 默认由调用方管理，`close_injected=True` 才表示插件接管所有权。
 
 EventRouter 和 GraphWorker 只自动关闭自己创建的默认组件。注入的 EventBus、TaskPublisher、TaskConsumer 和
@@ -212,9 +226,9 @@ TaskConsumer 向 handler 交付 `Delivery`，其中包含 `work` 和从 1 开始
 - `DeliveryResult.retry(error)`：请求重新投递；
 - `DeliveryResult.reject(error)`：永久拒绝，并向等待方报告错误。
 
-默认内存 backend 支持立即重试，默认最多交付 3 次，可用 `MemoryTaskBackend(max_delivery_attempts=...)` 调整。
+默认内存适配器支持立即重试，默认最多交付 3 次，可用 `memory.TaskBackend(max_delivery_attempts=...)` 调整。
 handler 必须返回一个 `DeliveryResult`；缺少返回值或返回其他类型属于协议错误。
-持久 backend 应自行实现 consumer lease、visibility timeout、redelivery、最大重试次数和 dead-letter 策略；核心协议不宣称
+持久任务适配器应自行实现 consumer lease、visibility timeout、redelivery、最大重试次数和 dead-letter 策略；核心协议不宣称
 这些能力已经由接口自动提供。
 
 ```mermaid
@@ -233,12 +247,12 @@ flowchart LR
 `Runtime.observe_runtime(observer)` 订阅 execution、Node、Event 和 Work 的只读生命周期事实。事件不包含业务输入输出，
 observer 抛出的异常会被隔离，因此日志、Tracing 和指标插件不能改变 Graph 结果。返回的 handle 可用 `detach()` 卸载。
 
-固定随 Runtime 启动的观察者可通过 `ExtensionPlugin(observers={"namespace/name": observer})` 贡献；运行期间临时
+固定随 Runtime 启动的观察者可通过 `ContributionPlugin(observers={"namespace/name": observer})` 贡献；运行期间临时
 安装或需要主动卸载的观察者继续使用 `observe_runtime()`。
 
 ## 输入策略 contribution
 
-构造期固定策略优先通过 `ExtensionPlugin(selectors={"namespace/name": selector})` 贡献；动态配置也可以先调用
+构造期固定策略优先通过 `ContributionPlugin(selectors={"namespace/name": selector})` 贡献；动态配置也可以先调用
 `runtime.register_policy(name, selector)`。selector 只能读取端口名称、各端口可用 token 数和冻结配置，返回本次
 各消费一个 token 的端口元组或 `None`。Graph 注册时会绑定 selector 快照；缺失、重复、空端口或不存在端口的选择
 都会失败。因此两种方式都必须发生在使用该策略的 Graph 注册之前。默认 Runtime 中应先 `runtime.register()` 冻结
@@ -251,7 +265,7 @@ Graph 注册后保持冻结，但默认 `Engine` 允许使用者给后续 Graph 
 
 ```python
 from bricks import Output
-from bricks.engine import NodeCall, NodeHook, ShortCircuit
+from bricks.engine.hooks import NodeCall, NodeHook, ShortCircuit
 
 
 class RequestCache(NodeHook):
@@ -296,7 +310,7 @@ handle = runtime.attach(
 `phase` 可以是 `"enter"`、`"exit"` 或 `"error"`，省略时函数作为 `enter` Hook。注册范围可以是全部 Graph、
 指定 Graph，或者指定 Graph 内的 Node；Node 范围必须同时给出 Graph 名。
 
-固定 Hook 可以通过 `ExtensionPlugin` 的具名 `NodeHookContribution` 安装。插件 Hook 可在目标 Graph 注册前声明，
+固定 Hook 可以通过 `ContributionPlugin` 的具名 `NodeHookContribution` 安装。插件 Hook 可在目标 Graph 注册前声明，
 LocalRuntimePlugin 会延迟绑定，并在 Graph 注册时校验目标 Node；运行期 `runtime.attach()` 仍要求目标 Graph 已注册，
 并返回可卸载句柄。
 

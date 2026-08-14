@@ -12,18 +12,18 @@ from uuid import UUID
 import pytest
 
 from bricks import Event, Graph, InputPolicy, Node, Output, Ports, Runtime
-from bricks.engine import EventRouter, GraphWorker, HookRegistry
-from bricks.engine.backends import (
+from bricks.adapters import memory
+from bricks.spi import (
     Delivery,
     DeliveryOutcome,
     DeliveryResult,
     EventHandler,
-    MemoryEventBus,
-    MemoryTaskBackend,
     Work,
     WorkHandler,
 )
+from bricks.engine.hooks import HookRegistry
 from bricks.engine.slots import SlotPool
+from bricks.runtime import EventRouter, GraphWorker
 
 
 class EmptyNode(Node):
@@ -253,7 +253,7 @@ def test_runtime_explicitly_exposes_composed_roles() -> None:
 def test_runtime_rejects_partial_role_composition() -> None:
     """组合根不接受缺少 Router 或 Worker 的残缺配置。"""
 
-    tasks = MemoryTaskBackend()
+    tasks = memory.TaskBackend()
     router = EventRouter(publisher=tasks)
     with pytest.raises(TypeError, match="both router and worker"):
         Runtime(router=router)
@@ -299,7 +299,7 @@ def test_work_generates_id_and_accepts_explicit_id() -> None:
 def test_named_event_subscriptions_compete_and_distinct_ones_broadcast() -> None:
     """同名订阅轮流消费，不同订阅各自收到一份 Event。"""
 
-    bus = MemoryEventBus()
+    bus = memory.EventBus()
     first: list[int] = []
     second: list[int] = []
     audit: list[int] = []
@@ -322,8 +322,8 @@ def test_named_event_subscriptions_compete_and_distinct_ones_broadcast() -> None
 def test_router_and_worker_can_use_separate_runtime_roles() -> None:
     """Router 无需注册 Graph，Worker 无需订阅 Event。"""
 
-    bus = MemoryEventBus()
-    tasks = MemoryTaskBackend()
+    bus = memory.EventBus()
+    tasks = memory.TaskBackend()
     executor = RecordingExecutor()
     router = EventRouter(events=bus, publisher=tasks)
     router.route("work.created", graph="work.graph", queue="work")
@@ -345,7 +345,7 @@ def test_router_and_worker_can_use_separate_runtime_roles() -> None:
 def test_memory_event_bus_tracks_active_dispatches() -> None:
     """同步 handler 尚未返回时，EventBus 不能报告空闲。"""
 
-    bus = MemoryEventBus()
+    bus = memory.EventBus()
     started = ThreadEvent()
     release = ThreadEvent()
 
@@ -374,7 +374,7 @@ def test_memory_event_bus_tracks_active_dispatches() -> None:
 def test_wildcard_event_reaches_wildcard_subscriber_once() -> None:
     """事件类型本身为通配符时不重复拼接同一订阅列表。"""
 
-    bus = MemoryEventBus()
+    bus = memory.EventBus()
     received: list[Event] = []
     bus.subscribe("*", received.append)
 
@@ -387,7 +387,7 @@ def test_wildcard_event_reaches_wildcard_subscriber_once() -> None:
 def test_event_bus_continues_after_a_handler_failure() -> None:
     """单个观察者失败时，其他订阅者仍应收到 Event。"""
 
-    bus = MemoryEventBus()
+    bus = memory.EventBus()
     received: list[Event] = []
 
     def fail(event: Event) -> None:
@@ -405,7 +405,7 @@ def test_event_bus_continues_after_a_handler_failure() -> None:
 def test_task_backend_drains_all_failures_after_idle() -> None:
     """一次 idle 等待后不应把并发失败残留到下一次关闭。"""
 
-    backend = MemoryTaskBackend()
+    backend = memory.TaskBackend()
 
     def fail(delivery: Delivery) -> DeliveryResult:
         raise ValueError(delivery.work.inputs)
@@ -421,7 +421,7 @@ def test_task_backend_drains_all_failures_after_idle() -> None:
 
 
 def test_task_backend_requires_explicit_delivery_result() -> None:
-    backend = MemoryTaskBackend()
+    backend = memory.TaskBackend()
     backend.bind("invalid", lambda delivery: None, concurrency=1)  # type: ignore[arg-type]
     backend.submit("invalid", Work("graph"))
 
