@@ -1,4 +1,6 @@
-# 快速开始
+# 第二章：第一张 Graph
+
+上一章建立了 Output、Event 和插件边界的整体模型。本章只做一件事：定义并运行一张最小 Graph。
 
 下面的例子把一个字符串转换为大写。它展示 Bricks 的最小闭环：声明 Node、构建并注册 Graph、再执行它。
 
@@ -23,6 +25,18 @@ with Runtime() as runtime:
     outputs = runtime.run("upper.graph", "bricks")
 
 assert outputs == (Output("BRICKS", port="result"),)
+```
+
+这段程序经历了一个完整但很短的生命周期：
+
+```mermaid
+flowchart LR
+    NodeDef[定义 Upper Node] --> GraphDef[绑定到 Graph]
+    GraphDef --> Register[Runtime.register]
+    Register --> Freeze[冻结并校验]
+    Freeze --> Run[Runtime.run]
+    Run --> Execute[Upper.execute]
+    Execute --> Output[terminal Output]
 ```
 
 单节点没有下游 Edge，因此它产生的 `Output` 会作为 `Runtime.run()` 的返回值。若把 output port 连接给另一个
@@ -56,8 +70,4 @@ uv run python examples/async_node.py
 uv run --with pytest pytest -q
 ```
 
-## 下一步
-
-- Graph 内如何连线、输入怎样触发，见[核心概念](core-concepts.md)。
-- 要通过事件启动另一张 Graph，见[运行语义：事件路由](runtime-semantics.md#事件路由与并发)。
-- 想直接比较四种常见编排，见[常见编排方式](examples.md)。
+[上一章：设计哲学与心智模型](01-design-philosophy.md) · [下一章：Graph 数据流](03-graph-dataflow.md)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from functools import partial
 from threading import RLock
@@ -45,6 +45,21 @@ from .observation import (
     RuntimeObserver,
 )
 from .policies import InputSelector, PolicyRegistry
+from .plugins import (
+    CAP_EVENT_BUS,
+    CAP_EVENT_ROUTER,
+    CAP_GRAPH_EXECUTOR,
+    CAP_GRAPH_WORKER,
+    CAP_INPUT_SELECTOR,
+    CAP_NODE_HOOK,
+    CAP_RUNTIME_OBSERVER,
+    CAP_TASK_BACKEND,
+    Plugin,
+    PluginContext,
+    PluginDescriptor,
+    PluginHost,
+    NodeHookContribution,
+)
 from .slots import Slot, SlotPool, _SlotLease
 
 EventHandler = Callable[[Event], None]
@@ -278,6 +293,10 @@ class GraphWorker:
         )
         self._direct_pending: set[Future[tuple[Output, ...]]] = set()
         self._executions: OrderedDict[str, Execution] = OrderedDict()
+        self._pending_hooks: dict[
+            str,
+            list[tuple[NodeHook | Callable[..., object], HookPhase | str | None, str | None]],
+        ] = {}
         self._history_limit = 1000
         self._closed = False
 
@@ -304,7 +323,19 @@ class GraphWorker:
         with self._lock:
             if name in self._graphs:
                 raise BricksRuntimeError(f"duplicate registered graph {name!r}")
+            pending = tuple(self._pending_hooks.get(name, ()))
+            for _, _, node in pending:
+                if node is not None and node not in graph.nodes:
+                    raise ValueError(f"graph {name!r} has no node {node!r}")
             self._graphs[name] = graph
+            self._pending_hooks.pop(name, None)
+        for hook, phase, node in pending:
+            self._attach_executor_hook(
+                hook,
+                phase=phase,
+                graph=name,
+                node=node,
+            )
         return self
 
     def consume(
@@ -523,13 +554,56 @@ class GraphWorker:
                 node = require_non_empty_string(node, "hook node")
                 if node not in registered.nodes:
                     raise ValueError(f"graph {graph!r} has no node {node!r}")
-        if not isinstance(self._executor, HookableGraphExecutor):
-            raise TypeError("the configured GraphExecutor does not support hooks")
-        return self._executor.attach(
+        return self._attach_executor_hook(
             hook,
             phase=phase,
             graph=graph,
             node=node,
+        )
+
+    def contribute_hook(
+        self,
+        hook: NodeHook | Callable[..., object],
+        *,
+        phase: HookPhase | str | None = None,
+        graph: str | None = None,
+        node: str | None = None,
+    ) -> HookHandle | None:
+        """安装插件 Hook；目标 Graph 尚未注册时延迟绑定。"""
+
+        self._ensure_open()
+        if graph is None:
+            if node is not None:
+                raise ValueError("node-scoped hook requires graph")
+            return self._attach_executor_hook(hook, phase=phase)
+        graph = require_non_empty_string(graph, "hook graph")
+        with self._lock:
+            registered = self._graphs.get(graph)
+            if registered is None:
+                if node is not None:
+                    node = require_non_empty_string(node, "hook node")
+                self._pending_hooks.setdefault(graph, []).append((hook, phase, node))
+                return None
+        if node is not None:
+            node = require_non_empty_string(node, "hook node")
+            if node not in registered.nodes:
+                raise ValueError(f"graph {graph!r} has no node {node!r}")
+        return self._attach_executor_hook(
+            hook, phase=phase, graph=graph, node=node
+        )
+
+    def _attach_executor_hook(
+        self,
+        hook: NodeHook | Callable[..., object],
+        *,
+        phase: HookPhase | str | None = None,
+        graph: str | None = None,
+        node: str | None = None,
+    ) -> HookHandle:
+        if not isinstance(self._executor, HookableGraphExecutor):
+            raise TypeError("the configured GraphExecutor does not support hooks")
+        return self._executor.attach(
+            hook, phase=phase, graph=graph, node=node
         )
 
     def register_policy(self, name: str, selector: InputSelector) -> GraphWorker:
@@ -611,11 +685,9 @@ class GraphWorker:
             if exc_value is None:
                 raise
 
-    def _execute_delivery(self, item: Delivery | Work) -> DeliveryResult:
-        """执行可确认交付，并兼容旧 backend 直接传入 Work。"""
+    def _execute_delivery(self, delivery: Delivery) -> DeliveryResult:
+        """执行可确认交付并返回明确的 backend 决定。"""
 
-        legacy = isinstance(item, Work)
-        delivery = Delivery(item) if legacy else item
         work = delivery.work
         try:
             self._execute_work(work)
@@ -631,8 +703,6 @@ class GraphWorker:
                     attributes={"attempt": delivery.attempt},
                 )
             )
-            if legacy:
-                raise
             return DeliveryResult.reject(exc)
         self._observations.publish(
             RuntimeEvent(
@@ -811,6 +881,108 @@ class GraphWorker:
                 raise RuntimeClosedError("GraphWorker is closed")
 
 
+class LocalRuntimePlugin:
+    """使用标准能力协议组装单进程 Runtime 的内建插件。"""
+
+    descriptor = PluginDescriptor(
+        "bricks.core/local-runtime",
+        "1.0.0",
+        provides=(
+            CAP_EVENT_BUS,
+            CAP_TASK_BACKEND,
+            CAP_GRAPH_EXECUTOR,
+            CAP_EVENT_ROUTER,
+            CAP_GRAPH_WORKER,
+        ),
+    )
+
+    def __init__(
+        self,
+        *,
+        events: EventBus | None = None,
+        tasks: TaskPublisher | TaskConsumer | None = None,
+        executor: GraphExecutor | None = None,
+        close_injected: bool = False,
+    ) -> None:
+        if type(close_injected) is not bool:
+            raise TypeError("close_injected must be a boolean")
+        if tasks is not None and not (
+            callable(getattr(tasks, "submit", None))
+            and callable(getattr(tasks, "bind", None))
+        ):
+            raise TypeError("tasks must implement TaskPublisher and TaskConsumer")
+        self._events = MemoryEventBus() if events is None else events
+        self._tasks = MemoryTaskBackend() if tasks is None else tasks
+        self._observations = ObservationHub()
+        self._policies = PolicyRegistry()
+        self._executor = (
+            Engine(observations=self._observations) if executor is None else executor
+        )
+        self._owned = (
+            events is None,
+            tasks is None,
+            executor is None,
+        )
+        self._close_injected = close_injected
+        self.router: EventRouter | None = None
+        self.worker: GraphWorker | None = None
+
+    def setup(self, context: PluginContext) -> None:
+        self.router = EventRouter(
+            events=self._events,
+            publisher=self._tasks,  # type: ignore[arg-type]
+            observations=self._observations,
+        )
+        self.worker = GraphWorker(
+            consumer=self._tasks,  # type: ignore[arg-type]
+            executor=self._executor,
+            emit=self.router.publish,
+            observations=self._observations,
+            policies=self._policies,
+        )
+        context.provide(CAP_EVENT_BUS, self._events)
+        context.provide(CAP_TASK_BACKEND, self._tasks)
+        context.provide(CAP_GRAPH_EXECUTOR, self._executor)
+        context.provide(CAP_EVENT_ROUTER, self.router)
+        context.provide(CAP_GRAPH_WORKER, self.worker)
+
+    def start(self, context: PluginContext) -> None:
+        assert self.worker is not None
+        for contribution in context.contributions(CAP_INPUT_SELECTOR):
+            self.worker.register_policy(contribution.name, contribution.value)
+        for contribution in context.contributions(CAP_NODE_HOOK):
+            value = contribution.value
+            if isinstance(value, NodeHookContribution):
+                self.worker.contribute_hook(
+                    value.hook,
+                    phase=value.phase,
+                    graph=value.graph,
+                    node=value.node,
+                )
+            else:
+                self.worker.attach(value)
+        for contribution in context.contributions(CAP_RUNTIME_OBSERVER):
+            self._observations.attach(contribution.value)
+
+    def stop(self, context: PluginContext) -> None:
+        del context
+        failure: BaseException | None = None
+        if self.worker is not None:
+            failure = _close_components((self.worker,), failure)
+        if self.router is not None:
+            failure = _close_components((self.router,), failure)
+        components = tuple(
+            component
+            for component, owned in zip(
+                (self._events, self._tasks, self._executor), self._owned
+            )
+            if owned or self._close_injected
+        )
+        failure = _close_components(reversed(_unique(*components)), failure)
+        if failure is not None:
+            raise failure
+
+
 class Runtime:
     """组合 EventRouter 与 GraphWorker 的单进程便利门面。"""
 
@@ -819,29 +991,29 @@ class Runtime:
         *,
         router: EventRouter | None = None,
         worker: GraphWorker | None = None,
+        plugins: Iterable[Plugin] | None = None,
     ) -> None:
+        if plugins is not None and (router is not None or worker is not None):
+            raise TypeError("plugins cannot be combined with router or worker")
         if (router is None) != (worker is None):
             raise TypeError("Runtime requires both router and worker")
         owned: tuple[object, ...] = ()
+        host: PluginHost | None = None
         if router is None:
-            observations = ObservationHub()
-            policies = PolicyRegistry()
-            events = MemoryEventBus()
-            backend = MemoryTaskBackend()
-            executor = Engine(observations=observations)
-            router = EventRouter(
-                events=events,
-                publisher=backend,
-                observations=observations,
-            )
-            worker = GraphWorker(
-                consumer=backend,
-                executor=executor,
-                emit=router.publish,
-                observations=observations,
-                policies=policies,
-            )
-            owned = (events, backend, executor)
+            selected = () if plugins is None else tuple(plugins)
+            provides = {
+                capability
+                for plugin in selected
+                for capability in plugin.descriptor.provides
+            }
+            role_capabilities = {CAP_EVENT_ROUTER, CAP_GRAPH_WORKER}
+            if provides & role_capabilities and not role_capabilities <= provides:
+                raise TypeError("plugins must provide both EventRouter and GraphWorker")
+            if not role_capabilities <= provides:
+                selected = (LocalRuntimePlugin(), *selected)
+            host = PluginHost(selected).start()
+            router = host.require(CAP_EVENT_ROUTER)
+            worker = host.require(CAP_GRAPH_WORKER)
         if not isinstance(router, EventRouter):
             raise TypeError("router must be an EventRouter")
         if not isinstance(worker, GraphWorker):
@@ -849,8 +1021,15 @@ class Runtime:
         self.router = router
         self.worker = worker
         self._owned_components = owned
+        self._plugin_host = host
         self._closed = False
         self._lock = RLock()
+
+    @property
+    def plugin_host(self) -> PluginHost | None:
+        """返回插件装配宿主；显式角色组合没有宿主。"""
+
+        return self._plugin_host
 
     def register(self, name: str, graph: Graph) -> Runtime:
         self.worker.register(name, graph)
@@ -1066,8 +1245,11 @@ class Runtime:
             failure = exc
         with self._lock:
             self._closed = True
-        failure = _close_components((self.worker, self.router), failure)
-        failure = _close_components(reversed(self._owned_components), failure)
+        if self._plugin_host is None:
+            failure = _close_components((self.worker, self.router), failure)
+            failure = _close_components(reversed(self._owned_components), failure)
+        else:
+            failure = _close_components((self._plugin_host,), failure)
         if failure is not None:
             raise failure
 

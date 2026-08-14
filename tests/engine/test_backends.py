@@ -14,6 +14,9 @@ import pytest
 from bricks import Event, Graph, InputPolicy, Node, Output, Ports, Runtime
 from bricks.engine import EventRouter, GraphWorker, HookRegistry
 from bricks.engine.backends import (
+    Delivery,
+    DeliveryOutcome,
+    DeliveryResult,
     EventHandler,
     MemoryEventBus,
     MemoryTaskBackend,
@@ -77,7 +80,7 @@ class RecordingTasks:
     """同步消费 Work，模拟可由 Redis/MQ 替换的任务后端。"""
 
     def __init__(self) -> None:
-        self.handlers: dict[str, WorkHandler] = {}
+        self.handlers: dict[str, Callable[[Work], None]] = {}
         self.submitted: list[tuple[str, Work]] = []
         self.closed = False
 
@@ -99,7 +102,11 @@ class RecordingTasks:
         def handle(work: Work) -> None:
             lease = work._slot_lease or slots._acquire()
             try:
-                handler(replace(work, _slot_lease=lease))
+                result = handler(Delivery(replace(work, _slot_lease=lease)))
+                if result.outcome is not DeliveryOutcome.ACK:
+                    raise result.error or RuntimeError(
+                        f"work handler returned {result.outcome.value}"
+                    )
             finally:
                 lease.release()
 
@@ -400,8 +407,8 @@ def test_task_backend_drains_all_failures_after_idle() -> None:
 
     backend = MemoryTaskBackend()
 
-    def fail(work: Work) -> None:
-        raise ValueError(work.inputs)
+    def fail(delivery: Delivery) -> DeliveryResult:
+        raise ValueError(delivery.work.inputs)
 
     backend.bind("failures", fail, concurrency=2)
     backend.submit("failures", Work("graph", "first"))
@@ -410,4 +417,14 @@ def test_task_backend_drains_all_failures_after_idle() -> None:
     with pytest.raises(ValueError):
         backend.wait_idle()
     backend.wait_idle(0)
+    backend.close()
+
+
+def test_task_backend_requires_explicit_delivery_result() -> None:
+    backend = MemoryTaskBackend()
+    backend.bind("invalid", lambda delivery: None, concurrency=1)  # type: ignore[arg-type]
+    backend.submit("invalid", Work("graph"))
+
+    with pytest.raises(TypeError, match="must return DeliveryResult"):
+        backend.wait_idle()
     backend.close()

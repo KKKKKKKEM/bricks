@@ -1,14 +1,11 @@
-# 核心概念
+# 第三章：Graph 数据流
 
-Bricks 只区分两种流动：Graph 内的值流动，以及 Graph 间的事件流动。不要用其中一种去模拟另一种。
+本章只讨论一张 Graph 内的值流动：Node 如何声明端口、Output 如何沿 Edge 传播，以及执行器何时触发下游 Node。
 
 | 范围 | 使用的对象 | 用途 |
 | --- | --- | --- |
 | 单张 Graph | `Output`、`Edge` | 把一个 Node 的值交给下游 Node |
-| 多张 Graph | `Event`、`Context.emit()`、`Runtime.on()` | 发布领域事实并异步启动工作 |
-| 逻辑执行链 | `Slot`、`SlotPool`、`Context.slot` | 跨 Work 与 Consumer 复用执行状态 |
 | 单次执行 | `Execution`、`ExecutionLimits` | 查询状态、控制步数/时长并协作式取消 |
-| 动态执行扩展 | `Runtime.attach()`、`NodeHook` | 不修改冻结 Graph，转换 Node 输入、结果和流程 |
 
 ## Ports 与 Node
 
@@ -52,12 +49,32 @@ graph = (
 )
 ```
 
+Graph 保存的是 Node binding 和端口之间的连接，而不是把 Node 本身变成全局实体：
+
+```mermaid
+flowchart LR
+    Input[raw: str] --> Parse[parse binding<br/>Parse]
+    Parse -->|length: int| Store[store binding<br/>Store]
+    Store -->|unconnected Output| Terminal[terminal outputs]
+```
+
 `add()` 的关键字名称就是当前 Graph 内的 Node ID。需要动态生成 ID 时也可使用
 `add(node_id, node)`；ID 属于 Graph binding，不是 Node 自身属性，因此同一个无状态 Node 行为可以用不同 ID
 复用。
 
 冻结会拒绝以下定义：空图或未知入口、重复节点/边、未知端口、端口类型不兼容、不可从入口到达的节点、`ALL`
 Node 的必需端口没有任何入边，以及不合法的输入策略。`Runtime.register()` 会自动冻结尚未冻结的 Graph。
+
+```mermaid
+stateDiagram-v2
+    [*] --> Building
+    Building --> Building: add / connect
+    Building --> Validating: freeze / register
+    Validating --> Frozen: validation succeeds
+    Validating --> Building: validation fails
+    Frozen --> Executing: run / start
+    Executing --> Frozen: execution finishes
+```
 
 Graph 是普通有向图，Edge 可以回到上游或形成自环。循环不需要特殊 Edge；Node 通过是否继续产生连接到回路的
 Output 决定循环是否继续：
@@ -79,6 +96,13 @@ graph = (
     .add(counter=Counter())
     .connect("counter", "counter", source_port="again", target_port="value")
 )
+```
+
+```mermaid
+flowchart LR
+    In[value] --> Counter
+    Counter -->|again| Counter
+    Counter -->|done| Result[terminal Output]
 ```
 
 执行器默认不会截断循环：execution 的 `max_steps=0` 和 Graph `timeout=None` 表示无限制，每个 Node 的
@@ -115,39 +139,4 @@ runtime.run("document.graph", payload, plan=fast)
 调度只消费一组输入，再把仍然就绪的 Node 放到队尾，因此持续循环不会独占其他已就绪分支。如果 Graph 静止后
 还剩无法组合的值，例如 `ALL` Node 只收到一半输入，会抛出 `IncompleteInputsError`。
 
-## Event 与 Context
-
-`Event(type, payload)` 是最小的领域消息。内核不自动添加 ID、时间、来源、幂等键或 tracing 信息；这些数据
-应该是领域 payload 的一部分，或交给外部观测系统。
-
-Node 通过 Context 发布跨图事件：
-
-```python
-class CreateTask(Node):
-    input_ports = Ports(url=str)
-    output_ports = Ports()
-
-    def execute(self, inputs, context):
-        context.emit("crawl.task.created", {"url": inputs["url"]})
-```
-
-`Context` 不提供数据库、HTTP 客户端、Runtime 或队列。把这些依赖通过 Node 构造器显式注入。Node 本身应保持
-可重入；单次执行状态放在输入、事件 payload 或领域 Store 中。长时间运行的同步 Node 应周期性调用
-`context.checkpoint()`，以协作式响应取消和 timeout。
-
-队列执行时，`Context.slot` 是当前逻辑执行链独占的 `Slot`。它是一个长期存在的可变 Mapping，适合保存代理、
-Cookie、连接或插件缓存：
-
-```python
-proxy = context.slot.get("proxy")
-if proxy is None:
-    proxy = proxy_pool.acquire()
-    context.slot["proxy"] = proxy
-```
-
-Slot 不绑定线程、Worker 或 Consumer。Node 通过 `context.emit()` 创建下游 Work 时，Runtime 会传递同一个 Slot；
-最后一个下游分支结束后才将它归还 `SlotPool`。一个 Slot 同一时间只执行一个 Graph，因此分支共享状态但不会
-并发修改。`Runtime.run()`、`start()`、`iter()` 和 `aiter()` 是直接调用，不经过任务队列，其 `context.slot` 为 `None`。
-
-事件一旦被 Runtime 接受就是渐进提交：源 Node 随后失败不会撤销已发布事件。核心不会比较 payload、自动去重
-或自动重试；这些是领域或后端的责任。
+[上一章：第一张 Graph](02-first-graph.md) · [下一章：Event 与跨图工作流](04-events-and-workflows.md)

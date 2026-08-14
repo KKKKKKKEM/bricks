@@ -39,19 +39,23 @@ with Runtime() as runtime:
     print(runtime.run("upper.graph", "bricks"))
 ```
 
-更多内容从[文档首页](docs/README.md)开始：
+完整内容按一本手册组织，从[文档目录](docs/README.md)开始：
 
-- [快速开始](docs/getting-started.md)
-- [核心概念](docs/core-concepts.md)
-- [运行语义](docs/runtime-semantics.md)
-- [Runtime 扩展](docs/extending-runtime.md)
-- [常见编排方式](docs/examples.md)
+1. [设计哲学与心智模型](docs/01-design-philosophy.md)
+2. [第一张 Graph](docs/02-first-graph.md)
+3. [Graph 数据流](docs/03-graph-dataflow.md)
+4. [Event 与跨图工作流](docs/04-events-and-workflows.md)
+5. [Execution、并发与失败](docs/05-execution.md)
+6. [Runtime 内部架构](docs/06-runtime-architecture.md)
+7. [插件与扩展开发](docs/07-plugins.md)
+8. [编排模式](docs/08-patterns.md)
 
 ## 当前范围
 
-默认实现提供内存事件分发、线程池队列并发、Graph 冻结与类型校验，以及可替换的 EventBus、TaskPublisher、
-TaskConsumer、TaskBackend 和 GraphExecutor 协议。它不提供持久化、ack、进程恢复、定时器、死信队列或
-exactly-once 语义。
+默认实现通过内建 `LocalRuntimePlugin` 提供内存事件分发、线程池队列并发和 Graph 执行；它与第三方扩展一样由
+统一 `PluginHost` 装配。EventBus、任务传输、GraphExecutor、输入策略、Node Hook 和 Runtime Observer 均可受控
+扩展，但 Graph 的类型、冻结和 Execution 语义保持固定。默认实现不提供持久化、broker ack、进程恢复、定时器、
+死信队列或 exactly-once 语义。
 
 ```bash
 uv run python examples/linear.py

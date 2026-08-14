@@ -1,29 +1,54 @@
-# Bricks 文档
+# Bricks：从 Graph 到事件工作流
 
-Bricks 是一个小而明确的 Python 编排内核：在一张 Graph 内传递数据，在多张 Graph 之间发布领域事件，
-再由 Runtime 管理路由和执行生命周期。
+这是一份按顺序阅读的 Bricks 手册。它从设计动机开始，用一张最小 Graph 建立直觉，再分别深入 Graph 数据流、
+跨图事件、执行控制、内部架构和插件开发。
 
-```text
-Node -- Output / Edge --> Node          同一张 Graph 内的数据流
-Graph -- Event / Runtime --> Graph      多张 Graph 间的工作流
-```
+第一次接触 Bricks 时，建议从第一章连续读到第五章；实现基础设施适配器或参与内核开发时，再继续阅读第六章以后。
 
-## 从这里开始
+## 目录
 
-1. [快速开始](getting-started.md)：用一张 Graph 跑通最小程序。
-2. [核心概念](core-concepts.md)：理解 Ports、Node、Output、Edge 和 Event 的边界。
-3. [核心架构](architecture.md)：查看 Runtime 组装关系和从 Event 到 Graph execution 的完整流程。
-4. [运行语义](runtime-semantics.md)：查阅输入触发、并发、失败、关闭等实际行为。
-5. [扩展 Runtime](extending-runtime.md)：实现 EventBus、TaskPublisher、TaskConsumer 或 GraphExecutor 适配器。
-6. [常见编排方式](examples.md)：运行线性、分支汇聚、循环、事件路由和异步 Node 示例。
+### 第一部分：建立模型
 
-需要了解项目的设计约束和贡献边界时，再阅读[架构原则](constitution.md)。它不是入门教程，也不是尚未实现的
-路线图。
+1. [设计哲学与心智模型](01-design-philosophy.md)
+   为什么区分 Output 与 Event，什么属于微内核，什么可以插件化。
+2. [第一张 Graph](02-first-graph.md)
+   定义 Node、构建 Graph、注册并运行，完成最小闭环。
+
+### 第二部分：掌握运行语义
+
+3. [Graph 数据流](03-graph-dataflow.md)
+   Ports、Edge、InputPolicy、循环、冻结和 ExecutionPlan。
+4. [Event 与跨图工作流](04-events-and-workflows.md)
+   Context.emit、事件路由、Work、观察者和 Slot 链路。
+5. [Execution、并发与失败](05-execution.md)
+   输出流、取消、超时、并发、错误传播和生命周期。
+
+### 第三部分：理解和扩展系统
+
+6. [Runtime 内部架构](06-runtime-architecture.md)
+   Router、Worker、Backend、Executor 与 PluginHost 的组装和调用序列。
+7. [插件与扩展开发](07-plugins.md)
+   插件生命周期、能力贡献、后端协议、Hook 和 Observer。
+8. [编排模式](08-patterns.md)
+   线性、分支汇聚、KeyedJoin、循环、事件路由、异步和输出流。
+
+## 如何使用这本手册
+
+- 想快速跑起来：读第一、二章。
+- 正在设计业务 Graph：读第三、四、五章。
+- 正在实现插件或远程后端：读第六、七章。
+- 想寻找可复用结构：直接查第八章。
+
+## 图示约定
+
+关系、调用顺序、状态变化、生命周期和典型拓扑优先使用 Mermaid 图，并紧邻对应的文字或代码。图用于先建立整体
+直觉，正文负责精确定义边界与异常语义；新增或修改图示时，两者必须同步更新。单一事实和已经足够清楚的短代码
+不强行配图，避免视觉噪声。
 
 ## 当前能力边界
 
-默认 Runtime 是单进程实现：事件在内存中同步分发，路由后的 Graph 使用内存队列和线程池执行。它支持类型
-校验、Graph 冻结、命名队列并发和可替换后端；不提供持久化、消息确认、进程恢复、定时任务、死信队列或
-exactly-once 语义。
+默认 Runtime 由 PluginHost 安装单进程 LocalRuntimePlugin：事件在内存中同步分发，路由后的 Graph 使用内存队列
+和线程池执行。它支持类型校验、Graph 冻结、命名队列并发、可替换后端和受控插件贡献；不提供持久化、broker
+消息确认、进程恢复、定时任务、死信队列或 exactly-once。
 
-这些限制是实现事实，不是计划中的能力。需要对应保证时，请实现并明确声明自己的后端适配器语义。
+[开始阅读：第一章](01-design-philosophy.md)

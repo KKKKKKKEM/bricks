@@ -1,6 +1,7 @@
-# 运行语义
+# 第五章：Execution、并发与失败
 
-本页记录的是当前代码的行为契约，尤其是同步边界、并发和失败传播。
+前两章分别解释了 Graph 数据流和 Event 工作流。本章把视角放在一次 execution 上，说明同步边界、输出流、并发、
+取消、失败和关闭语义。
 
 ## 注册与直接执行
 
@@ -22,7 +23,7 @@ outputs = await execution
 ```
 
 取消等待该 Execution 的 asyncio Task 时，会协作式取消底层 execution。`Runtime.arun()` 保留为等价便利接口，内部也是
-`await runtime.start(...)`，不再维护独立的执行路径。
+`await runtime.start(...)`，所有入口共享同一条执行路径。
 
 ## Terminal Output 流
 
@@ -97,34 +98,22 @@ same = runtime.get_execution(execution.id)
 Node 的 await 会被及时中断；同步 Node 可在长循环中调用 `context.checkpoint()`。无法安全强杀的普通同步函数会
 在返回后检查 deadline，因此超过 timeout 后产生的外部副作用不会被自动撤销。
 
-## 事件路由与并发
-
-通常用 `on()` 组合注册事件路由并启动本地消费者：
-
-```python
-runtime.register("crawl.graph", crawl_graph)
-runtime.on(
-    "crawl.task.created",
-    graph="crawl.graph",
-    queue="crawl",
-    concurrency=20,
-    max_steps=1000,
-    timeout=300,
-)
-runtime.emit("crawl.task.created", {"url": "https://example.com"})
-runtime.wait_idle()
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> RUNNING: 开始执行
+    PENDING --> CANCELLED: 启动前取消
+    RUNNING --> SUCCEEDED: 正常完成
+    RUNNING --> FAILED: Node 或协议失败
+    RUNNING --> CANCELLED: 协作式取消
+    RUNNING --> TIMED_OUT: 超过总时限
+    RUNNING --> STEP_LIMITED: 超过最大步数
+    SUCCEEDED --> [*]
+    FAILED --> [*]
+    CANCELLED --> [*]
+    TIMED_OUT --> [*]
+    STEP_LIMITED --> [*]
 ```
-
-`on()` 等价于依次调用 `route()` 与 `consume()`；需要把 Router 和 Worker 分开部署时可以直接使用后二者。同一
-事件类型可以有多个观察者和路由。`observe()` 独立注册同步观察者，`"*"` 观察所有类型，不承担 Graph 路由。
-每条 route 都有稳定 subscription 身份：同名 subscription 的 Router 实例竞争消费，不同 subscription 各自收到
-事件。
-
-默认 `MemoryEventBus` 在调用 `emit()` 的线程同步调用观察者并提交路由任务；目标 Graph 不在源 Node 的调用
-栈执行。默认 `MemoryTaskBackend` 使用线程池。`concurrency` 限制当前 Runtime/Worker 实例同时执行的完整
-Graph 数量，而不是集群全局并发，也不是其中某一个 Node 的并发数。
-`on()` 与 `route()` 的执行限制会写入每个 Work；跨 Graph 事件链中的每个 Work 都是独立 execution，独立计步和
-计时。
 
 ## Slot 与逻辑并发
 
@@ -142,6 +131,20 @@ runtime.consume("responses", concurrency=6, slots=slots)
 `concurrency` 是某个 Consumer 最多同时执行的 Graph 数，`slots.size` 是共享池最多同时承载的独立逻辑执行链
 数，两者不要求相等。没有 Slot 的根 Work 会等待，不占用线程池 Worker；携带 Slot 的下游 Work 优先继续执行。
 一个 Work 发出多个事件时，各分支共享同一个 Slot，并在全部结束后自动归还。
+
+```mermaid
+flowchart LR
+    subgraph Consumers[各 Consumer 的本地并发]
+        C1[requests<br/>concurrency = 20]
+        C2[responses<br/>concurrency = 6]
+    end
+
+    C1 --> Pool[共享 SlotPool<br/>size = 10]
+    C2 --> Pool
+    Pool --> S1[逻辑执行链 1]
+    Pool --> S2[逻辑执行链 2]
+    Pool --> SN[最多 10 条独立链]
+```
 
 Slot 与 Work 链绑定而不是与线程绑定。它可由一个 Consumer 的 Worker 交给另一个 Consumer 的任意 Worker，
 `Context.slot` 中的状态保持不变。显式 SlotPool 的生命周期由创建者管理；自动池由 GraphWorker 关闭。
@@ -169,8 +172,11 @@ Slot 与 Work 链绑定而不是与线程绑定。它可由一个 Consumer 的 W
 
 ## 生命周期
 
-推荐使用上下文管理器。`close()` 会先等待已接受的事件与任务完成，再依次关闭任务后端、事件总线和执行器。
-关闭后，注册、运行或发布会抛出 `RuntimeClosedError`。
+推荐使用上下文管理器。`close()` 会先等待已接受的事件与任务完成，再按装配所有权停止插件和运行组件。具体关闭
+顺序属于内部架构，本章只保证两个用户可观察行为：已接受工作会先排空，关闭后注册、运行或发布会抛出
+`RuntimeClosedError`。
 
-默认实现仅在进程内有效：没有持久化、事务、消息 ack、跨进程恢复、定时调度、死信队列、背压或 exactly-once
-保证。不要把 `wait_idle()` 理解为跨进程消息确认。
+默认实现仅在进程内有效：没有持久化、事务、broker ack、跨进程恢复、定时调度、死信队列、背压或
+exactly-once 保证。不要把 `wait_idle()` 理解为跨进程消息确认。
+
+[上一章：Event 与跨图工作流](04-events-and-workflows.md) · [下一章：Runtime 内部架构](06-runtime-architecture.md)

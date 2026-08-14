@@ -1,4 +1,16 @@
-# Bricks 宪法
+# Bricks Repository Instructions
+
+## 执行要求
+
+本文件是仓库级 AI 编码代理指令。修改代码、公共 API、运行语义、架构或相关文档前，必须完整阅读并遵守下面的
+架构宪法。
+
+- 实现、测试和文档必须与当前架构宪法一致。
+- 以最新架构为准。除非用户明确要求，不保留旧别名、隐式转换、弃用路径、兼容分支或历史架构描述。
+- 有意进行的设计调整若与宪法冲突，必须同步修改本文件、实现、测试和相关手册章节，不得绕过冲突。
+- 架构宪法保持规范、简洁；原理解释和使用教程写入 `docs/` 中的编号章节。
+
+## 架构宪法
 
 状态：Normative
 适用范围：核心 Runtime、扩展适配器与领域框架
@@ -43,14 +55,16 @@ Event、Context、Execution、ExecutionLimits、ExecutionStatus、Slot、SlotPoo
 4. 已接受 Event 不因源 Graph 后续失败而撤回。
 5. Runtime 接受每一个 Event，不比较 payload，不做领域去重。
 
-## 第五条：Runtime 是 composition root
+## 第五条：Runtime 是门面，PluginHost 是装配根
 
 1. Runtime 注册 Graph，用 `on(event, graph, queue, concurrency)` 组合路由与本地消费，并用 `observe()` 独立注册
    观察者；高级组合可以分别调用 `route()` 与 `consume()`。
-2. Runtime 显式组合 EventRouter 与 GraphWorker；Router 组装事件发布和任务投递，Worker 组装任务消费和 Graph
-   执行。自建组件由创建者管理，注入组件默认由调用方管理。
-3. Runtime 不得直接实现消息持久化、队列算法、Node 执行或领域策略。
-4. Trigger、Task、Queue、Scheduler、execution record 可以作为内部职责存在，但不要求用户逐项组装。
+2. Runtime 的默认构造必须通过 PluginHost 安装 LocalRuntimePlugin，再取得 EventRouter 与 GraphWorker；不得另设
+   只供内建实现使用的装配路径。
+3. Router 组装事件发布和任务投递，Worker 组装任务消费和 Graph 执行。显式传入 Runtime 的 Router/Worker 由
+   Runtime 管理；注入角色或插件的底层组件默认仍由调用方管理。
+4. Runtime 不得直接实现消息持久化、队列算法、Node 执行、插件发现或领域策略。
+5. Trigger、Task、Queue、Scheduler、execution record 可以作为内部职责存在，但不要求用户逐项组装。
 
 ## 第六条：可替换性通过窄协议获得
 
@@ -59,7 +73,7 @@ Event、Context、Execution、ExecutionLimits、ExecutionStatus、Slot、SlotPoo
 3. GraphExecutor 只负责执行冻结 Graph。
 4. EventBus、任务传输和 GraphExecutor 必须可以独立替换和组合，不得合并为万能 Backend。
 5. SPI 位于高级扩展层，不进入顶层 `bricks` API。
-6. Runtime 只依赖协议，不得使用默认内存实现的私有状态。
+6. Runtime 和插件装配层只依赖公开角色或能力协议，不得使用默认内存实现的私有状态。
 
 ## 第七条：可靠性不得夸大
 
@@ -70,7 +84,8 @@ Event、Context、Execution、ExecutionLimits、ExecutionStatus、Slot、SlotPoo
 
 ## 第八条：Context 保持狭窄
 
-1. Context 只提供 `emit()`、当前逻辑执行链的 `slot` 和协作式 `checkpoint()`。
+1. Context 提供 `emit()`、当前逻辑执行链的 `slot`、协作式 `checkpoint()`，以及按 Node/插件命名空间隔离的
+   execution-local `state()` 与静止阶段 `on_quiescence()`。
 2. 数据库、HTTP client、LLM provider、领域 Store 和 tracing 通过 Node 构造器或观察者注入。
 3. Node 不得获得 Runtime 内部工作请求、TaskBackend 或 executor。
 
@@ -113,19 +128,27 @@ Event、Context、Execution、ExecutionLimits、ExecutionStatus、Slot、SlotPoo
 1. Graph 冻结与执行约束必须有失败测试。
 2. Event 提交、跨图连接、并发和错误传播必须有契约测试。
 3. 三个替换协议必须有非默认实现组合测试。
-4. 示例必须只通过相同顶层 API 组合，并覆盖核心编排方式。
-5. 文档不得把计划能力写成已实现能力。
+4. 插件依赖、冲突、API 兼容、失败回滚、逆序关闭和默认装配路径必须有契约测试。
+5. 示例必须只通过相同顶层 API 组合，并覆盖核心编排方式。
+6. 文档不得把计划能力写成已实现能力。
 
-## 修订记录
+## 第十四条：插件化止于内核语义
 
-### 2026-08-08：最小公共模型与可替换能力端口
+1. Graph、Node、Ports、Edge、Output、Event、Execution 的基本语义、冻结校验和错误契约属于微内核，不得由插件替换。
+2. 部署能力和非本质策略通过具名 capability 扩展；默认实现必须与第三方实现经过同一 PluginHost 装配路径。
+3. 插件必须声明 namespaced ID、插件版本、SPI 主版本、依赖与提供的 capability；宿主按依赖顺序 setup/start，
+   并按逆序 stop。
+4. 单例 capability 冲突、缺失依赖、循环依赖、SPI 不兼容和未兑现的 capability 声明必须在 Runtime 可用前失败。
+5. 输入策略、Node Hook 和 Runtime Observer 使用统一贡献通道，但仍保留各自的强类型和权限边界。
+6. 插件不得访问 Runtime 私有状态；新增扩展类型优先成为 capability，不得继续增加互不相干的全局注册表。
 
-审计曾把 Trigger、Task、TaskQueue、Scheduler、GraphInstance 和 Engine 全部提升为顶层对象。虽然内部职责更
-清楚，但用户连接两张 Graph 时被迫理解运行实现，违背 less is more。
+## 验证要求
 
-本次修订恢复精简顶层词汇，用 `Runtime.route()` 表达事件到 Graph 的连接、用 `observe()` 表达事件观察；
-运行职责退回内部。与此同时引入 EventBus、TaskPublisher、TaskConsumer、TaskBackend、GraphExecutor
-高级结构协议，默认内存实现
-通过 Runtime 构造器注入。由此把“用户模型精简”和“基础设施可替换”分开解决。
+行为变更应先运行相关测试，并在可行时运行完整检查：
 
-领域去重、外部调用幂等和业务重试继续留在应用代码；默认内存实现不提供自动重试、持久化或 exactly-once。
+```bash
+uv run --with pytest pytest -q
+uv run --with mypy mypy bricks
+```
+
+文档变更还应检查本地链接、Markdown 围栏和发生变化的 Mermaid 图。

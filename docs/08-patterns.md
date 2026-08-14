@@ -1,6 +1,6 @@
-# 常见编排方式
+# 第八章：编排模式
 
-本目录只保留与具体业务无关、可直接运行的编排示例。每个文件都可以单独运行：
+本章把前面的概念组合成常见结构。所有模式都有对应的可运行示例：
 
 ```bash
 uv run python examples/linear.py
@@ -9,6 +9,30 @@ uv run python examples/cycle.py
 uv run python examples/event_routing.py
 uv run python examples/async_node.py
 uv run python examples/output_stream.py
+```
+
+先用一张图识别最常见的四种拓扑；后面的示例再分别展示其端口和执行语义：
+
+```mermaid
+flowchart LR
+    subgraph Linear[线性]
+        L1[Node] --> L2[Node] --> L3[Terminal]
+    end
+
+    subgraph FanIn[分支与汇聚]
+        F1[Split] -->|left| F2[Join]
+        F1 -->|right| F2
+    end
+
+    subgraph Cycle[循环]
+        C1[Node] -->|again| C1
+        C1 -->|done| C2[Terminal]
+    end
+
+    subgraph Workflow[跨 Graph 工作流]
+        W1[Graph A] -->|Event| W2[Queue]
+        W2 -->|Work| W3[Graph B]
+    end
 ```
 
 ## 1. 线性处理
@@ -47,7 +71,7 @@ graph = (
 
 若 `ALL` Node 只收到部分输入，Graph 停止时会抛出 `IncompleteInputsError`，而不是悄悄丢弃数据。
 
-## Keyed join
+### 2.1 Keyed join
 
 `ALL` 是按每个端口 FIFO 取值的 positional join，不会读取业务 key。乱序相关数据应使用官方扩展：
 
@@ -143,3 +167,5 @@ outputs = await runtime.start("output-stream", 4)
 ```
 
 `output_buffer` 限制活跃消费者的未读窗口。流式迭代结束后，Execution 仍保留完整 terminal Output tuple。
+
+[上一章：插件与扩展开发](07-plugins.md)

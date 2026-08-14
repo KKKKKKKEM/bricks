@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, MutableMapping
 from types import MappingProxyType
 from typing import Any
 
@@ -182,7 +182,7 @@ class Engine:
         terminal: list[Output] = []
         ready: deque[str] = deque((graph.entrypoint,))
         scheduled = {graph.entrypoint}
-        local_state: dict[str, dict[str, Any]] = {}
+        local_state: dict[str, MutableMapping[str, Any]] = {}
         finalizers: list[Callable[[], None]] = []
 
         def schedule_if_ready(node_id: str) -> None:

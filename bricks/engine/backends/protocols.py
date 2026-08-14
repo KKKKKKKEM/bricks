@@ -54,26 +54,6 @@ class Delivery:
         if type(self.attempt) is not int or self.attempt < 1:
             raise ValueError("delivery attempt must be an integer greater than zero")
 
-    @property
-    def graph(self) -> str:
-        return self.work.graph
-
-    @property
-    def inputs(self) -> Any:
-        return self.work.inputs
-
-    @property
-    def trigger(self) -> Event | None:
-        return self.work.trigger
-
-    @property
-    def id(self) -> str:
-        return self.work.id
-
-    @property
-    def limits(self) -> ExecutionLimits:
-        return self.work.limits
-
 
 class DeliveryOutcome(str, enum.Enum):
     ACK = "ack"
@@ -131,7 +111,7 @@ class EventBus(Protocol):
         """关闭传输。"""
 
 
-WorkHandler = Callable[[Delivery], DeliveryResult | None]
+WorkHandler = Callable[[Delivery], DeliveryResult]
 
 
 class TaskPublisher(Protocol):

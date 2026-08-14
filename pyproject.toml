@@ -37,7 +37,6 @@ packages = ["bricks"]
 include = [
     "bricks/",
     "README.md",
-    "CHANGELOG.md",
     "docs/",
     "examples/",
     "LICENSE",

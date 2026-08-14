@@ -146,7 +146,7 @@ class MemoryTaskBackend:
             )
         self._max_delivery_attempts = max_delivery_attempts
         self._channels: dict[str, _Channel] = {}
-        self._pending: set[Future[DeliveryResult | None]] = set()
+        self._pending: set[Future[DeliveryResult]] = set()
         self._failures: deque[BaseException] = deque()
         self._condition = Condition(RLock())
         self._slot_subscriptions: dict[int, tuple[SlotPool, Callable[[], None]]] = {}
@@ -251,7 +251,7 @@ class MemoryTaskBackend:
         self,
         consumer: _Consumer,
         delivery: Delivery,
-        future: Future[DeliveryResult | None],
+        future: Future[DeliveryResult],
     ) -> None:
         failure = future.exception()
         result = None if failure is not None else future.result()
@@ -260,8 +260,6 @@ class MemoryTaskBackend:
             consumer.active -= 1
             if failure is not None:
                 self._failures.append(failure)
-            elif result is None:
-                pass  # Backward-compatible implicit ACK.
             elif not isinstance(result, DeliveryResult):
                 failure = TypeError("work handler must return DeliveryResult")
                 self._failures.append(failure)
@@ -270,7 +268,7 @@ class MemoryTaskBackend:
                     self._failures.append(
                         result.error
                         or RuntimeError(
-                            f"work {delivery.id!r} exhausted "
+                            f"work {delivery.work.id!r} exhausted "
                             f"max_delivery_attempts={self._max_delivery_attempts}"
                         )
                     )

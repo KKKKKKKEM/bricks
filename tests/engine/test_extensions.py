@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 import pytest
 
 from bricks import Graph, InputPolicy, Node, Output, Ports, Runtime
@@ -124,7 +122,7 @@ def test_memory_delivery_reports_rejection() -> None:
     backend = MemoryTaskBackend()
     backend.bind(
         "reject",
-        lambda delivery: DeliveryResult.reject(ValueError(delivery.id)),
+        lambda delivery: DeliveryResult.reject(ValueError(delivery.work.id)),
         concurrency=1,
     )
     backend.submit("reject", Work("graph", id="work-1"))
@@ -147,51 +145,6 @@ def test_memory_delivery_stops_after_configured_attempts() -> None:
         backend.wait_idle()
     backend.close()
     assert attempts == [1, 2]
-
-
-def test_legacy_backend_still_receives_graph_failure_as_exception() -> None:
-    class LegacyBackend:
-        idle = True
-
-        def bind(self, queue, handler, *, concurrency, slots=None):
-            del queue, concurrency
-            self.handler = handler
-            self.slots = slots
-
-        def submit(self, queue, work):
-            del queue
-            lease = self.slots._acquire()
-            try:
-                self.handler(replace(work, _slot_lease=lease))
-            finally:
-                lease.release()
-
-        def wait_idle(self, timeout=None):
-            del timeout
-
-        def close(self):
-            pass
-
-    class Fail(Node):
-        input_ports = Ports()
-        output_ports = Ports()
-        input_policy = InputPolicy.ON_START
-
-        def execute(self, inputs, context):
-            del inputs, context
-            raise ValueError("legacy failure")
-
-    from bricks.engine import EventRouter, GraphWorker
-
-    backend = LegacyBackend()
-    router = EventRouter(publisher=backend)
-    worker = GraphWorker(consumer=backend, emit=router.publish)
-    runtime = Runtime(router=router, worker=worker)
-    runtime.register("fail.graph", Graph(entrypoint="fail").add(fail=Fail()))
-    runtime.on("go", graph="fail.graph", queue="legacy")
-    with pytest.raises(Exception, match="legacy failure"):
-        runtime.emit("go")
-    runtime.close()
 
 
 class PairSource(Node):

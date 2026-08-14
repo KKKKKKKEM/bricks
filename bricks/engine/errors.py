@@ -107,7 +107,3 @@ class EventDispatchError(BricksRuntimeError):
 
 class RuntimeClosedError(BricksRuntimeError):
     """调用方在 Runtime 关闭后继续提交工作。"""
-
-
-# 兼容旧版本导入；新代码应使用 BricksRuntimeError。
-RuntimeError = BricksRuntimeError

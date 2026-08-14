@@ -43,11 +43,26 @@ from .observation import (
     RuntimeObserver,
 )
 from .policies import InputSelector, PolicyRef, PolicyRegistry
-from .runtime import EventRouter, GraphWorker, Runtime
+from .plugins import (
+    CAP_EVENT_BUS,
+    CAP_EVENT_ROUTER,
+    CAP_GRAPH_EXECUTOR,
+    CAP_GRAPH_WORKER,
+    CAP_INPUT_SELECTOR,
+    CAP_NODE_HOOK,
+    CAP_RUNTIME_OBSERVER,
+    CAP_TASK_BACKEND,
+    Contribution,
+    ExtensionPlugin,
+    NodeHookContribution,
+    Plugin,
+    PluginContext,
+    PluginDescriptor,
+    PluginHost,
+    RegistrationHandle,
+)
+from .runtime import EventRouter, GraphWorker, LocalRuntimePlugin, Runtime
 from .slots import Slot, SlotPool
-
-# 兼容旧版本的直接导入；不再通过 __all__ 推荐这个易混淆名称。
-RuntimeError = BricksRuntimeError
 
 __all__ = [
     "AsyncNode",
@@ -92,6 +107,23 @@ __all__ = [
     "PolicyRef",
     "PolicyRegistry",
     "InputSelector",
+    "Plugin",
+    "PluginContext",
+    "PluginDescriptor",
+    "PluginHost",
+    "ExtensionPlugin",
+    "NodeHookContribution",
+    "Contribution",
+    "RegistrationHandle",
+    "LocalRuntimePlugin",
+    "CAP_EVENT_BUS",
+    "CAP_TASK_BACKEND",
+    "CAP_GRAPH_EXECUTOR",
+    "CAP_EVENT_ROUTER",
+    "CAP_GRAPH_WORKER",
+    "CAP_INPUT_SELECTOR",
+    "CAP_NODE_HOOK",
+    "CAP_RUNTIME_OBSERVER",
     "Runtime",
     "RuntimeClosedError",
     "RuntimeEvent",
