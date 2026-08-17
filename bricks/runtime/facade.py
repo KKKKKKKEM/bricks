@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from threading import RLock
@@ -30,6 +31,8 @@ from ._utils import _close_components, _remaining
 from .plugin import LocalRuntimePlugin
 from .router import EventRouter
 from .worker import GraphWorker
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class Runtime:
@@ -60,13 +63,26 @@ class Runtime:
                 raise TypeError("plugins must provide both EventRouter and GraphWorker")
             if not role_capabilities <= provides:
                 selected = (LocalRuntimePlugin(), *selected)
-            host = PluginHost(selected).start()
-            router = host.require(CAP_EVENT_ROUTER)
-            worker = host.require(CAP_GRAPH_WORKER)
-        if not isinstance(router, EventRouter):
-            raise TypeError("router must be an EventRouter")
-        if not isinstance(worker, GraphWorker):
-            raise TypeError("worker must be a GraphWorker")
+            host = PluginHost(selected)
+            try:
+                host.start()
+                router = host.require(CAP_EVENT_ROUTER)
+                worker = host.require(CAP_GRAPH_WORKER)
+                if not isinstance(router, EventRouter):
+                    raise TypeError("router must be an EventRouter")
+                if not isinstance(worker, GraphWorker):
+                    raise TypeError("worker must be a GraphWorker")
+            except BaseException:
+                try:
+                    host.close()
+                except BaseException:
+                    _LOGGER.exception("failed to roll back Runtime plugin host")
+                raise
+        else:
+            if not isinstance(router, EventRouter):
+                raise TypeError("router must be an EventRouter")
+            if not isinstance(worker, GraphWorker):
+                raise TypeError("worker must be a GraphWorker")
         self.router = router
         self.worker = worker
         self._owned_components = owned
@@ -239,9 +255,12 @@ class Runtime:
     def observe_runtime(self, observer: RuntimeObserver) -> CompositeObserverHandle:
         """订阅只读执行、Node、Event 和 Work 生命周期事件。"""
 
-        hubs = {id(self.router._observations): self.router._observations}
-        hubs[id(self.worker._observations)] = self.worker._observations
-        return CompositeObserverHandle(tuple(hub.attach(observer) for hub in hubs.values()))
+        return CompositeObserverHandle(
+            (
+                self.router.observe_runtime(observer),
+                self.worker.observe_runtime(observer),
+            )
+        )
 
     def on(
         self,

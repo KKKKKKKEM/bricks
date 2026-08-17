@@ -101,7 +101,7 @@ class RegistrationHandle:
             self._detach()
             self._detached = True
 
-    def __enter__(self) -> RegistrationHandle:
+    def __enter__(self) -> RegistrationHandle:  # noqa: PYI034
         return self
 
     def __exit__(self, *args: object) -> None:
@@ -267,7 +267,7 @@ class PluginHost:
         for descriptor, plugin in reversed(self._started):
             try:
                 plugin.stop(self._contexts[descriptor.id])
-            except BaseException as exc:
+            except BaseException as exc:  # noqa: BLE001
                 if failure is None:
                     failure = exc
         self._started.clear()

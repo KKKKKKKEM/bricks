@@ -20,7 +20,7 @@ EventHandler = Callable[[Event], None]
 
 @dataclass(frozen=True, slots=True)
 class Work:
-    """TaskBackend 在进程或消息系统之间搬运的最小执行请求。"""
+    """TaskBackend 搬运的执行请求；内部 Slot lease 只在当前进程有效。"""
 
     graph: str
     inputs: Any = None

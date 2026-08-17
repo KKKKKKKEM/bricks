@@ -99,11 +99,14 @@ Event、Context、Execution、ExecutionLimits、ExecutionStatus、Slot、SlotPoo
 
 ## 第十条：Slot 跟随逻辑执行链
 
-1. Slot 不绑定线程、Worker 或 Consumer；Work 跨 Consumer 流转时必须携带同一个 Slot。
+1. Slot 是进程内执行资源，不绑定线程、Worker 或 Consumer；同一进程内的 Work 跨 Consumer 流转时必须携带同一个
+   Slot。
 2. 根 Work 从 Consumer 配置的 SlotPool 获取 Slot，整个逻辑链结束后自动归还。
 3. 分支 Work 可以共享 Slot，但同一个 Slot 的 Graph execution 不得并发执行。
 4. `concurrency` 限制 Consumer 的本地 Graph execution；`slots.size` 限制池中的逻辑执行链，两者相互独立。
 5. 等待 Slot 的根 Work 不得占用 Consumer 的执行线程，也不得阻塞已携带 Slot 的延续 Work。
+6. Slot、SlotPool 和内部 lease 不跨进程序列化；Work 穿过进程或消息边界后开始新的本地 Slot 链，远程适配器不得
+   宣称保留原进程的 Slot 连续性。
 
 ## 第十一条：Execution 控制必须默认开放
 

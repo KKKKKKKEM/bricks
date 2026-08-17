@@ -13,6 +13,9 @@ import pytest
 
 from bricks import Event, Graph, InputPolicy, Node, Output, Ports, Runtime
 from bricks.adapters import memory
+from bricks.engine.hooks import HookRegistry
+from bricks.engine.slots import SlotPool
+from bricks.runtime import EventRouter, GraphWorker
 from bricks.spi import (
     Delivery,
     DeliveryOutcome,
@@ -21,9 +24,6 @@ from bricks.spi import (
     Work,
     WorkHandler,
 )
-from bricks.engine.hooks import HookRegistry
-from bricks.engine.slots import SlotPool
-from bricks.runtime import EventRouter, GraphWorker
 
 
 class EmptyNode(Node):

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import enum
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from threading import RLock
 from types import MappingProxyType
 from typing import Any, Protocol
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class RuntimeEventKind(str, enum.Enum):
@@ -89,9 +92,11 @@ class ObservationHub:
         for observer in observers:
             try:
                 observer(event)
-            except Exception:  # noqa: BLE001
-                # Telemetry must never alter graph semantics.
-                continue
+            except Exception:
+                _LOGGER.exception(
+                    "runtime observer failed for %s",
+                    event.kind.value,
+                )
 
     def _detach(self, observer: RuntimeObserver) -> None:
         with self._lock:

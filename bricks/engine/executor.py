@@ -8,7 +8,6 @@ from types import MappingProxyType
 from typing import Any
 
 from .core import (
-    InputPolicy,
     Node,
     Output,
     require_non_empty_string,

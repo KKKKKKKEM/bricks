@@ -81,7 +81,6 @@ class _AnySelector:
 class _OnStartSelector:
     def select(self, ports, available, config):
         del ports, available, config
-        return None
 
 
 class PolicyRegistry:

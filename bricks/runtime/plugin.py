@@ -57,10 +57,13 @@ class LocalRuntimePlugin:
             raise TypeError("tasks must implement TaskPublisher and TaskConsumer")
         self._events = memory.EventBus() if events is None else events
         self._tasks = memory.TaskBackend() if tasks is None else tasks
-        self._observations = ObservationHub()
+        self._router_observations = ObservationHub()
+        self._worker_observations = ObservationHub()
         self._policies = PolicyRegistry()
         self._executor = (
-            Engine(observations=self._observations) if executor is None else executor
+            Engine(observations=self._worker_observations)
+            if executor is None
+            else executor
         )
         self._owned = (
             events is None,
@@ -75,13 +78,13 @@ class LocalRuntimePlugin:
         self.router = EventRouter(
             events=self._events,
             publisher=self._tasks,  # type: ignore[arg-type]
-            observations=self._observations,
+            observations=self._router_observations,
         )
         self.worker = GraphWorker(
             consumer=self._tasks,  # type: ignore[arg-type]
             executor=self._executor,
             emit=self.router.publish,
-            observations=self._observations,
+            observations=self._worker_observations,
             policies=self._policies,
         )
         context.provide(CAP_EVENT_BUS, self._events)
@@ -106,7 +109,8 @@ class LocalRuntimePlugin:
             else:
                 self.worker.attach(value)
         for contribution in context.contributions(CAP_RUNTIME_OBSERVER):
-            self._observations.attach(contribution.value)
+            self._router_observations.attach(contribution.value)
+            self._worker_observations.attach(contribution.value)
 
     def stop(self, context: PluginContext) -> None:
         del context

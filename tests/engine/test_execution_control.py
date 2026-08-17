@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from threading import Event as ThreadEvent
-from threading import Thread
+from threading import Lock, Thread
 
 import pytest
 
@@ -583,6 +583,41 @@ def test_wait_idle_tracks_synchronous_run_from_another_thread() -> None:
     assert not thread.is_alive()
     runtime.wait_idle(0)
     runtime.close()
+
+
+def test_completed_execution_burst_is_trimmed_to_history_limit() -> None:
+    entered = 0
+    entered_all = ThreadEvent()
+    counter_lock = Lock()
+    release = ThreadEvent()
+
+    class Block(Node):
+        input_ports = Ports(value=int)
+        output_ports = Ports()
+
+        def execute(self, inputs, context: Context) -> None:
+            nonlocal entered
+            del inputs, context
+            with counter_lock:
+                entered += 1
+                if entered == 3:
+                    entered_all.set()
+            release.wait()
+
+    with Runtime() as runtime:
+        runtime.worker._history_limit = 2
+        runtime.register("block.graph", Graph(entrypoint="block").add(block=Block()))
+        executions = [runtime.start("block.graph", value) for value in range(3)]
+
+        try:
+            assert entered_all.wait(1)
+            assert len(runtime.executions()) == 3
+        finally:
+            release.set()
+        runtime.wait_idle(1)
+
+        assert all(execution.done for execution in executions)
+        assert len(runtime.executions()) == 2
 
 
 def test_queued_unknown_graph_is_recorded_as_failed_execution() -> None:

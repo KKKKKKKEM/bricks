@@ -128,7 +128,7 @@ runtime.consume("requests", concurrency=20, slots=slots)
 runtime.consume("responses", concurrency=6, slots=slots)
 ```
 
-`concurrency` 是某个 Consumer 最多同时执行的 Graph 数，`slots.size` 是共享池最多同时承载的独立逻辑执行链
+`concurrency` 是某个 Consumer 最多同时执行的 Graph 数，`slots.size` 是同一进程内共享池最多同时承载的逻辑执行链
 数，两者不要求相等。没有 Slot 的根 Work 会等待，不占用线程池 Worker；携带 Slot 的下游 Work 优先继续执行。
 一个 Work 发出多个事件时，各分支共享同一个 Slot，并在全部结束后自动归还。
 
@@ -146,8 +146,9 @@ flowchart LR
     Pool --> SN[最多 10 条独立链]
 ```
 
-Slot 与 Work 链绑定而不是与线程绑定。它可由一个 Consumer 的 Worker 交给另一个 Consumer 的任意 Worker，
-`Context.slot` 中的状态保持不变。显式 SlotPool 的生命周期由创建者管理；自动池由 GraphWorker 关闭。
+Slot 与 Work 链绑定而不是与线程绑定。在同一进程内，它可由一个 Consumer 的 Worker 交给另一个 Consumer 的任意
+Worker，`Context.slot` 中的状态保持不变。进程或消息边界会结束这条 Slot 链，接收进程重新分配本地 Slot。显式
+SlotPool 的生命周期由创建者管理；自动池由 GraphWorker 关闭。
 
 `wait_idle(timeout)` 会交替等待事件总线和任务后端，直到由事件继续产生的工作也已完成。传 `0` 可以进行即时
 空闲检查。
@@ -176,7 +177,7 @@ Slot 与 Work 链绑定而不是与线程绑定。它可由一个 Consumer 的 W
 顺序属于内部架构，本章只保证两个用户可观察行为：已接受工作会先排空，关闭后注册、运行或发布会抛出
 `RuntimeClosedError`。
 
-默认实现仅在进程内有效：没有持久化、事务、broker ack、跨进程恢复、定时调度、死信队列、背压或
-exactly-once 保证。不要把 `wait_idle()` 理解为跨进程消息确认。
+默认实现仅在进程内有效：Slot 不跨进程延续，也没有持久化、事务、broker ack、跨进程恢复、定时调度、死信队列、
+背压或 exactly-once 保证。不要把 `wait_idle()` 理解为跨进程消息确认。
 
 [上一章：Event 与跨图工作流](04-events-and-workflows.md) · [下一章：Runtime 内部架构](06-runtime-architecture.md)

@@ -12,7 +12,13 @@ from ..engine.core import require_non_empty_string
 from ..engine.errors import BricksRuntimeError, EventDispatchError, RuntimeClosedError
 from ..engine.events import Event
 from ..engine.execution import ExecutionLimits
-from ..engine.observation import ObservationHub, RuntimeEvent, RuntimeEventKind
+from ..engine.observation import (
+    ObservationHub,
+    ObserverHandle,
+    RuntimeEvent,
+    RuntimeEventKind,
+    RuntimeObserver,
+)
 from ..spi import EventBus, TaskPublisher, Work
 from ._utils import _close_components, _unique
 
@@ -60,6 +66,11 @@ class EventRouter:
             raise TypeError("event handler must be callable")
         self._events.subscribe(event_type, handler)
         return self
+
+    def observe_runtime(self, observer: RuntimeObserver) -> ObserverHandle:
+        """订阅当前 Router 发布的只读生命周期事件。"""
+
+        return self._observations.attach(observer)
 
     def route(
         self,

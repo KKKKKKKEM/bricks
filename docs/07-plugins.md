@@ -128,7 +128,7 @@ TaskPublisher 的 `submit()` 正常返回即表示后端已接受 Work，同时�
   subscription 的多个实例竞争消费，不同 subscription 各自收到一份；省略 subscription 的观察者相互独立。
   Event 携带内部 Slot lease 时，EventBus 从 `publish()` 调用开始接管该引用，并在所有 handler 投递结束或发布
   失败时释放；默认 `memory.EventBus` 已实现该约束。
-- TaskPublisher 把 Work 提交到命名 queue，`submit()` 正常返回表示后端已经接受；TaskConsumer 的
+- TaskPublisher 把 Work 提交到命名 queue，`submit()` 正常返回表示后端已经接受；同一进程内 TaskConsumer 的
   `bind(queue, handler, concurrency=..., slots=...)` 在调度根 Work 前从 SlotPool 获取 lease，延续 Work 则保留
   自身 lease。等待 Slot 的根 Work 不能占用 concurrency，Work 完成或失败后必须释放它持有的 lease。
 - GraphExecutor 接收注册名、冻结 Graph、入口输入、Event emitter、可选 ExecutionPlan，以及关键字参数
@@ -155,8 +155,9 @@ Runtime 不依赖默认内存实现的私有字段。
 不要仅因适配器名为 Redis 或 MQ 就暗示这些能力已经存在。领域 ID、去重和外部副作用的幂等性仍应由领域模型
 显式实现。
 
-`Slot` 保存进程内对象，默认不能随 Work 跨进程序列化。远程 TaskBackend 若要保留相同语义，必须让同一逻辑
-执行链路由到持有该 Slot 的执行进程，或自行实现可序列化的状态引用及其租约协议；否则应明确声明不支持 Slot。
+`Slot`、`SlotPool` 和内部 lease 只具有进程内语义，不随 Work 跨进程序列化。远程 TaskPublisher 必须用 Graph 名、
+输入、Work ID、limits 和不含 lease 的领域 Event 重建传输数据；接收端 TaskConsumer 把它作为新的本地根 Work，
+从本地 SlotPool 获取 Slot。跨进程适配器不得宣称延续了源进程的 Slot。
 
 ## 分离 Router 与 Worker
 

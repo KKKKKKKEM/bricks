@@ -140,7 +140,8 @@ sequenceDiagram
 ```
 
 EventRouter 不需要目标 Graph 定义，只负责把匹配 Event 转成 Work。GraphWorker 不需要源 Event，只按 Work 中的
-注册名寻找 Graph。两者可以位于不同进程，只要 EventBus 和任务传输实现对应部署语义。
+注册名寻找 Graph。两者可以位于不同进程，只要 EventBus 和任务传输实现对应部署语义；进程边界不会延续 Slot，
+接收端 TaskConsumer 会为该 Work 开始新的本地 Slot 链。
 
 ## Graph 冻结边界
 
@@ -185,9 +186,9 @@ Observer 异常会被隔离。Hook 可以转换输入、输出或流程，但最
 
 ## Slot 租约与分支
 
-TaskConsumer 为根 Work 从 SlotPool 获取 lease。EventRouter 为每个下游分支保留引用，EventBus 和 TaskBackend 在
-交付完成后释放自己的引用；最后一个分支结束时 Slot 回到池中。同一个 Slot 使用 execution lock 保证 Graph 不会
-并发修改链路状态。
+同一进程内，TaskConsumer 为根 Work 从 SlotPool 获取 lease。EventRouter 为每个下游分支保留引用，EventBus 和
+TaskBackend 在交付完成后释放自己的引用；最后一个分支结束时 Slot 回到池中。同一个 Slot 使用 execution lock 保证
+Graph 不会并发修改链路状态。lease 不进入远程传输；跨进程 Work 在接收端成为新的本地根 Work。
 
 ## 生命周期与所有权
 

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Hashable
 from dataclasses import dataclass
-from typing import Any, Hashable
+from typing import Any
 
 from ..engine import Context, InputPolicy, Node, Output, Ports
 from ..engine.errors import IncompleteInputsError

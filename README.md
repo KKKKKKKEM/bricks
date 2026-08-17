@@ -8,8 +8,8 @@ Node -- Output / Edge --> Node
 Graph -- Event / Runtime --> Graph
 ```
 
-顶层 API 还提供 `Slot` 与 `SlotPool`：队列 Work 可以跨 Consumer 传递并复用代理、Cookie、连接等执行状态，
-而不依赖具体线程。
+顶层 API 还提供进程内的 `Slot` 与 `SlotPool`：队列 Work 可以在同一进程中跨 Consumer 传递并复用代理、Cookie、
+连接等执行状态，而不依赖具体线程。Slot 不跨进程或消息边界传输。
 
 执行默认不限步数和时长；`run()`、`start()` 和事件 route 可按需设置 `max_steps` 与 Graph `timeout`，单次
 Node firing 的时限由该 Node 的 `timeout` 属性声明。`start()` 返回可查询和协作式取消的 `Execution`。

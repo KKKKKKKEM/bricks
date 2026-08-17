@@ -480,7 +480,7 @@ class GraphWorker:
         work = delivery.work
         try:
             self._execute_work(work)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001
             self._observations.publish(
                 RuntimeEvent(
                     RuntimeEventKind.WORK_FINISHED,
@@ -533,6 +533,9 @@ class GraphWorker:
             if isinstance(exc, ExecutionError) and exc.event is None:
                 exc.event = work.trigger
             raise
+        finally:
+            with self._lock:
+                self._trim_execution_history_locked()
 
     def _new_execution(
         self,
@@ -628,17 +631,21 @@ class GraphWorker:
             if execution.id in self._executions:
                 raise BricksRuntimeError(f"duplicate execution {execution.id!r}")
             self._executions[execution.id] = execution
-            while len(self._executions) > self._history_limit:
-                for execution_id, retained in self._executions.items():
-                    if retained.done:
-                        del self._executions[execution_id]
-                        break
-                else:
-                    break
+            self._trim_execution_history_locked()
 
     def _direct_done(self, future: Future[tuple[Output, ...]]) -> None:
         with self._lock:
             self._direct_pending.discard(future)
+            self._trim_execution_history_locked()
+
+    def _trim_execution_history_locked(self) -> None:
+        while len(self._executions) > self._history_limit:
+            for execution_id, retained in self._executions.items():
+                if retained.done:
+                    del self._executions[execution_id]
+                    break
+            else:
+                break
 
     def _emit_with_lease(self, lease: _SlotLease, event: Event) -> None:
         # A successful emitter call transfers this reference to the EventBus.

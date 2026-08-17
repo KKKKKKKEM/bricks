@@ -4,17 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from bricks import Graph, InputPolicy, Node, Output, Ports, Runtime
+from bricks import Graph, Node, Output, Ports, Runtime
 from bricks.adapters import memory
-from bricks.spi import (
-    DeliveryOutcome,
-    DeliveryResult,
-    Work,
-)
 from bricks.engine.errors import GraphValidationError, IncompleteInputsError
 from bricks.engine.observation import RuntimeEventKind
 from bricks.engine.policies import PolicyRef
 from bricks.nodes import KeyedJoin, KeyedPair, KeyedValue
+from bricks.spi import (
+    DeliveryResult,
+    Work,
+)
 
 
 class Source(Node):
@@ -26,7 +25,9 @@ class Source(Node):
         return Output(inputs["value"], "value")
 
 
-def test_runtime_observer_sees_read_only_lifecycle_and_cannot_break_work() -> None:
+def test_runtime_observer_sees_read_only_lifecycle_and_cannot_break_work(
+    caplog,
+) -> None:
     events = []
 
     def observe(event) -> None:
@@ -47,6 +48,7 @@ def test_runtime_observer_sees_read_only_lifecycle_and_cannot_break_work() -> No
         RuntimeEventKind.EXECUTION_FINISHED,
     ]
     assert events[-1].attributes["steps"] == 1
+    assert "runtime observer failed" in caplog.text
     with pytest.raises(TypeError):
         events[-1].attributes["steps"] = 2
 
@@ -92,9 +94,10 @@ def test_contributed_policy_is_bound_when_graph_freezes() -> None:
 
 def test_missing_contributed_policy_fails_at_registration() -> None:
     graph = Graph(entrypoint="join").add(join=ContributedNode())
-    with Runtime() as runtime:
-        with pytest.raises(GraphValidationError, match="not registered"):
-            runtime.register("missing.graph", graph)
+    with Runtime() as runtime, pytest.raises(
+        GraphValidationError, match="not registered"
+    ):
+        runtime.register("missing.graph", graph)
 
 
 def test_memory_delivery_retries_and_increments_attempt() -> None:

@@ -112,8 +112,9 @@ runtime.observe("*", trace_all_events)
 
 ## Slot 如何跨 Graph 延续
 
-队列执行时，`Context.slot` 表示当前逻辑执行链的状态槽。Node 发布下游事件时，同一个 Slot 会随 Work 传递；多个
-分支可以共享它，但同一个 Slot 的 Graph execution 不会并发运行。所有分支结束后 Slot 才归还 SlotPool。
+队列执行时，`Context.slot` 表示当前进程内逻辑执行链的状态槽。Node 发布下游事件时，同一个 Slot 会随本地 Work
+传递；多个分支可以共享它，但同一个 Slot 的 Graph execution 不会并发运行。所有本地分支结束后 Slot 才归还
+SlotPool。
 
 ```mermaid
 flowchart TB
@@ -132,8 +133,9 @@ if proxy is None:
     context.slot["proxy"] = proxy
 ```
 
-Slot 适合保存代理、Cookie、连接或链路缓存。领域持久状态仍应放在外部 Store。直接调用 `run()`、`start()`、
-`iter()` 或 `aiter()` 不经过任务队列，因此 `context.slot` 为 `None`。
+Slot 适合保存代理、Cookie、连接或链路缓存。领域持久状态仍应放在外部 Store。Slot、SlotPool 和内部 lease 不可
+跨进程序列化；Work 穿过消息边界后由接收进程开始新的本地 Slot 链。直接调用 `run()`、`start()`、`iter()` 或
+`aiter()` 不经过任务队列，因此 `context.slot` 为 `None`。
 
 ## Context 的边界
 

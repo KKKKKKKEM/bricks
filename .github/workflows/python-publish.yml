@@ -10,8 +10,11 @@ on:
     types: [ created ]
 
 jobs:
+  quality:
+    uses: ./.github/workflows/ci.yml
 
   deploy-to-test-pypi:
+    needs: quality
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.repository == 'KKKKKKKEM/bricks'
     steps:
@@ -36,6 +39,7 @@ jobs:
           UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
 
   deploy-to-pypi:
+    needs: quality
     runs-on: ubuntu-latest
     if: github.event_name == 'release' && github.event.action == 'created' && github.repository == 'KKKKKKKEM/bricks'
     steps:

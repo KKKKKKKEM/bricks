@@ -12,7 +12,10 @@ from .slots import Slot, _SlotLease
 
 @dataclass(frozen=True, slots=True)
 class Event:
-    """按类型路由并携带领域 payload 的不可变消息。"""
+    """按类型路由并携带领域 payload 的不可变消息。
+
+    内部 Slot lease 只用于当前进程的逻辑链，不属于 Event 的传输数据。
+    """
 
     type: str
     payload: Any = None

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from bricks import Graph, InputPolicy, Node, Output, Ports, Runtime
+from bricks import Graph, Node, Output, Ports, Runtime
 from bricks.adapters import memory
 from bricks.engine.executor import Engine
 from bricks.engine.policies import PolicyRef
 from bricks.plugins import (
-    CAP_INPUT_SELECTOR,
+    CAP_EVENT_ROUTER,
+    CAP_GRAPH_WORKER,
     ContributionPlugin,
     NodeHookContribution,
     PluginDescriptor,
@@ -122,6 +123,35 @@ def test_setup_failure_rolls_back_configured_plugins() -> None:
         PluginHost((base, Broken("example/broken", events))).start()
 
     assert events[-2:] == ["stop:example/broken", "stop:example/base"]
+
+
+def test_runtime_role_validation_failure_closes_started_plugin_host() -> None:
+    class InvalidRoles:
+        descriptor = PluginDescriptor(
+            "example/invalid-roles",
+            "1.0.0",
+            provides=(CAP_EVENT_ROUTER, CAP_GRAPH_WORKER),
+        )
+
+        def __init__(self) -> None:
+            self.stopped = False
+
+        def setup(self, context) -> None:
+            context.provide(CAP_EVENT_ROUTER, object())
+            context.provide(CAP_GRAPH_WORKER, object())
+
+        def start(self, context) -> None:
+            del context
+
+        def stop(self, context) -> None:
+            del context
+            self.stopped = True
+
+    plugin = InvalidRoles()
+    with pytest.raises(TypeError, match="router must be an EventRouter"):
+        Runtime(plugins=(plugin,))
+
+    assert plugin.stopped
 
 
 class AnySelector:

@@ -5,8 +5,7 @@ from __future__ import annotations
 import pytest
 
 import bricks
-from bricks import adapters, engine, nodes, plugins, runtime, spi
-from bricks import Event, Ports
+from bricks import Event, Ports, adapters, engine, nodes, plugins, runtime, spi
 
 
 def test_top_level_api_contains_only_core_vocabulary() -> None:
