@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import fields
+
 import pytest
 
 import bricks
 from bricks import Event, Ports, adapters, engine, nodes, plugins, runtime, spi
+from bricks.spi import Work
 
 
 def test_top_level_api_contains_only_core_vocabulary() -> None:
@@ -75,3 +78,16 @@ def test_event_is_minimal_domain_message() -> None:
 
     assert event.type == "crawl.page.requested"
     assert event.payload["url"] == "https://example.com"
+    assert tuple(field.name for field in fields(Event)) == ("type", "payload")
+
+
+def test_work_contains_only_transportable_execution_data() -> None:
+    work = Work("crawl.graph", {"url": "https://example.com"})
+
+    assert tuple(field.name for field in fields(Work)) == (
+        "graph",
+        "inputs",
+        "trigger",
+        "id",
+        "limits",
+    )

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import pickle
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import replace
 from threading import Event as ThreadEvent
 from threading import Thread
 from uuid import UUID
@@ -60,14 +60,13 @@ class RecordingBus:
         self.handlers[event_type].append(handler)
 
     def publish(self, event: Event) -> None:
-        self.events.append(event)
-        handlers = tuple(self.handlers[event.type]) + tuple(self.handlers["*"])
-        try:
-            for handler in handlers:
-                handler(event)
-        finally:
-            if event._slot_lease is not None:
-                event._slot_lease.release()
+        transported = pickle.loads(pickle.dumps(event))
+        self.events.append(transported)
+        handlers = tuple(self.handlers[transported.type]) + tuple(
+            self.handlers["*"]
+        )
+        for handler in handlers:
+            handler(transported)
 
     def wait_idle(self, timeout: float | None = None) -> None:
         del timeout
@@ -100,9 +99,10 @@ class RecordingTasks:
             slots = SlotPool(concurrency)
 
         def handle(work: Work) -> None:
-            lease = work._slot_lease or slots._acquire()
+            transported = pickle.loads(pickle.dumps(work))
+            lease = slots._acquire()
             try:
-                result = handler(Delivery(replace(work, _slot_lease=lease)))
+                result = handler(Delivery(transported, _slot_lease=lease))
                 if result.outcome is not DeliveryOutcome.ACK:
                     raise result.error or RuntimeError(
                         f"work handler returned {result.outcome.value}"

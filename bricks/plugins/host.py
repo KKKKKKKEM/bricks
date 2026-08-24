@@ -22,6 +22,7 @@ class PluginDescriptor:
     requires: tuple[str, ...] = ()
     provides: tuple[str, ...] = ()
     api_version: str = "1"
+    requires_capabilities: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         plugin_id = require_non_empty_string(self.id, "plugin id")
@@ -35,6 +36,7 @@ class PluginDescriptor:
             raise ValueError("plugin API version must be a positive integer")
         for label, values in (
             ("plugin requirement", self.requires),
+            ("required capability", self.requires_capabilities),
             ("provided capability", self.provides),
         ):
             if not isinstance(values, tuple):
@@ -44,6 +46,11 @@ class PluginDescriptor:
                 raise ValueError(f"duplicate {label}")
         if plugin_id in self.requires:
             raise ValueError("plugin must not require itself")
+        overlap = set(self.requires_capabilities) & set(self.provides)
+        if overlap:
+            raise ValueError(
+                f"plugin must not require capabilities it provides: {sorted(overlap)!r}"
+            )
 
 
 class Plugin(Protocol):
@@ -296,6 +303,25 @@ class PluginHost:
                 )
             candidates[descriptor.id] = (descriptor, plugin)
 
+        providers: dict[str, str] = {}
+        for descriptor, _ in candidates.values():
+            for capability in descriptor.provides:
+                existing = providers.get(capability)
+                if existing is not None:
+                    raise ValueError(
+                        f"capability {capability!r} is already provided by "
+                        f"{existing!r}; {descriptor.id!r} also declares it"
+                    )
+                providers[capability] = descriptor.id
+
+        for descriptor, _ in candidates.values():
+            for capability in descriptor.requires_capabilities:
+                if capability not in providers:
+                    raise ValueError(
+                        f"missing required capability {capability!r} "
+                        f"for plugin {descriptor.id!r}"
+                    )
+
         ordered: list[tuple[PluginDescriptor, Plugin]] = []
         visiting: set[str] = set()
         visited: set[str] = set()
@@ -312,6 +338,8 @@ class PluginHost:
             visiting.add(plugin_id)
             for required in descriptor.requires:
                 visit(required)
+            for capability in descriptor.requires_capabilities:
+                visit(providers[capability])
             visiting.remove(plugin_id)
             visited.add(plugin_id)
             ordered.append((descriptor, plugin))
@@ -356,7 +384,12 @@ class ContributionPlugin:
             )
             if entries
         )
-        self.descriptor = PluginDescriptor(plugin_id, version, requires, provides)
+        self.descriptor = PluginDescriptor(
+            plugin_id,
+            version,
+            requires=requires,
+            provides=provides,
+        )
 
     def setup(self, context: PluginContext) -> None:
         for name, selector in self._selectors.items():

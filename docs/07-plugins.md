@@ -29,13 +29,15 @@ contributions = ContributionPlugin(
 runtime = Runtime(plugins=(contributions,))
 ```
 
-`Runtime()` 会自动补入 `LocalRuntimePlugin`。因此 EventBus、TaskBackend、GraphExecutor、Router 和 Worker 的默认
-内存组合也是普通内建插件，而不是 Runtime 的隐藏特例。插件只从 `PluginContext` 取得已声明 capability，不应读取
-Runtime、Router 或 Worker 的私有字段。
+`Runtime()` 会检查插件声明的 capability，并通过 `LocalRuntimePlugin` 逐项补齐缺失的 EventBus、TaskBackend 和
+GraphExecutor，再组装标准 Router 与 Worker。因此默认内存组合也是普通内建插件，而不是 Runtime 的隐藏特例；只
+提供一个基础设施 capability 的插件可以与其余默认实现组合。插件只从 `PluginContext` 取得已声明 capability，
+不应读取 Runtime、Router 或 Worker 的私有字段。
 
 单例 capability 只能有一个 provider；InputSelector、NodeHook 和 RuntimeObserver 是可聚合的具名 contribution。
 插件 ID 和 contribution 名必须带命名空间。`PluginDescriptor.api_version` 声明所需的插件 SPI 主版本，当前为
-`"1"`。缺失/循环依赖、API 不兼容、能力冲突或 descriptor 声明未兑现都会在 Runtime 构造期间失败。
+`"1"`。`requires` 声明插件 ID 依赖，`requires_capabilities` 声明 capability 依赖；两者都参与拓扑排序。缺失或
+循环依赖、API 不兼容、能力冲突或 descriptor 声明未兑现都会在 Runtime 构造期间失败。
 
 `PluginHost` 当前只负责显式传入的可信 Python 插件，不会扫描环境或在 import 时自动执行第三方代码。需要配置驱动
 发现时，应在应用 composition root 中完成包发现和白名单选择，再把实例交给 Runtime。
@@ -50,8 +52,8 @@ flowchart TB
     Host --> Local
     Host --> Infra
     Host --> Feature
-    Local -->|provide| CoreCaps[EventBus / TaskBackend / GraphExecutor]
-    Infra -->|provide 或替换| CoreCaps
+    Infra -->|provide selected capability| CoreCaps[EventBus / TaskBackend / GraphExecutor]
+    Local -->|fill missing capabilities| CoreCaps
     Feature -->|contribute| Contributions[Selectors / Hooks / Observers]
     CoreCaps --> Runtime[Runtime 稳定门面]
     Contributions --> Runtime
@@ -59,7 +61,37 @@ flowchart TB
 
 ### 自定义基础设施
 
-需要替换基础设施但仍使用标准 Router/Worker 时，优先配置内建装配插件：
+只替换部分基础设施时，插件声明自己提供的 capability，Runtime 会补齐其余默认实现：
+
+```python
+from bricks import Runtime
+from bricks.plugins import CAP_EVENT_BUS, PluginDescriptor
+
+
+class RedisEventsPlugin:
+    descriptor = PluginDescriptor(
+        "acme/redis-events",
+        "1.0.0",
+        provides=(CAP_EVENT_BUS,),
+    )
+
+    def __init__(self, events):
+        self.events = events
+
+    def setup(self, context):
+        context.provide(CAP_EVENT_BUS, self.events)
+
+    def start(self, context):
+        del context
+
+    def stop(self, context):
+        del context
+
+
+runtime = Runtime(plugins=(RedisEventsPlugin(my_event_bus),))
+```
+
+一次注入全部基础设施时，也可以直接配置内建装配插件：
 
 ```python
 from bricks import Runtime
@@ -113,6 +145,7 @@ tasks = memory.TaskBackend()
 | --- | --- | --- |
 | `EventBus` | Event 订阅、发布、投递空闲与关闭 | `memory.EventBus` |
 | `TaskPublisher` | 向命名队列提交 Work | `memory.TaskBackend` |
+| `LocalTaskPublisher` | 可选：在当前进程延续 Slot lease | `memory.TaskBackend` |
 | `TaskConsumer` | 调度带 Slot 的 Work，并控制当前实例的本地并发 | `memory.TaskBackend` |
 | `TaskBackend` | 同时实现发布与消费的组合协议 | `memory.TaskBackend` |
 | `GraphExecutor` | 执行已冻结 Graph 并返回终端 Output | `Engine` |
@@ -125,12 +158,12 @@ TaskPublisher 的 `submit()` 正常返回即表示后端已接受 Work，同时�
 提供 `execute()` 和 `close()`。角色依赖这些方法完成自身的等待与关闭。
 
 - EventBus 的 `subscribe(event_type, handler, subscription=...)` 需要支持精确类型和 `"*"` 通配订阅。同名
-  subscription 的多个实例竞争消费，不同 subscription 各自收到一份；省略 subscription 的观察者相互独立。
-  Event 携带内部 Slot lease 时，EventBus 从 `publish()` 调用开始接管该引用，并在所有 handler 投递结束或发布
-  失败时释放；默认 `memory.EventBus` 已实现该约束。
+    subscription 的多个实例竞争消费，不同 subscription 各自收到一份；省略 subscription 的观察者相互独立。
+    Event 始终只有 `type` 和 `payload`，EventBus 不接触 Slot 或 lease。
 - TaskPublisher 把 Work 提交到命名 queue，`submit()` 正常返回表示后端已经接受；同一进程内 TaskConsumer 的
-  `bind(queue, handler, concurrency=..., slots=...)` 在调度根 Work 前从 SlotPool 获取 lease，延续 Work 则保留
-  自身 lease。等待 Slot 的根 Work 不能占用 concurrency，Work 完成或失败后必须释放它持有的 lease。
+    `bind(queue, handler, concurrency=..., slots=...)` 在调度根 Work 前从 SlotPool 获取 lease。Work 只包含 Graph
+    名、输入、领域 trigger、ID 和 limits；进程内 lease 只存在于 `Delivery`。支持 `LocalTaskPublisher` 的本地后端
+    可以延续 lease；等待 Slot 的根 Work 不能占用 concurrency，交付完成或失败后必须释放 Delivery 持有的 lease。
 - GraphExecutor 接收注册名、冻结 Graph、入口输入、Event emitter、可选 ExecutionPlan，以及关键字参数
   `slot=` 和 `execution=`。GraphWorker 会把冻结后的 Node timeout 快照绑定到 Execution；替换执行器必须为每次
   Node firing 使用 `with execution.step(node_id): ...` 包住完整调用，并在调度边界调用
@@ -155,9 +188,10 @@ Runtime 不依赖默认内存实现的私有字段。
 不要仅因适配器名为 Redis 或 MQ 就暗示这些能力已经存在。领域 ID、去重和外部副作用的幂等性仍应由领域模型
 显式实现。
 
-`Slot`、`SlotPool` 和内部 lease 只具有进程内语义，不随 Work 跨进程序列化。远程 TaskPublisher 必须用 Graph 名、
-输入、Work ID、limits 和不含 lease 的领域 Event 重建传输数据；接收端 TaskConsumer 把它作为新的本地根 Work，
-从本地 SlotPool 获取 Slot。跨进程适配器不得宣称延续了源进程的 Slot。
+`Event` 和 `Work` 本身就是不含 lease 的传输模型。远程适配器必须序列化 Graph 名、输入、Work ID、limits 和领域
+Event，并明确 payload 的编码限制；接收端 TaskConsumer 把反序列化后的 Work 作为新的本地根 Work，从本地
+SlotPool 获取 Slot，再创建本地 Delivery。跨进程适配器不得序列化 Delivery 的 lease，也不得宣称延续了源进程的
+Slot。
 
 ## 分离 Router 与 Worker
 

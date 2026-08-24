@@ -74,8 +74,7 @@ outputs = runtime.run(
 class Fetch(AsyncNode):
     timeout = 10
 
-    async def execute(self, inputs, context):
-        ...
+    async def execute(self, inputs, context): ...
 ```
 
 `Node.timeout=None` 是默认值，表示该 Node 不限时；有限正数表示秒数。一次 firing 的 Hook 与 Node 调用共用这段
@@ -178,6 +177,7 @@ SlotPool 的生命周期由创建者管理；自动池由 GraphWorker 关闭。
 `RuntimeClosedError`。
 
 默认实现仅在进程内有效：Slot 不跨进程延续，也没有持久化、事务、broker ack、跨进程恢复、定时调度、死信队列、
-背压或 exactly-once 保证。不要把 `wait_idle()` 理解为跨进程消息确认。
+broker/queue 级背压或 exactly-once 保证。Execution 的有界 Output 流仍提供进程内消费者背压。不要把
+`wait_idle()` 理解为跨进程消息确认。
 
 [上一章：Event 与跨图工作流](04-events-and-workflows.md) · [下一章：Runtime 内部架构](06-runtime-architecture.md)

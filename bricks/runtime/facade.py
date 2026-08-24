@@ -21,8 +21,11 @@ from ..engine.observation import (
 from ..engine.policies import InputSelector
 from ..engine.slots import SlotPool
 from ..plugins import (
+    CAP_EVENT_BUS,
     CAP_EVENT_ROUTER,
+    CAP_GRAPH_EXECUTOR,
     CAP_GRAPH_WORKER,
+    CAP_TASK_BACKEND,
     Plugin,
     PluginHost,
 )
@@ -62,7 +65,17 @@ class Runtime:
             if provides & role_capabilities and not role_capabilities <= provides:
                 raise TypeError("plugins must provide both EventRouter and GraphWorker")
             if not role_capabilities <= provides:
-                selected = (LocalRuntimePlugin(), *selected)
+                infrastructure = {
+                    CAP_EVENT_BUS,
+                    CAP_TASK_BACKEND,
+                    CAP_GRAPH_EXECUTOR,
+                }
+                selected = (
+                    LocalRuntimePlugin(
+                        _provide_capabilities=frozenset(infrastructure - provides)
+                    ),
+                    *selected,
+                )
             host = PluginHost(selected)
             try:
                 host.start()

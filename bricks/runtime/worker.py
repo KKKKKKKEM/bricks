@@ -52,6 +52,7 @@ class GraphWorker:
         consumer: TaskConsumer,
         executor: GraphExecutor | None = None,
         emit: Emit | None = None,
+        emit_local: Callable[[Event, _SlotLease], None] | None = None,
         close_injected: bool = False,
         observations: ObservationHub | None = None,
         policies: PolicyRegistry | None = None,
@@ -69,6 +70,9 @@ class GraphWorker:
         self._emit = _reject_emit if emit is None else emit
         if not callable(self._emit):
             raise TypeError("worker emitter must be callable")
+        self._emit_local = emit_local
+        if self._emit_local is not None and not callable(self._emit_local):
+            raise TypeError("worker local emitter must be callable or None")
         self._owned_components = owned
         self._close_injected = close_injected
         self._observations = observations
@@ -479,7 +483,7 @@ class GraphWorker:
 
         work = delivery.work
         try:
-            self._execute_work(work)
+            self._execute_work(work, delivery._slot_lease)
         except BaseException as exc:  # noqa: BLE001
             self._observations.publish(
                 RuntimeEvent(
@@ -505,7 +509,7 @@ class GraphWorker:
         )
         return DeliveryResult.ack()
 
-    def _execute_work(self, work: Work) -> None:
+    def _execute_work(self, work: Work, lease: _SlotLease | None) -> None:
         execution = Execution(
             work.graph,
             limits=work.limits,
@@ -514,7 +518,6 @@ class GraphWorker:
         self._record_execution(execution)
         try:
             graph = self._get_graph(work.graph)
-            lease = work._slot_lease
             if lease is None:
                 raise BricksRuntimeError("TaskConsumer dispatched Work without a Slot")
             with lease.slot._execution_lock:
@@ -648,18 +651,10 @@ class GraphWorker:
                 break
 
     def _emit_with_lease(self, lease: _SlotLease, event: Event) -> None:
-        # A successful emitter call transfers this reference to the EventBus.
-        lease.retain()
-        forwarded = Event(
-            event.type,
-            event.payload,
-            _slot_lease=lease,
-        )
-        try:
-            self._emit(forwarded)
-        except BaseException:
-            lease.release()
-            raise
+        if self._emit_local is None:
+            self._emit(event)
+            return
+        self._emit_local(event, lease)
 
     def _get_graph(self, name: str) -> Graph:
         name = require_non_empty_string(name, "registered graph name")

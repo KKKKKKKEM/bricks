@@ -3,28 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Callable, MutableMapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from .core import require_non_empty_string
-from .slots import Slot, _SlotLease
+from .slots import Slot
 
 
 @dataclass(frozen=True, slots=True)
 class Event:
-    """按类型路由并携带领域 payload 的不可变消息。
-
-    内部 Slot lease 只用于当前进程的逻辑链，不属于 Event 的传输数据。
-    """
+    """按类型路由并携带领域 payload 的不可变消息。"""
 
     type: str
     payload: Any = None
-    _slot_lease: _SlotLease | None = field(
-        default=None,
-        compare=False,
-        repr=False,
-        kw_only=True,
-    )
 
     def __post_init__(self) -> None:
         """校验事件类型是非空字符串。"""

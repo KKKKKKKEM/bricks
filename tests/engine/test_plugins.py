@@ -9,8 +9,11 @@ from bricks.adapters import memory
 from bricks.engine.executor import Engine
 from bricks.engine.policies import PolicyRef
 from bricks.plugins import (
+    CAP_EVENT_BUS,
     CAP_EVENT_ROUTER,
+    CAP_GRAPH_EXECUTOR,
     CAP_GRAPH_WORKER,
+    CAP_TASK_BACKEND,
     ContributionPlugin,
     NodeHookContribution,
     PluginDescriptor,
@@ -26,11 +29,16 @@ class RecordingPlugin:
         events: list[str],
         *,
         requires: tuple[str, ...] = (),
+        requires_capabilities: tuple[str, ...] = (),
         capability: str | None = None,
     ) -> None:
         provides = () if capability is None else (capability,)
         self.descriptor = PluginDescriptor(
-            plugin_id, "1.0.0", requires=requires, provides=provides
+            plugin_id,
+            "1.0.0",
+            requires=requires,
+            requires_capabilities=requires_capabilities,
+            provides=provides,
         )
         self.events = events
         self.capability = capability
@@ -67,6 +75,23 @@ def test_host_orders_dependencies_and_stops_in_reverse() -> None:
     ]
     host.close()
     assert events[-2:] == ["stop:example/feature", "stop:example/base"]
+
+
+def test_host_orders_capability_dependencies_and_rejects_missing_provider() -> None:
+    events: list[str] = []
+    provider = RecordingPlugin("example/provider", events, capability="example/value")
+    consumer = RecordingPlugin(
+        "example/consumer",
+        events,
+        requires_capabilities=("example/value",),
+    )
+
+    host = PluginHost((consumer, provider)).start()
+    assert events[:2] == ["setup:example/provider", "setup:example/consumer"]
+    host.close()
+
+    with pytest.raises(ValueError, match="missing required capability"):
+        PluginHost((consumer,))
 
 
 def test_host_rejects_missing_cycle_and_capability_conflict() -> None:
@@ -123,6 +148,80 @@ def test_setup_failure_rolls_back_configured_plugins() -> None:
         PluginHost((base, Broken("example/broken", events))).start()
 
     assert events[-2:] == ["stop:example/broken", "stop:example/base"]
+
+
+def test_start_failure_rolls_back_plugins_in_reverse_order() -> None:
+    events: list[str] = []
+
+    class Broken(RecordingPlugin):
+        def start(self, context) -> None:
+            super().start(context)
+            raise RuntimeError("start failed")
+
+    with pytest.raises(RuntimeError, match="start failed"):
+        PluginHost(
+            (
+                RecordingPlugin("example/base", events),
+                Broken("example/broken", events),
+            )
+        ).start()
+
+    assert events[-2:] == ["stop:example/broken", "stop:example/base"]
+
+
+def test_host_rejects_declared_but_missing_capability() -> None:
+    class Missing(RecordingPlugin):
+        def setup(self, context) -> None:
+            del context
+
+    plugin = Missing("example/missing", [], capability="example/value")
+
+    with pytest.raises(RuntimeError, match="did not provide declared capabilities"):
+        PluginHost((plugin,)).start()
+
+
+def test_stop_failure_does_not_skip_remaining_plugins() -> None:
+    events: list[str] = []
+
+    class BrokenStop(RecordingPlugin):
+        def stop(self, context) -> None:
+            super().stop(context)
+            raise RuntimeError(f"stop failed: {self.descriptor.id}")
+
+    host = PluginHost(
+        (
+            BrokenStop("example/first", events),
+            BrokenStop("example/second", events),
+        )
+    ).start()
+
+    with pytest.raises(RuntimeError, match="example/second"):
+        host.close()
+
+    assert events[-2:] == ["stop:example/second", "stop:example/first"]
+
+
+def test_contributions_reject_duplicate_names_and_freeze_after_start() -> None:
+    class Contributions:
+        descriptor = PluginDescriptor(
+            "example/contributions",
+            "1.0.0",
+            provides=("example/items",),
+        )
+
+        def setup(self, context) -> None:
+            context.contribute("example/items", "example/item", object())
+            with pytest.raises(ValueError, match="already exists"):
+                context.contribute("example/items", "example/item", object())
+
+        def start(self, context) -> None:
+            with pytest.raises(RuntimeError, match="frozen"):
+                context.contribute("example/items", "example/late", object())
+
+        def stop(self, context) -> None:
+            del context
+
+    PluginHost((Contributions(),)).start().close()
 
 
 def test_runtime_role_validation_failure_closes_started_plugin_host() -> None:
@@ -234,3 +333,61 @@ def test_custom_infrastructure_uses_the_same_local_plugin_path() -> None:
     events.close()
     tasks.close()
     executor.close()
+
+
+def test_runtime_fills_defaults_around_custom_event_bus_capability() -> None:
+    events: list[str] = []
+    bus = memory.EventBus()
+
+    class EventBusPlugin(RecordingPlugin):
+        def __init__(self) -> None:
+            super().__init__(
+                "example/events",
+                events,
+                capability=CAP_EVENT_BUS,
+            )
+
+        def setup(self, context) -> None:
+            self.events.append(f"setup:{self.descriptor.id}")
+            context.provide(CAP_EVENT_BUS, bus)
+
+        def stop(self, context) -> None:
+            super().stop(context)
+            bus.close()
+
+    with Runtime(plugins=(EventBusPlugin(),)) as runtime:
+        assert runtime.plugin_host is not None
+        assert runtime.plugin_host.require(CAP_EVENT_BUS) is bus
+
+
+@pytest.mark.parametrize(
+    ("capability", "component"),
+    [
+        (CAP_TASK_BACKEND, memory.TaskBackend()),
+        (CAP_GRAPH_EXECUTOR, Engine()),
+    ],
+)
+def test_runtime_fills_defaults_around_each_infrastructure_capability(
+    capability: str,
+    component: object,
+) -> None:
+    class InfrastructurePlugin:
+        descriptor = PluginDescriptor(
+            f"example/{capability.rsplit('/', 1)[-1]}",
+            "1.0.0",
+            provides=(capability,),
+        )
+
+        def setup(self, context) -> None:
+            context.provide(capability, component)
+
+        def start(self, context) -> None:
+            del context
+
+        def stop(self, context) -> None:
+            del context
+            component.close()
+
+    with Runtime(plugins=(InfrastructurePlugin(),)) as runtime:
+        assert runtime.plugin_host is not None
+        assert runtime.plugin_host.require(capability) is component

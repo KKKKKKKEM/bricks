@@ -71,8 +71,6 @@ class EventBus:
             raise TypeError("event bus accepts only Event")
         with self._condition:
             if self._closed:
-                if event._slot_lease is not None:
-                    event._slot_lease.release()
                 raise RuntimeError("event bus is closed")
             handlers = self._select_handlers(event.type)
             if event.type != "*":
@@ -90,8 +88,6 @@ class EventBus:
             if failure is not None:
                 raise failure
         finally:
-            if event._slot_lease is not None:
-                event._slot_lease.release()
             with self._condition:
                 self._active_dispatches -= 1
                 self._condition.notify_all()
@@ -206,6 +202,19 @@ class TaskBackend:
             channel.queued.append(Delivery(work))
             self._drain_channel(channel)
 
+    def submit_local(self, queue: str, work: Work, lease) -> None:
+        """提交延续当前进程 Slot 链的 Work。"""
+
+        queue = require_non_empty_string(queue, "task queue")
+        if not isinstance(work, Work):
+            raise TypeError("task backend accepts only Work")
+        with self._condition:
+            if self._closed:
+                raise RuntimeError("task backend is closed")
+            channel = self._channels.setdefault(queue, _Channel([], deque()))
+            channel.queued.append(Delivery(work, _slot_lease=lease))
+            self._drain_channel(channel)
+
     def wait_idle(self, timeout: float | None = None) -> None:
         _validate_timeout(timeout)
         deadline = None if timeout is None else time.monotonic() + timeout
@@ -273,20 +282,24 @@ class TaskBackend:
                         )
                     )
                 else:
-                    if delivery.work._slot_lease is not None:
-                        delivery.work._slot_lease.retain()
+                    if delivery._slot_lease is not None:
+                        delivery._slot_lease.retain()
                     channel = next(
                         channel
                         for channel in self._channels.values()
                         if consumer in channel.consumers
                     )
                     channel.queued.appendleft(
-                        Delivery(delivery.work, delivery.attempt + 1)
+                        Delivery(
+                            delivery.work,
+                            delivery.attempt + 1,
+                            _slot_lease=delivery._slot_lease,
+                        )
                     )
             elif result.outcome is DeliveryOutcome.REJECT and result.error is not None:
                 self._failures.append(result.error)
-        if delivery.work._slot_lease is not None:
-            delivery.work._slot_lease.release()
+        if delivery._slot_lease is not None:
+            delivery._slot_lease.release()
         with self._condition:
             self._drain_all()
             self._condition.notify_all()
@@ -297,8 +310,8 @@ class TaskBackend:
             future = consumer.executor.submit(consumer.handler, delivery)
         except BaseException:
             consumer.active -= 1
-            if delivery.work._slot_lease is not None:
-                delivery.work._slot_lease.release()
+            if delivery._slot_lease is not None:
+                delivery._slot_lease.release()
             raise
         self._pending.add(future)
         future.add_done_callback(partial(self._done, consumer, delivery))
@@ -321,7 +334,7 @@ class TaskBackend:
                 (
                     index
                     for index, delivery in enumerate(channel.queued)
-                    if delivery.work._slot_lease is not None
+                    if delivery._slot_lease is not None
                 ),
                 None,
             )
@@ -342,7 +355,7 @@ class TaskBackend:
                         consumer,
                         replace(
                             delivery,
-                            work=replace(delivery.work, _slot_lease=lease),
+                            _slot_lease=lease,
                         ),
                     )
                     break

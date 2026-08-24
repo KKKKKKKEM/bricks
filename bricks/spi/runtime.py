@@ -20,17 +20,11 @@ EventHandler = Callable[[Event], None]
 
 @dataclass(frozen=True, slots=True)
 class Work:
-    """TaskBackend 搬运的执行请求；内部 Slot lease 只在当前进程有效。"""
+    """TaskBackend 搬运的可序列化执行请求。"""
 
     graph: str
     inputs: Any = None
     trigger: Event | None = field(default=None, compare=False, repr=False)
-    _slot_lease: _SlotLease | None = field(
-        default=None,
-        compare=False,
-        repr=False,
-        kw_only=True,
-    )
     id: str = field(default_factory=lambda: str(uuid4()), kw_only=True)
     limits: ExecutionLimits = field(default_factory=ExecutionLimits, kw_only=True)
 
@@ -43,10 +37,16 @@ class Work:
 
 @dataclass(frozen=True, slots=True)
 class Delivery:
-    """一次可确认的 Work 投递；attempt 从 1 开始并随重投递递增。"""
+    """一次本地可确认投递；attempt 从 1 开始并随重投递递增。"""
 
     work: Work
     attempt: int = 1
+    _slot_lease: _SlotLease | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+        kw_only=True,
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.work, Work):
@@ -122,6 +122,13 @@ class TaskPublisher(Protocol):
 
     def close(self) -> None:
         """关闭发布端持有的资源。"""
+
+
+class LocalTaskPublisher(TaskPublisher, Protocol):
+    """可在当前进程延续 Slot 链的可选任务发布能力。"""
+
+    def submit_local(self, queue: str, work: Work, lease: _SlotLease) -> None:
+        """提交带进程内 lease 的 Work；调用方转移一个 lease 引用。"""
 
 
 class TaskConsumer(Protocol):

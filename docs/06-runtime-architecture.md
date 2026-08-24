@@ -100,8 +100,9 @@ flowchart TB
     Contributions --> Observers[RuntimeObserver contributions]
 ```
 
-`Runtime()` 自动补入 LocalRuntimePlugin。内建实现和应用插件使用相同的依赖解析、capability 注册、启动和停止
-流程。显式 `Runtime(router=..., worker=...)` 用于 Router/Worker 独立部署，此模式不创建 PluginHost。
+`Runtime()` 根据已声明 capability 让 LocalRuntimePlugin 逐项补齐缺失的 EventBus、TaskBackend 和 GraphExecutor，
+再组装 Router 与 Worker。内建实现和应用插件使用相同的依赖解析、capability 注册、启动和停止流程。显式
+`Runtime(router=..., worker=...)` 用于 Router/Worker 独立部署，此模式不创建 PluginHost。
 
 ## 直接执行路径
 
@@ -134,7 +135,7 @@ sequenceDiagram
     Router->>Bus: publish(Event)
     Bus->>Router: matching route handler
     Router->>Tasks: submit(Work)
-    Tasks->>Worker: Delivery(work, attempt)
+    Tasks->>Worker: Delivery(work, attempt, local lease)
     Worker->>Target: execute(payload)
     Worker-->>Tasks: DeliveryResult
 ```
@@ -186,9 +187,10 @@ Observer 异常会被隔离。Hook 可以转换输入、输出或流程，但最
 
 ## Slot 租约与分支
 
-同一进程内，TaskConsumer 为根 Work 从 SlotPool 获取 lease。EventRouter 为每个下游分支保留引用，EventBus 和
-TaskBackend 在交付完成后释放自己的引用；最后一个分支结束时 Slot 回到池中。同一个 Slot 使用 execution lock 保证
-Graph 不会并发修改链路状态。lease 不进入远程传输；跨进程 Work 在接收端成为新的本地根 Work。
+Event 和 Work 都不携带 lease。同一进程内，TaskConsumer 为根 Work 从 SlotPool 获取 lease；本地 Router 与
+TaskBackend 通过仅限进程内的发布上下文和 Delivery 为每个下游分支保留引用，交付完成后释放，最后一个分支结束时
+Slot 回到池中。同一个 Slot 使用 execution lock 保证 Graph 不会并发修改链路状态。远程传输只序列化 Event/Work；
+接收端反序列化后创建新的本地根 Delivery 和 Slot 链。
 
 ## 生命周期与所有权
 

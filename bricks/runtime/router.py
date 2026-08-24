@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextvars import ContextVar
 from functools import partial
 from threading import RLock
 from typing import Any
@@ -19,10 +20,15 @@ from ..engine.observation import (
     RuntimeEventKind,
     RuntimeObserver,
 )
+from ..engine.slots import _SlotLease
 from ..spi import EventBus, TaskPublisher, Work
 from ._utils import _close_components, _unique
 
 EventHandler = Callable[[Event], None]
+_LOCAL_LEASE: ContextVar[_SlotLease | None] = ContextVar(
+    "bricks_local_event_lease",
+    default=None,
+)
 
 
 class EventRouter:
@@ -128,10 +134,6 @@ class EventRouter:
         try:
             self._events.publish(event)
         except BaseException as exc:
-            # EventBus consumed its reference even when dispatch failed. Restore
-            # it so a rejected emitter call leaves ownership with its caller.
-            if event._slot_lease is not None:
-                event._slot_lease.retain()
             if isinstance(exc, EventDispatchError):
                 raise
             if isinstance(exc, Exception):
@@ -140,6 +142,15 @@ class EventRouter:
         self._observations.publish(
             RuntimeEvent(RuntimeEventKind.EVENT_PUBLISHED, event_type=event.type)
         )
+
+    def publish_local(self, event: Event, lease: _SlotLease) -> None:
+        """发布 Event，并仅为同步本地路由关联当前 Slot lease。"""
+
+        token = _LOCAL_LEASE.set(lease)
+        try:
+            self.publish(event)
+        finally:
+            _LOCAL_LEASE.reset(token)
 
     def wait_idle(self, timeout: float | None = None) -> None:
         """等待当前 Router 已接受的 Event 投递完成。"""
@@ -187,7 +198,7 @@ class EventRouter:
         limits: ExecutionLimits,
         event: Event,
     ) -> None:
-        lease = event._slot_lease
+        lease = _LOCAL_LEASE.get()
         if lease is not None:
             lease.retain()
         try:
@@ -195,10 +206,17 @@ class EventRouter:
                 graph,
                 event.payload,
                 trigger=event,
-                _slot_lease=lease,
                 limits=limits,
             )
-            self._publisher.submit(queue, work)
+            submit_local = getattr(self._publisher, "submit_local", None)
+            if lease is not None and callable(submit_local):
+                submit_local(queue, work, lease)
+                lease = None
+            else:
+                self._publisher.submit(queue, work)
+                if lease is not None:
+                    lease.release()
+                    lease = None
             self._observations.publish(
                 RuntimeEvent(
                     RuntimeEventKind.WORK_SUBMITTED,
