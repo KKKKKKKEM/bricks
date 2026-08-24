@@ -82,7 +82,7 @@ def test_event_is_minimal_domain_message() -> None:
 
 
 def test_work_contains_only_transportable_execution_data() -> None:
-    work = Work("crawl.graph", {"url": "https://example.com"})
+    Work("crawl.graph", {"url": "https://example.com"})
 
     assert tuple(field.name for field in fields(Work)) == (
         "graph",
