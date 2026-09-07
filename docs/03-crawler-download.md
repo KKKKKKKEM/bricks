@@ -1,4 +1,4 @@
-# 第二章：爬虫下载
+# 第三章：爬虫下载
 
 下载器负责 HTTP 传输；下载节点负责接收 Request、复制请求、选择下载器，并通过 response 端口输出 Response。
 Request 不保存下载器实例或注册名称。下载能力属于爬虫领域，不增加 Runtime、Context 或核心 selector 的职责。
@@ -94,4 +94,4 @@ uv run python -m examples.crawler_download https://example.com
 这版采用缓冲响应和内存上传，未实现流式传输、浏览器行为、业务重试、持久化或配置文件装配。
 后续配置层可以创建下载器映射和选择函数，再调用相同节点构造器；无需在 Request 中绑定下载器。
 
-[文档目录](README.md)
+[上一章：爬虫领域模型](02-crawler-models.md) · [文档目录](README.md)

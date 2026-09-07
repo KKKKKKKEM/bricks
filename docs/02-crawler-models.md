@@ -1,6 +1,6 @@
-# 第一章：爬虫领域模型
+# 第二章：爬虫领域模型
 
-`bricks` 提供请求、响应与记录模型，以及[下载器和下载节点](02-crawler-download.md)。
+`bricks` 提供请求、响应与记录模型，以及[下载器和下载节点](03-crawler-download.md)。
 当前还没有爬虫调度器或流式上传实现。
 
 ## Request 的请求体
@@ -153,4 +153,4 @@ records = result.to_list()
 去重支持嵌套列表和字典；不可哈希值使用逐项比较，大集合优先指定 URL 等可哈希字段。
 可哈希性不改变相等语义，例如相等的 set 和 frozenset 字段也会合并，并保留首次出现的记录。
 
-[文档目录](README.md)
+[上一章：架构与依赖](01-architecture.md) · [文档目录](README.md) · [下一章：爬虫下载](03-crawler-download.md)
