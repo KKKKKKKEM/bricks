@@ -52,7 +52,6 @@ class Runtime:
             raise TypeError("plugins cannot be combined with router or worker")
         if (router is None) != (worker is None):
             raise TypeError("Runtime requires both router and worker")
-        owned: tuple[object, ...] = ()
         host: PluginHost | None = None
         if router is None:
             selected = () if plugins is None else tuple(plugins)
@@ -98,7 +97,6 @@ class Runtime:
                 raise TypeError("worker must be a GraphWorker")
         self.router = router
         self.worker = worker
-        self._owned_components = owned
         self._plugin_host = host
         self._closed = False
         self._lock = RLock()
@@ -328,7 +326,6 @@ class Runtime:
             self._closed = True
         if self._plugin_host is None:
             failure = _close_components((self.worker, self.router), failure)
-            failure = _close_components(reversed(self._owned_components), failure)
         else:
             failure = _close_components((self._plugin_host,), failure)
         if failure is not None:

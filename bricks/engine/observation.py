@@ -100,4 +100,6 @@ class ObservationHub:
 
     def _detach(self, observer: RuntimeObserver) -> None:
         with self._lock:
-            self._observers = tuple(item for item in self._observers if item is not observer)
+            self._observers = tuple(
+                item for item in self._observers if item is not observer
+            )

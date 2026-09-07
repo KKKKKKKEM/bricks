@@ -297,9 +297,7 @@ class Graph:
         outgoing: dict[tuple[str, str], list[Edge]] = defaultdict(list)
         for edge in self._edges:
             outgoing[(edge.source, edge.source_port)].append(edge)
-        self._outgoing = {
-            key: tuple(edges) for key, edges in outgoing.items()
-        }
+        self._outgoing = {key: tuple(edges) for key, edges in outgoing.items()}
         self._frozen = True
         return self
 
@@ -346,9 +344,7 @@ class Graph:
             policy = node.input_policy
             timeout = node.timeout
             if not isinstance(inputs, Ports) or not isinstance(outputs, Ports):
-                raise GraphValidationError(
-                    f"node {node_id!r} ports must be Ports"
-                )
+                raise GraphValidationError(f"node {node_id!r} ports must be Ports")
             if not isinstance(policy, (InputPolicy, PolicyRef)):
                 raise GraphValidationError(
                     f"node {node_id!r} input_policy must be InputPolicy or PolicyRef"

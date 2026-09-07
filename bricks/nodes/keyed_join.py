@@ -67,16 +67,18 @@ class KeyedJoin(Node):
             state["pending"] = pending - 1
             if not other_queue:
                 del buffers[other][item.key]
-            left, right = (item.value, counterpart) if port == "left" else (
-                counterpart,
-                item.value,
+            left, right = (
+                (item.value, counterpart)
+                if port == "left"
+                else (
+                    counterpart,
+                    item.value,
+                )
             )
             return Output(KeyedPair(item.key, left, right), "joined")
 
         if pending >= self.max_pending:
-            raise OverflowError(
-                f"keyed join exceeded max_pending={self.max_pending}"
-            )
+            raise OverflowError(f"keyed join exceeded max_pending={self.max_pending}")
         buffers[port].setdefault(item.key, deque()).append(item.value)
         state["pending"] = pending + 1
         return None

@@ -105,8 +105,10 @@ Event、Context、Execution、ExecutionLimits、ExecutionStatus、Slot、SlotPoo
 3. 分支 Work 可以共享 Slot，但同一个 Slot 的 Graph execution 不得并发执行。
 4. `concurrency` 限制 Consumer 的本地 Graph execution；`slots.size` 限制池中的逻辑执行链，两者相互独立。
 5. 等待 Slot 的根 Work 不得占用 Consumer 的执行线程，也不得阻塞已携带 Slot 的延续 Work。
-6. Slot、SlotPool 和内部 lease 不跨进程序列化；Work 穿过进程或消息边界后开始新的本地 Slot 链，远程适配器不得
+6. Slot、SlotPool 和进程内 lease 不跨进程序列化；Work 穿过进程或消息边界后开始新的本地 Slot 链，远程适配器不得
    宣称保留原进程的 Slot 连续性。
+7. 适配器通过 SlotPool 的公开申请和可用通知接口取得 `bricks.spi.SlotLease`，通过 `Delivery.slot_lease` 传递；
+   lease 提供引用管理和串行 execution 能力，不暴露内部锁。每个接管的引用必须释放，执行期间的引用由 lease 保护。
 
 ## 第十一条：Execution 控制必须默认开放
 
@@ -152,6 +154,8 @@ Event、Context、Execution、ExecutionLimits、ExecutionStatus、Slot、SlotPoo
 ```bash
 uv run --with pytest pytest -q
 uv run --with mypy mypy bricks
+uv run --with ruff ruff check bricks tests examples
+uv run --with ruff ruff format --check bricks
 ```
 
 文档变更还应检查本地链接、Markdown 围栏和发生变化的 Mermaid 图。

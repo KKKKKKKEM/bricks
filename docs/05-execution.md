@@ -97,6 +97,10 @@ same = runtime.get_execution(execution.id)
 Node 的 await 会被及时中断；同步 Node 可在长循环中调用 `context.checkpoint()`。无法安全强杀的普通同步函数会
 在返回后检查 deadline，因此超过 timeout 后产生的外部副作用不会被自动撤销。
 
+异步取消或超时会向实际协程发送取消请求，并等待它完成 `finally` 等清理后才结束 execution、释放执行锁并归还
+Slot。清理期间 execution 仍为 `RUNNING`，`wait_idle()` 也会继续等待。协程若抑制取消或清理迟迟不结束，等待可能
+超过配置的 timeout；该限制不能安全强杀协程，也不会让下一张 Graph 提前复用仍在使用的资源。
+
 ```mermaid
 stateDiagram-v2
     [*] --> PENDING

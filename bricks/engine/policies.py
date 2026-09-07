@@ -47,14 +47,20 @@ class BoundPolicy:
         ports: Sequence[str],
         queues: Mapping[str, Sequence[object]],
     ) -> tuple[str, ...] | None:
-        available = MappingProxyType({port: len(queues.get(port, ())) for port in ports})
+        available = MappingProxyType(
+            {port: len(queues.get(port, ())) for port in ports}
+        )
         selected = self.selector.select(ports, available, self.ref.config)
         if selected is None:
             return None
         if not isinstance(selected, tuple) or not selected:
-            raise RuntimeError(f"policy {self.ref.name!r} must return a non-empty tuple or None")
+            raise RuntimeError(
+                f"policy {self.ref.name!r} must return a non-empty tuple or None"
+            )
         if len(set(selected)) != len(selected):
-            raise RuntimeError(f"policy {self.ref.name!r} selected a port more than once")
+            raise RuntimeError(
+                f"policy {self.ref.name!r} selected a port more than once"
+            )
         unknown = set(selected) - set(ports)
         empty = tuple(port for port in selected if available.get(port, 0) < 1)
         if unknown or empty:
@@ -66,20 +72,37 @@ class BoundPolicy:
 
 
 class _AllSelector:
-    def select(self, ports, available, config):
+    def select(
+        self,
+        ports: Sequence[str],
+        available: Mapping[str, int],
+        config: Mapping[str, Any],
+    ) -> tuple[str, ...] | None:
         del config
         selected = tuple(ports)
-        return selected if selected and all(available[port] for port in selected) else None
+        return (
+            selected if selected and all(available[port] for port in selected) else None
+        )
 
 
 class _AnySelector:
-    def select(self, ports, available, config):
+    def select(
+        self,
+        ports: Sequence[str],
+        available: Mapping[str, int],
+        config: Mapping[str, Any],
+    ) -> tuple[str, ...] | None:
         del config
         return next(((port,) for port in ports if available[port]), None)
 
 
 class _OnStartSelector:
-    def select(self, ports, available, config):
+    def select(
+        self,
+        ports: Sequence[str],
+        available: Mapping[str, int],
+        config: Mapping[str, Any],
+    ) -> None:
         del ports, available, config
 
 
@@ -121,6 +144,7 @@ class PolicyRegistry:
             try:
                 selector = self._selectors[ref.name]
             except KeyError as exc:
-                raise ValueError(f"input policy {ref.name!r} is not registered") from exc
+                raise ValueError(
+                    f"input policy {ref.name!r} is not registered"
+                ) from exc
         return BoundPolicy(ref, selector)
-

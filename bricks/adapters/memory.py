@@ -18,6 +18,7 @@ from ..spi import (
     DeliveryOutcome,
     DeliveryResult,
     EventHandler,
+    SlotLease,
     Work,
     WorkHandler,
 )
@@ -202,7 +203,7 @@ class TaskBackend:
             channel.queued.append(Delivery(work))
             self._drain_channel(channel)
 
-    def submit_local(self, queue: str, work: Work, lease) -> None:
+    def submit_local(self, queue: str, work: Work, lease: SlotLease) -> None:
         """提交延续当前进程 Slot 链的 Work。"""
 
         queue = require_non_empty_string(queue, "task queue")
@@ -212,7 +213,7 @@ class TaskBackend:
             if self._closed:
                 raise RuntimeError("task backend is closed")
             channel = self._channels.setdefault(queue, _Channel([], deque()))
-            channel.queued.append(Delivery(work, _slot_lease=lease))
+            channel.queued.append(Delivery(work, slot_lease=lease))
             self._drain_channel(channel)
 
     def wait_idle(self, timeout: float | None = None) -> None:
@@ -220,9 +221,7 @@ class TaskBackend:
         deadline = None if timeout is None else time.monotonic() + timeout
         with self._condition:
             while not self.idle:
-                remaining = (
-                    None if deadline is None else deadline - time.monotonic()
-                )
+                remaining = None if deadline is None else deadline - time.monotonic()
                 if remaining is not None and remaining <= 0:
                     raise TimeoutError("task backend did not become idle")
                 self._condition.wait(remaining)
@@ -282,8 +281,8 @@ class TaskBackend:
                         )
                     )
                 else:
-                    if delivery._slot_lease is not None:
-                        delivery._slot_lease.retain()
+                    if delivery.slot_lease is not None:
+                        delivery.slot_lease.retain()
                     channel = next(
                         channel
                         for channel in self._channels.values()
@@ -293,13 +292,13 @@ class TaskBackend:
                         Delivery(
                             delivery.work,
                             delivery.attempt + 1,
-                            _slot_lease=delivery._slot_lease,
+                            slot_lease=delivery.slot_lease,
                         )
                     )
             elif result.outcome is DeliveryOutcome.REJECT and result.error is not None:
                 self._failures.append(result.error)
-        if delivery._slot_lease is not None:
-            delivery._slot_lease.release()
+        if delivery.slot_lease is not None:
+            delivery.slot_lease.release()
         with self._condition:
             self._drain_all()
             self._condition.notify_all()
@@ -308,11 +307,13 @@ class TaskBackend:
         consumer.active += 1
         try:
             future = consumer.executor.submit(consumer.handler, delivery)
-        except BaseException:
+        except BaseException as exc:
             consumer.active -= 1
-            if delivery._slot_lease is not None:
-                delivery._slot_lease.release()
-            raise
+            self._failures.append(exc)
+            if delivery.slot_lease is not None:
+                delivery.slot_lease.release()
+            self._condition.notify_all()
+            return
         self._pending.add(future)
         future.add_done_callback(partial(self._done, consumer, delivery))
 
@@ -334,7 +335,7 @@ class TaskBackend:
                 (
                     index
                     for index, delivery in enumerate(channel.queued)
-                    if delivery._slot_lease is not None
+                    if delivery.slot_lease is not None
                 ),
                 None,
             )
@@ -349,13 +350,13 @@ class TaskBackend:
             delivery = channel.queued[0]
             assigned: tuple[_Consumer, Delivery] | None = None
             for consumer in available:
-                lease = consumer.slots._try_acquire()
+                lease = consumer.slots.try_acquire()
                 if lease is not None:
                     assigned = (
                         consumer,
                         replace(
                             delivery,
-                            _slot_lease=lease,
+                            slot_lease=lease,
                         ),
                     )
                     break
@@ -376,7 +377,9 @@ class TaskBackend:
         count = len(channel.consumers)
         start = channel.next_consumer % count
         ordered = channel.consumers[start:] + channel.consumers[:start]
-        return [consumer for consumer in ordered if consumer.active < consumer.concurrency]
+        return [
+            consumer for consumer in ordered if consumer.active < consumer.concurrency
+        ]
 
     def _subscribe_slots(self, slots: SlotPool) -> None:
         key = id(slots)
@@ -389,4 +392,4 @@ class TaskBackend:
                     self._drain_all()
                     self._condition.notify_all()
 
-        self._slot_subscriptions[key] = (slots, slots._subscribe(available))
+        self._slot_subscriptions[key] = (slots, slots.subscribe_available(available))

@@ -62,9 +62,7 @@ class RecordingBus:
     def publish(self, event: Event) -> None:
         transported = pickle.loads(pickle.dumps(event))
         self.events.append(transported)
-        handlers = tuple(self.handlers[transported.type]) + tuple(
-            self.handlers["*"]
-        )
+        handlers = tuple(self.handlers[transported.type]) + tuple(self.handlers["*"])
         for handler in handlers:
             handler(transported)
 
@@ -100,9 +98,9 @@ class RecordingTasks:
 
         def handle(work: Work) -> None:
             transported = pickle.loads(pickle.dumps(work))
-            lease = slots._acquire()
+            lease = slots.acquire()
             try:
-                result = handler(Delivery(transported, _slot_lease=lease))
+                result = handler(Delivery(transported, slot_lease=lease))
                 if result.outcome is not DeliveryOutcome.ACK:
                     raise result.error or RuntimeError(
                         f"work handler returned {result.outcome.value}"
@@ -303,7 +301,9 @@ def test_named_event_subscriptions_compete_and_distinct_ones_broadcast() -> None
     first: list[int] = []
     second: list[int] = []
     audit: list[int] = []
-    bus.subscribe("value", lambda event: first.append(event.payload), subscription="work")
+    bus.subscribe(
+        "value", lambda event: first.append(event.payload), subscription="work"
+    )
     bus.subscribe(
         "value", lambda event: second.append(event.payload), subscription="work"
     )

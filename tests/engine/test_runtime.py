@@ -188,9 +188,7 @@ def test_runtime_executes_cycle_across_multiple_nodes() -> None:
     graph = (
         Graph(entrypoint="check")
         .add(check=Check(), increment=Increment())
-        .connect(
-            "check", "increment", source_port="continue_", target_port="value"
-        )
+        .connect("check", "increment", source_port="continue_", target_port="value")
         .connect("increment", "check", source_port="value", target_port="value")
     )
 
@@ -368,12 +366,8 @@ def test_runtime_executes_different_plans_from_one_graph() -> None:
 
     with Runtime() as runtime:
         runtime.register("work.graph", graph)
-        assert runtime.run("work.graph", 3, plan=fast) == (
-            Output("fast:3", "result"),
-        )
-        assert runtime.run("work.graph", 4, plan=full) == (
-            Output("full:4", "result"),
-        )
+        assert runtime.run("work.graph", 3, plan=fast) == (Output("fast:3", "result"),)
+        assert runtime.run("work.graph", 4, plan=full) == (Output("full:4", "result"),)
 
     assert calls == ["source", "fast", "source", "full"]
 
@@ -723,7 +717,9 @@ def test_slot_follows_work_across_consumers() -> None:
 
     shared = SlotPool(slots=[Slot(id="shared")])
     with Runtime() as runtime:
-        runtime.register("source.graph", Graph(entrypoint="source").add(source=Producer()))
+        runtime.register(
+            "source.graph", Graph(entrypoint="source").add(source=Producer())
+        )
         runtime.register("sink.graph", Graph(entrypoint="sink").add(sink=Consumer()))
         runtime.on(
             "slot.started",
@@ -778,7 +774,9 @@ def test_default_slot_pool_matches_consumer_concurrency() -> None:
                     active -= 1
 
     with Runtime() as runtime:
-        runtime.register("capture.graph", Graph(entrypoint="capture").add(capture=Capture()))
+        runtime.register(
+            "capture.graph", Graph(entrypoint="capture").add(capture=Capture())
+        )
         runtime.on(
             "capture.requested",
             graph="capture.graph",
@@ -869,7 +867,7 @@ def test_rejected_emitted_event_releases_its_retained_slot() -> None:
         raise ValueError("rejected event")
 
     slots = SlotPool(1)
-    lease = slots._acquire()
+    lease = slots.acquire()
     worker = GraphWorker(
         consumer=memory.TaskBackend(),
         emit=reject,
@@ -1025,7 +1023,9 @@ def test_multiple_routes_retain_one_slot_until_every_work_finishes() -> None:
 
     slots = SlotPool(slots=[Slot(id="fanout-slot")])
     with Runtime() as runtime:
-        runtime.register("fanout.graph", Graph(entrypoint="fanout").add(fanout=FanOut()))
+        runtime.register(
+            "fanout.graph", Graph(entrypoint="fanout").add(fanout=FanOut())
+        )
         runtime.register("sink-a.graph", Graph(entrypoint="sink").add(sink=Sink("a")))
         runtime.register("sink-b.graph", Graph(entrypoint="sink").add(sink=Sink("b")))
         runtime.on("root.fanout", graph="fanout.graph", queue="fanout", slots=slots)

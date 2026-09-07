@@ -49,9 +49,27 @@ class LocalRunner:
                 raise RuntimeError(
                     "cannot synchronously resolve an awaitable on the runner thread"
                 )
-            future = asyncio.run_coroutine_threadsafe(
-                self._await(value), self._loop
+            future: concurrent.futures.Future[Any] = concurrent.futures.Future()
+            scheduled: concurrent.futures.Future[asyncio.Future[Any]] = (
+                concurrent.futures.Future()
             )
+
+            def completed(task: asyncio.Future[Any]) -> None:
+                try:
+                    future.set_result(task.result())
+                except BaseException as exc:
+                    future.set_exception(exc)
+
+            def schedule() -> None:
+                try:
+                    task = asyncio.ensure_future(value, loop=self._loop)
+                    task.add_done_callback(completed)
+                    scheduled.set_result(task)
+                except BaseException as exc:
+                    scheduled.set_exception(exc)
+                    future.set_exception(exc)
+
+            self._loop.call_soon_threadsafe(schedule)
         if checkpoint is None:
             return future.result()
         try:
@@ -66,7 +84,15 @@ class LocalRunner:
                         return future.result()
                     checkpoint()
         except BaseException:
-            future.cancel()
+            # A cancelled proxy Future can finish before coroutine cleanup does.
+            # Keep the execution's resources until the actual task has exited.
+            if not future.done():
+                task = scheduled.result()
+                self._loop.call_soon_threadsafe(task.cancel)
+                try:
+                    future.result()
+                except BaseException:
+                    pass
             raise
 
     def close(self) -> None:
@@ -78,9 +104,6 @@ class LocalRunner:
             self._closed = True
             self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join()
-
-    async def _await(self, value: Any) -> Any:
-        return await value
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)

@@ -26,6 +26,18 @@ def test_context_state_does_not_cross_execution_storage() -> None:
     assert second.state("example/state") == {}
 
 
+def test_context_scope_and_namespace_cannot_collide_on_separators() -> None:
+    local = {}
+    first = Context(lambda event: None, local=local, scope="a:b")
+    other = Context(lambda event: None, local=local, scope="a")
+    unscoped = Context(lambda event: None, local=local)
+
+    first.state("c")["value"] = 1
+
+    assert other.state("b:c") == {}
+    assert unscoped.state("a:b:c") == {}
+
+
 def test_context_registers_quiescence_callbacks_in_order() -> None:
     callbacks = []
     finalizers = []

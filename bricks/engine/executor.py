@@ -99,24 +99,16 @@ class Engine:
         try:
             prepared = self._coerce_inputs(graph, inputs)
             snapshot = self.hooks.snapshot(name)
-            try:
-                outputs = self._run(
-                    name,
-                    graph,
-                    prepared,
-                    emit,
-                    snapshot,
-                    plan,
-                    slot,
-                    execution,
-                )
-            except StopGraph as signal:
-                outputs = self._coerce_outputs(
-                    signal.outputs,
-                    name,
-                    None,
-                    "StopGraph",
-                )
+            outputs = self._run(
+                name,
+                graph,
+                prepared,
+                emit,
+                snapshot,
+                plan,
+                slot,
+                execution,
+            )
             if manages_lifecycle:
                 execution._succeed(outputs)
                 return execution.result(0)
@@ -181,7 +173,7 @@ class Engine:
         terminal: list[Output] = []
         ready: deque[str] = deque((graph.entrypoint,))
         scheduled = {graph.entrypoint}
-        local_state: dict[str, MutableMapping[str, Any]] = {}
+        local_state: dict[tuple[str, str], MutableMapping[str, Any]] = {}
         finalizers: list[Callable[[], None]] = []
 
         def schedule_if_ready(node_id: str) -> None:
@@ -213,9 +205,7 @@ class Engine:
                 selection = policy.select(input_ports[node_id], queues[node_id])
                 if selection is None:
                     continue
-                consumed = {
-                    port: queues[node_id][port].popleft() for port in selection
-                }
+                consumed = {port: queues[node_id][port].popleft() for port in selection}
 
             context = Context(
                 emit,
@@ -255,6 +245,14 @@ class Engine:
                             graph=graph_name,
                             node=node_id,
                         ) from exc
+            except StopGraph as signal:
+                outputs = self._coerce_outputs(
+                    signal.outputs, graph_name, None, "StopGraph"
+                )
+                for output in outputs:
+                    terminal.append(output)
+                    execution._publish_output(output)
+                return tuple(terminal)
             except BaseException as exc:
                 node_error = exc
                 raise

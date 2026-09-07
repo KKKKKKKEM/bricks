@@ -2,14 +2,36 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator, Mapping, MutableMapping
+from contextlib import AbstractContextManager, contextmanager
 from threading import Condition, RLock
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
 
 from .core import _validate_timeout, require_non_empty_string
+
+_LOGGER = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class SlotLease(Protocol):
+    """适配器持有的进程内 Slot 能力，由 SlotPool 分配并从 bricks.spi 导出。"""
+
+    @property
+    def slot(self) -> Slot:
+        """返回当前执行链使用的 Slot；不转移引用所有权。"""
+
+    def retain(self) -> None:
+        """为分支或后续投递增加一个引用，必须匹配一次 release。"""
+
+    def release(self) -> None:
+        """释放当前引用；最后一个引用归还 Slot，归还后不可再次使用。"""
+
+    def execution(self) -> AbstractContextManager[Slot]:
+        """串行占用 Slot 执行 Graph；退出前保留资源，不释放调用方引用。"""
 
 
 class Slot(MutableMapping[str, Any]):
@@ -104,7 +126,9 @@ class SlotPool:
             self._closed = True
             self._condition.notify_all()
 
-    def _try_acquire(self) -> _SlotLease | None:
+    def try_acquire(self) -> SlotLease | None:
+        """立即申请一个根执行链引用；池耗尽返回 None，关闭后抛错。"""
+
         with self._condition:
             if self._closed:
                 raise RuntimeError("slot pool is closed")
@@ -112,7 +136,9 @@ class SlotPool:
                 return None
             return _SlotLease(self, self._available.popleft())
 
-    def _subscribe(self, listener: Callable[[], None]) -> Callable[[], None]:
+    def subscribe_available(self, listener: Callable[[], None]) -> Callable[[], None]:
+        """订阅归还通知并返回幂等取消函数；通知不预留 Slot。"""
+
         if not callable(listener):
             raise TypeError("slot pool listener must be callable")
         with self._condition:
@@ -127,16 +153,16 @@ class SlotPool:
 
         return unsubscribe
 
-    def _acquire(self, timeout: float | None = None) -> _SlotLease:
+    def acquire(self, timeout: float | None = None) -> SlotLease:
+        """等待一个根执行链引用；不得在 Consumer 执行线程内等待。"""
+
         _validate_timeout(timeout)
         deadline = None if timeout is None else time.monotonic() + timeout
         with self._condition:
             while not self._available:
                 if self._closed:
                     raise RuntimeError("slot pool is closed")
-                remaining = (
-                    None if deadline is None else deadline - time.monotonic()
-                )
+                remaining = None if deadline is None else deadline - time.monotonic()
                 if remaining is not None and remaining <= 0:
                     raise TimeoutError("slot pool did not provide a Slot")
                 self._condition.wait(remaining)
@@ -154,19 +180,38 @@ class SlotPool:
             self._condition.notify()
             listeners = tuple(self._listeners)
         for listener in listeners:
-            listener()
+            try:
+                listener()
+            except Exception:
+                _LOGGER.exception("slot availability listener failed")
 
 
 class _SlotLease:
     """对执行链所持 Slot 做内部引用计数，最后一个 Work 结束时归还。"""
 
-    __slots__ = ("_lock", "_pool", "_references", "slot")
+    __slots__ = ("_lock", "_pool", "_references", "_slot")
 
     def __init__(self, pool: SlotPool, slot: Slot) -> None:
-        self.slot = slot
+        self._slot = slot
         self._pool = pool
         self._references = 1
         self._lock = RLock()
+
+    @property
+    def slot(self) -> Slot:
+        with self._lock:
+            if self._references == 0:
+                raise RuntimeError("slot lease is already released")
+            return self._slot
+
+    @contextmanager
+    def execution(self) -> Iterator[Slot]:
+        self.retain()
+        try:
+            with self._slot._execution_lock:
+                yield self._slot
+        finally:
+            self.release()
 
     def retain(self) -> None:
         with self._lock:
@@ -181,6 +226,6 @@ class _SlotLease:
                 raise RuntimeError("slot lease is already released")
             self._references -= 1
             if self._references == 0:
-                slot = self.slot
+                slot = self._slot
         if slot is not None:
             self._pool._release(slot)

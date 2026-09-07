@@ -63,17 +63,27 @@ class LocalRuntimePlugin:
             CAP_TASK_BACKEND,
             CAP_GRAPH_EXECUTOR,
         }
-        provided = infrastructure if _provide_capabilities is None else set(
-            _provide_capabilities
+        provided = (
+            infrastructure
+            if _provide_capabilities is None
+            else set(_provide_capabilities)
         )
         if not provided <= infrastructure:
-            raise ValueError("local runtime can only select infrastructure capabilities")
+            raise ValueError(
+                "local runtime can only select infrastructure capabilities"
+            )
         if events is not None and CAP_EVENT_BUS not in provided:
-            raise TypeError("events cannot be injected when event bus is externally provided")
+            raise TypeError(
+                "events cannot be injected when event bus is externally provided"
+            )
         if tasks is not None and CAP_TASK_BACKEND not in provided:
-            raise TypeError("tasks cannot be injected when task backend is externally provided")
+            raise TypeError(
+                "tasks cannot be injected when task backend is externally provided"
+            )
         if executor is not None and CAP_GRAPH_EXECUTOR not in provided:
-            raise TypeError("executor cannot be injected when graph executor is externally provided")
+            raise TypeError(
+                "executor cannot be injected when graph executor is externally provided"
+            )
         self.descriptor = PluginDescriptor(
             "bricks.core/local-runtime",
             "1.0.0",
@@ -91,20 +101,12 @@ class LocalRuntimePlugin:
                 or capability in (CAP_EVENT_ROUTER, CAP_GRAPH_WORKER)
             ),
         )
-        self._events = (
-            memory.EventBus() if events is None else events
-        ) if CAP_EVENT_BUS in provided else None
-        self._tasks = (
-            memory.TaskBackend() if tasks is None else tasks
-        ) if CAP_TASK_BACKEND in provided else None
+        self._events = events
+        self._tasks = tasks
         self._router_observations = ObservationHub()
         self._worker_observations = ObservationHub()
         self._policies = PolicyRegistry()
-        self._executor = (
-            Engine(observations=self._worker_observations)
-            if executor is None
-            else executor
-        ) if CAP_GRAPH_EXECUTOR in provided else None
+        self._executor = executor
         self._provided = frozenset(provided)
         self._owned = (
             CAP_EVENT_BUS in provided and events is None,
@@ -116,6 +118,12 @@ class LocalRuntimePlugin:
         self.worker: GraphWorker | None = None
 
     def setup(self, context: PluginContext) -> None:
+        if CAP_EVENT_BUS in self._provided and self._events is None:
+            self._events = memory.EventBus()
+        if CAP_TASK_BACKEND in self._provided and self._tasks is None:
+            self._tasks = memory.TaskBackend()
+        if CAP_GRAPH_EXECUTOR in self._provided and self._executor is None:
+            self._executor = Engine(observations=self._worker_observations)
         events = (
             self._events
             if CAP_EVENT_BUS in self._provided

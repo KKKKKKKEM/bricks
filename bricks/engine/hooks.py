@@ -76,7 +76,7 @@ class ShortCircuit(HookSignal):
 
 
 class StopGraph(HookSignal):
-    """立即停止整张 Graph，并把携带结果作为 Graph 的终端输出。"""
+    """停止后续 Node，并把携带结果追加到 Graph 已产生的终端输出。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,9 +166,7 @@ class HookRegistry:
         with self._lock:
             if self._closed:
                 raise RuntimeError("hook registry is closed")
-            registration = _Registration(
-                next(self._counter), adapted, graph, node
-            )
+            registration = _Registration(next(self._counter), adapted, graph, node)
             self._registrations = (*self._registrations, registration)
         return HookHandle(self, registration.id)
 
@@ -204,7 +202,5 @@ class HookRegistry:
     def _detach(self, registration_id: int) -> None:
         with self._lock:
             self._registrations = tuple(
-                item
-                for item in self._registrations
-                if item.id != registration_id
+                item for item in self._registrations if item.id != registration_id
             )

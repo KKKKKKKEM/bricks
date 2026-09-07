@@ -34,9 +34,13 @@ GraphExecutor，再组装标准 Router 与 Worker。因此默认内存组合也�
 提供一个基础设施 capability 的插件可以与其余默认实现组合。插件只从 `PluginContext` 取得已声明 capability，
 不应读取 Runtime、Router 或 Worker 的私有字段。
 
-单例 capability 只能有一个 provider；InputSelector、NodeHook 和 RuntimeObserver 是可聚合的具名 contribution。
+`PluginDescriptor.provides` 声明单例 capability，只能有一个 provider；`contributes` 声明可聚合的 capability。
+InputSelector、NodeHook 和 RuntimeObserver 都属于后者，`ContributionPlugin` 会自动填写对应声明。多个插件可以
+向同一种 capability 贡献不同名称的实现，同名贡献会被拒绝。`provide()` 与 `contribute()` 必须分别兑现对应的声明，
+同一 capability 不能同时作为单例和聚合能力。
 插件 ID 和 contribution 名必须带命名空间。`PluginDescriptor.api_version` 声明所需的插件 SPI 主版本，当前为
-`"1"`。`requires` 声明插件 ID 依赖，`requires_capabilities` 声明 capability 依赖；两者都参与拓扑排序。缺失或
+`"1"`。`requires` 声明插件 ID 依赖，`requires_capabilities` 声明单例 capability 依赖；两者都参与拓扑排序。需要
+依赖贡献插件的生命周期时使用 `requires`，读取聚合结果使用 `context.contributions()`。缺失或
 循环依赖、API 不兼容、能力冲突或 descriptor 声明未兑现都会在 Runtime 构造期间失败。
 
 `PluginHost` 当前只负责显式传入的可信 Python 插件，不会扫描环境或在 import 时自动执行第三方代码。需要配置驱动
@@ -146,6 +150,7 @@ tasks = memory.TaskBackend()
 | `EventBus` | Event 订阅、发布、投递空闲与关闭 | `memory.EventBus` |
 | `TaskPublisher` | 向命名队列提交 Work | `memory.TaskBackend` |
 | `LocalTaskPublisher` | 可选：在当前进程延续 Slot lease | `memory.TaskBackend` |
+| `SlotLease` | 引用管理、读取 Slot 和串行 execution | 由 `SlotPool` 返回 |
 | `TaskConsumer` | 调度带 Slot 的 Work，并控制当前实例的本地并发 | `memory.TaskBackend` |
 | `TaskBackend` | 同时实现发布与消费的组合协议 | `memory.TaskBackend` |
 | `GraphExecutor` | 执行已冻结 Graph 并返回终端 Output | `Engine` |
@@ -161,8 +166,8 @@ TaskPublisher 的 `submit()` 正常返回即表示后端已接受 Work，同时�
     subscription 的多个实例竞争消费，不同 subscription 各自收到一份；省略 subscription 的观察者相互独立。
     Event 始终只有 `type` 和 `payload`，EventBus 不接触 Slot 或 lease。
 - TaskPublisher 把 Work 提交到命名 queue，`submit()` 正常返回表示后端已经接受；同一进程内 TaskConsumer 的
-    `bind(queue, handler, concurrency=..., slots=...)` 在调度根 Work 前从 SlotPool 获取 lease。Work 只包含 Graph
-    名、输入、领域 trigger、ID 和 limits；进程内 lease 只存在于 `Delivery`。支持 `LocalTaskPublisher` 的本地后端
+    `bind(queue, handler, concurrency=..., slots=...)` 在调度根 Work 前通过 `slots.try_acquire()` 获取 lease。Work 只包含 Graph
+    名、输入、领域 trigger、ID 和 limits；进程内 lease 只存在于 `Delivery.slot_lease`。支持 `LocalTaskPublisher` 的本地后端
     可以延续 lease；等待 Slot 的根 Work 不能占用 concurrency，交付完成或失败后必须释放 Delivery 持有的 lease。
 - GraphExecutor 接收注册名、冻结 Graph、入口输入、Event emitter、可选 ExecutionPlan，以及关键字参数
   `slot=` 和 `execution=`。GraphWorker 会把冻结后的 Node timeout 快照绑定到 Execution；替换执行器必须为每次
@@ -172,6 +177,53 @@ TaskPublisher 的 `submit()` 正常返回即表示后端已接受 Work，同时�
 
 可参考 [test_runtime_spi.py](../tests/engine/test_runtime_spi.py) 中的同步替身：它验证三个能力可独立替换，也验证
 Runtime 不依赖默认内存实现的私有字段。
+
+## Slot 的公开资源接口
+
+适配器从 `bricks.spi` 导入 `SlotLease` 协议，通过已有 `SlotPool` 获取实现，不构造内部 lease、不读取内部锁。
+
+| 接口 | 契约 |
+| --- | --- |
+| `slots.try_acquire()` | 立即申请一个根执行链引用，池耗尽时返回 `None` |
+| `slots.acquire(timeout=None)` | 在调度控制线程中等待；超时抛 `TimeoutError`，零秒表示不等待 |
+| `slots.subscribe_available(callback)` | 订阅 Slot 归还通知，返回幂等取消函数；通知不预留资源 |
+| `lease.slot` | 读取执行链的 Slot，不转移引用所有权 |
+| `lease.retain()` / `lease.release()` | 增加和释放引用；最后一个引用释放后归还 Slot |
+| `lease.execution()` | 上下文管理器，串行执行同一 Slot 的 Graph，并在执行期间自动保留一个临时引用 |
+
+根 Work 在分配到 lease 后才可占用 Consumer 的执行线程；没有可用 Slot 时保留在待调度队列中，并继续调度已经
+携带 lease 的延续 Work。先注册可用通知，再尝试调度；通知只提示重新调用 `try_acquire()`，其他 Consumer 可能先取得
+资源。回调应快速返回，抛出的普通异常会被记录并隔离，不影响归还和其他订阅者。关闭 Consumer 时取消自己的订阅。
+
+取得引用后，交付和释放遵循下面的所有权规则：
+
+```python
+from bricks.spi import Delivery
+
+lease = slots.try_acquire()
+if lease is not None:
+    try:
+        result = handler(Delivery(work, slot_lease=lease))
+    finally:
+        lease.release()
+```
+
+该片段表示已分配资源的交付边界；实际适配器仍须把 handler 调用调度到配置的执行线程，并处理 `DeliveryResult`。
+GraphWorker 通过 `with lease.execution() as slot:` 包住完整 Graph execution；退出执行上下文只释放临时引用，
+交付所持引用仍由 Consumer 在 `finally` 中释放。提交执行线程失败时，同样必须释放尚未交付的引用。
+默认内存后端在 Work 入队后即接管引用；随后提交执行线程失败会释放该引用，并通过 `wait_idle()` 报告失败，
+不会再让发布方误以为接管失败而重复释放。
+
+每个分支、重投递或异步交接都必须有自己的引用。`LocalTaskPublisher.submit_local(queue, work, lease)` 正常返回时
+接管调用方转交的一个引用，抛错时引用仍由调用方释放；接收方不能再次为同一交接重复 retain。Router 已为每个本地
+分支 retain，Consumer 处理完该次交付后 release。lease 全部释放后，读取、retain、release 或再次进入 execution
+都会被拒绝。池关闭后不接受申请和新订阅，并唤醒正在等待的申请；已持有的引用仍能执行和归还。
+
+`SlotLease` 只属于当前进程，不参与 broker 租约或远程确认。远程适配器仅序列化 `Work`，接收进程从自己的 SlotPool
+申请 lease，再创建 `Delivery(work, slot_lease=lease)`。不要序列化 Slot、SlotPool 或带 lease 的 Delivery。
+
+[独立适配器契约测试](../tests/engine/test_slot_adapter.py) 展示了仅通过上述公开接口实现跨队列延续、分支引用和失败
+归还；[Slot 契约测试](../tests/engine/test_slots.py) 验证池耗尽、关闭唤醒、执行互斥及错误释放。
 
 ## 语义必须由适配器声明
 
@@ -220,6 +272,9 @@ queue 消费配置时，才需要显式调用 `route()` 与 `consume()`。
 
 插件模式下，PluginHost 按依赖顺序调用所有插件的 `setup()`，再按相同顺序调用 `start()`；任一阶段失败都会逆序
 调用已进入 setup 的插件 `stop()`。`Runtime.close()` 排空工作后关闭 PluginHost，宿主再逆序停止插件。
+
+插件构造器只保存配置，线程、连接等资源应在 `setup()` 中创建。LocalRuntimePlugin 同样在 `setup()` 中创建默认
+传输和 Engine，因此依赖校验失败不会启动后台线程；setup 中途失败时，已创建的资源也会通过 `stop()` 回收。
 
 ```mermaid
 sequenceDiagram
@@ -353,8 +408,9 @@ Hook 通过两个信号显式改变流程：
 
 - `ShortCircuit(*outputs)` 只能从 `enter()` 发出。它跳过当前 Node，把 outputs 当作该 Node 的结果，经过
   当前 Node 的 output port/type 校验后继续走既有 Edge。
-- `StopGraph(*outputs)` 可以从任意 Hook 阶段发出。它立即停止整个 Graph，并直接返回携带的终端 outputs；
-  当前 Graph 没有 graph-level output schema，因此只校验它们是 `Output`。
+- `StopGraph(*outputs)` 可以从任意 Hook 阶段发出。它立即停止后续 Node 执行，将携带的 outputs 追加到已经产生的
+  terminal Output 后，按相同顺序发布到输出流并返回完整结果。已发布的数据不会被替换，空参数也会保留此前输出。
+  当前 Graph 没有 graph-level output schema，因此对这些附加输出只校验它们是 `Output`。
 
 Hook 按注册顺序进入、逆序退出。短路后，已经进入的 Hook 仍会执行 `exit()`；终止 Graph 则不会继续执行剩余
 生命周期。每次 Graph execution 在开始时固定 Hook 快照，所以 `attach()`/`detach()` 不会改变已经在途的执行，

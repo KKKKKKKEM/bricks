@@ -19,6 +19,7 @@ from bricks import (
     Output,
     Ports,
     Runtime,
+    SlotPool,
 )
 from bricks.engine.errors import (
     BricksRuntimeError,
@@ -29,6 +30,73 @@ from bricks.engine.errors import (
     StepLimitExceededError,
 )
 from bricks.engine.hooks import NodeHook
+
+
+@pytest.mark.parametrize("control", ["cancel", "timeout"])
+def test_async_cleanup_finishes_before_execution_releases_slot(control) -> None:
+    started, cleaning, release, finished, next_started = (
+        ThreadEvent() for _ in range(5)
+    )
+    seen_slots = []
+
+    class Slow(AsyncNode):
+        async def execute(self, inputs, context):
+            seen_slots.append(context.slot)
+            started.set()
+            try:
+                await asyncio.sleep(60)
+            finally:
+                cleaning.set()
+                while not release.is_set():
+                    await asyncio.sleep(0.005)
+                finished.set()
+
+    class Next(Node):
+        def execute(self, inputs, context):
+            assert finished.is_set()
+            seen_slots.append(context.slot)
+            next_started.set()
+
+    slots = SlotPool(1)
+    runtime = Runtime()
+    try:
+        runtime.register("slow", Graph(entrypoint="node").add(node=Slow()))
+        runtime.register("next", Graph(entrypoint="node").add(node=Next()))
+        runtime.on(
+            "slow",
+            graph="slow",
+            queue="work",
+            concurrency=2,
+            slots=slots,
+            timeout=0.1 if control == "timeout" else None,
+        )
+        runtime.on("next", graph="next", queue="work", concurrency=2, slots=slots)
+        runtime.emit("slow")
+        assert started.wait(2)
+        execution = runtime.executions()[0]
+        if control == "cancel":
+            execution.cancel()
+        assert cleaning.wait(2)
+        runtime.emit("next")
+        assert not execution.wait(0.1)
+        assert slots.available == 0
+        assert not next_started.is_set()
+        release.set()
+        assert next_started.wait(2)
+        error = (
+            ExecutionCancelledError if control == "cancel" else ExecutionTimeoutError
+        )
+        with pytest.raises(error):
+            runtime.wait_idle(2)
+        assert seen_slots[0] is seen_slots[1]
+        assert slots.available == 1
+    finally:
+        release.set()
+        try:
+            runtime.close()
+        except (ExecutionCancelledError, ExecutionTimeoutError):
+            pass
+        slots.close()
 
 
 class Increment(Node):
@@ -90,9 +158,7 @@ def test_max_steps_allows_exact_boundary() -> None:
             "increment.graph",
             Graph(entrypoint="increment").add(increment=Increment()),
         )
-        assert runtime.run("increment.graph", 1, max_steps=1) == (
-            Output(2, "value"),
-        )
+        assert runtime.run("increment.graph", 1, max_steps=1) == (Output(2, "value"),)
         assert runtime.executions()[-1].steps == 1
 
 
@@ -113,9 +179,7 @@ def test_zero_max_steps_keeps_existing_unlimited_behavior() -> None:
     )
     with Runtime() as runtime:
         runtime.register("counter.graph", graph)
-        assert runtime.run("counter.graph", 0, max_steps=0) == (
-            Output(21, "done"),
-        )
+        assert runtime.run("counter.graph", 0, max_steps=0) == (Output(21, "done"),)
         assert runtime.executions()[-1].steps == 21
 
 

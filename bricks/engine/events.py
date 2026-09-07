@@ -46,7 +46,7 @@ class Context:
         *,
         checkpoint: Callable[[], None] | None = None,
         is_cancelled: Callable[[], bool] | None = None,
-        local: MutableMapping[str, MutableMapping[str, Any]] | None = None,
+        local: MutableMapping[tuple[str, str], MutableMapping[str, Any]] | None = None,
         finalizers: list[Callable[[], None]] | None = None,
         scope: str = "",
     ) -> None:
@@ -94,7 +94,7 @@ class Context:
         """返回当前 execution 内、按插件命名空间隔离的临时状态。"""
 
         namespace = require_non_empty_string(namespace, "context state namespace")
-        scoped = f"{self._scope}:{namespace}" if self._scope else namespace
+        scoped = (self._scope, namespace)
         return self._local.setdefault(scoped, {})
 
     def on_quiescence(self, callback: Callable[[], None]) -> None:

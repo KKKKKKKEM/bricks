@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 import math
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, get_origin
@@ -41,25 +41,6 @@ class InputPolicy(str, enum.Enum):
     ALL = "all"
     ANY = "any"
     ON_START = "on_start"
-
-    def _select(
-        self,
-        ports: Sequence[str],
-        queues: Mapping[str, Sequence[object]],
-    ) -> tuple[str, ...] | None:
-        """选择下一次执行需要消费的端口。"""
-
-        groups: tuple[tuple[str, ...], ...]
-        if self is InputPolicy.ALL:
-            groups = (tuple(ports),)
-        elif self is InputPolicy.ANY:
-            groups = tuple((port,) for port in ports)
-        else:
-            groups = ()
-        for group in groups:
-            if group and all(queues.get(port) for port in group):
-                return group
-        return None
 
 
 class Ports(Mapping[str, type[Any]]):

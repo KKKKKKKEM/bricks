@@ -15,6 +15,7 @@ from bricks import (
     Node,
     Output,
     Ports,
+    Runtime,
 )
 from bricks.engine.errors import GraphFrozenError, GraphValidationError
 
@@ -300,11 +301,14 @@ def test_execution_plan_requires_all_join_inputs() -> None:
 def test_input_policy_any_uses_declaration_order() -> None:
     """多个就绪端口时，ANY 按声明顺序选择。"""
 
-    policy = InputPolicy.ANY
-    queues = {
-        "left": [object()],
-        "right": [object()],
-        "cancel": [object()],
-    }
+    class Select(Node):
+        input_ports = Ports(left=int, right=int, cancel=int)
+        input_policy = InputPolicy.ANY
 
-    assert policy._select(("left", "right", "cancel"), queues) == ("left",)
+        def execute(self, inputs, context):
+            return Output(next(iter(inputs)))
+
+    with Runtime() as runtime:
+        runtime.register("select", Graph(entrypoint="node").add(node=Select()))
+        outputs = runtime.run("select", {"cancel": 3, "right": 2, "left": 1})
+    assert outputs == (Output("left"), Output("right"), Output("cancel"))

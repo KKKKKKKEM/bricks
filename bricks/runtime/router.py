@@ -20,12 +20,11 @@ from ..engine.observation import (
     RuntimeEventKind,
     RuntimeObserver,
 )
-from ..engine.slots import _SlotLease
-from ..spi import EventBus, TaskPublisher, Work
+from ..spi import EventBus, SlotLease, TaskPublisher, Work
 from ._utils import _close_components, _unique
 
 EventHandler = Callable[[Event], None]
-_LOCAL_LEASE: ContextVar[_SlotLease | None] = ContextVar(
+_LOCAL_LEASE: ContextVar[SlotLease | None] = ContextVar(
     "bricks_local_event_lease",
     default=None,
 )
@@ -100,9 +99,7 @@ class EventRouter:
         if subscription is None:
             subscription = f"route:{event_type}:{graph}:{queue}"
         else:
-            subscription = require_non_empty_string(
-                subscription, "route subscription"
-            )
+            subscription = require_non_empty_string(subscription, "route subscription")
         with self._lock:
             route = (event_type, graph, queue)
             if route in self._routes:
@@ -143,7 +140,7 @@ class EventRouter:
             RuntimeEvent(RuntimeEventKind.EVENT_PUBLISHED, event_type=event.type)
         )
 
-    def publish_local(self, event: Event, lease: _SlotLease) -> None:
+    def publish_local(self, event: Event, lease: SlotLease) -> None:
         """发布 Event，并仅为同步本地路由关联当前 Slot lease。"""
 
         token = _LOCAL_LEASE.set(lease)

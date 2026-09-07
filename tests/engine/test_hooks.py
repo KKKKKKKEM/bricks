@@ -389,6 +389,65 @@ def test_async_hook_can_stop_graph() -> None:
     assert outputs == (Output(11, "stopped"),)
 
 
+@pytest.mark.parametrize(
+    "stop_outputs", [(), (Output("stopped"),), (Output(1), Output(2))]
+)
+@pytest.mark.parametrize("mode", ["sync", "async", "engine"])
+def test_stop_graph_preserves_published_outputs_in_result_and_stream(
+    stop_outputs, mode
+) -> None:
+    class Fan(Node):
+        output_ports = Ports(default=object, next=object)
+
+        def execute(self, inputs, context):
+            return (Output("before"), Output("next", "next"))
+
+    class End(Node):
+        def execute(self, inputs, context):
+            raise AssertionError("stopped node must not execute")
+
+    class Stop(NodeHook):
+        def enter(self, call):
+            raise StopGraph(*stop_outputs)
+
+    graph = (
+        Graph(entrypoint="first")
+        .add(first=Fan(), last=End())
+        .connect("first", "last", source_port="next")
+    )
+    expected = (Output("before"), *stop_outputs)
+    if mode == "engine":
+        from bricks import Execution
+        from bricks.engine.executor import Engine
+
+        engine = Engine()
+        try:
+            engine.attach(Stop(), graph="work", node="last")
+            execution = Execution("work")
+            result = engine.execute(
+                "work", graph.freeze(), None, lambda e: None, execution=execution
+            )
+            assert result == execution.result() == tuple(execution) == expected
+        finally:
+            engine.close()
+        return
+
+    with Runtime() as runtime:
+        runtime.register("work", graph)
+        runtime.attach(Stop(), graph="work", node="last")
+        if mode == "sync":
+            assert tuple(runtime.iter("work", output_buffer=1)) == expected
+        else:
+
+            async def collect():
+                return tuple(
+                    [output async for output in runtime.aiter("work", output_buffer=1)]
+                )
+
+            assert asyncio.run(collect()) == expected
+        assert runtime.executions()[-1].result() == expected
+
+
 def test_hook_scope_is_validated() -> None:
     with Runtime() as runtime:
         runtime.register("work.graph", single_node_graph(AddOne()))

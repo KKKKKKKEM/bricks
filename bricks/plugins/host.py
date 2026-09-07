@@ -9,6 +9,9 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from ..engine.core import require_non_empty_string
+from ..engine.hooks import HookPhase, NodeHook
+from ..engine.observation import RuntimeObserver
+from ..engine.policies import InputSelector
 
 _VERSION = re.compile(r"^[0-9]+(?:\.[0-9]+){0,2}(?:[-+][A-Za-z0-9.-]+)?$")
 
@@ -23,6 +26,7 @@ class PluginDescriptor:
     provides: tuple[str, ...] = ()
     api_version: str = "1"
     requires_capabilities: tuple[str, ...] = ()
+    contributes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         plugin_id = require_non_empty_string(self.id, "plugin id")
@@ -38,14 +42,19 @@ class PluginDescriptor:
             ("plugin requirement", self.requires),
             ("required capability", self.requires_capabilities),
             ("provided capability", self.provides),
+            ("contributed capability", self.contributes),
         ):
             if not isinstance(values, tuple):
                 raise TypeError(f"{label}s must be a tuple")
-            normalized = tuple(require_non_empty_string(value, label) for value in values)
+            normalized = tuple(
+                require_non_empty_string(value, label) for value in values
+            )
             if len(set(normalized)) != len(normalized):
                 raise ValueError(f"duplicate {label}")
         if plugin_id in self.requires:
             raise ValueError("plugin must not require itself")
+        if set(self.provides) & set(self.contributes):
+            raise ValueError("a capability cannot be both singleton and aggregate")
         overlap = set(self.requires_capabilities) & set(self.provides)
         if overlap:
             raise ValueError(
@@ -80,12 +89,18 @@ class Contribution:
 class NodeHookContribution:
     """一个带作用域的动态 Node Hook 贡献。"""
 
-    hook: Any = field(compare=False, repr=False)
-    phase: Any = None
+    hook: NodeHook | Callable[..., object] = field(compare=False, repr=False)
+    phase: HookPhase | str | None = None
     graph: str | None = None
     node: str | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.hook, NodeHook) and not callable(self.hook):
+            raise TypeError("hook must be a NodeHook or callable")
+        if isinstance(self.hook, NodeHook) and self.phase is not None:
+            raise TypeError("phase is only valid for a function hook")
+        if self.phase is not None:
+            HookPhase(self.phase)
         if self.node is not None and self.graph is None:
             raise ValueError("node-scoped hook contribution requires graph")
         if self.graph is not None:
@@ -189,12 +204,14 @@ class PluginHost:
                     for capability, (owner, _) in self._capabilities.items()
                     if owner == descriptor.id
                 }
-                actual.update(
+                contributed = {
                     capability
                     for capability, entries in self._contributions.items()
                     if any(item.plugin == descriptor.id for item in entries.values())
+                }
+                missing = (set(descriptor.provides) - actual) | (
+                    set(descriptor.contributes) - contributed
                 )
-                missing = set(descriptor.provides) - actual
                 if missing:
                     raise RuntimeError(
                         f"plugin {descriptor.id!r} did not provide declared capabilities: "
@@ -215,7 +232,9 @@ class PluginHost:
         try:
             return self._capabilities[capability][1]
         except KeyError as exc:
-            raise LookupError(f"required capability {capability!r} is unavailable") from exc
+            raise LookupError(
+                f"required capability {capability!r} is unavailable"
+            ) from exc
 
     def contributions(self, capability: str) -> tuple[Contribution, ...]:
         capability = require_non_empty_string(capability, "capability")
@@ -232,6 +251,7 @@ class PluginHost:
     def _provide(self, plugin: str, capability: str, value: Any) -> RegistrationHandle:
         self._ensure_registering()
         capability = require_non_empty_string(capability, "capability")
+        self._ensure_declared(plugin, capability, aggregate=False)
         existing = self._capabilities.get(capability)
         if existing is not None:
             raise ValueError(
@@ -245,6 +265,7 @@ class PluginHost:
     ) -> RegistrationHandle:
         self._ensure_registering()
         capability = require_non_empty_string(capability, "capability")
+        self._ensure_declared(plugin, capability, aggregate=True)
         name = require_non_empty_string(name, "contribution name")
         if "/" not in name:
             raise ValueError("contribution name must be namespaced")
@@ -252,7 +273,19 @@ class PluginHost:
         if name in entries:
             raise ValueError(f"contribution {capability!r}/{name!r} already exists")
         entries[name] = Contribution(plugin, capability, name, value)
-        return RegistrationHandle(lambda: self._remove_contribution(plugin, capability, name))
+        return RegistrationHandle(
+            lambda: self._remove_contribution(plugin, capability, name)
+        )
+
+    def _ensure_declared(
+        self, plugin: str, capability: str, *, aggregate: bool
+    ) -> None:
+        descriptor = next(item for item, _ in self._plugins if item.id == plugin)
+        declared = descriptor.contributes if aggregate else descriptor.provides
+        if capability not in declared:
+            raise ValueError(
+                f"plugin {plugin!r} did not declare capability {capability!r}"
+            )
 
     def _remove_capability(self, plugin: str, capability: str) -> None:
         self._ensure_registering()
@@ -281,7 +314,9 @@ class PluginHost:
         return failure
 
     @staticmethod
-    def _normalize(plugins: Iterable[Plugin]) -> tuple[tuple[PluginDescriptor, Plugin], ...]:
+    def _normalize(
+        plugins: Iterable[Plugin],
+    ) -> tuple[tuple[PluginDescriptor, Plugin], ...]:
         candidates: dict[str, tuple[PluginDescriptor, Plugin]] = {}
         try:
             values = tuple(plugins)
@@ -304,8 +339,17 @@ class PluginHost:
             candidates[descriptor.id] = (descriptor, plugin)
 
         providers: dict[str, str] = {}
+        aggregates = {
+            capability
+            for descriptor, _ in candidates.values()
+            for capability in descriptor.contributes
+        }
         for descriptor, _ in candidates.values():
             for capability in descriptor.provides:
+                if capability in aggregates:
+                    raise ValueError(
+                        f"capability {capability!r} cannot be both singleton and aggregate"
+                    )
                 existing = providers.get(capability)
                 if existing is not None:
                     raise ValueError(
@@ -368,14 +412,15 @@ class ContributionPlugin:
         *,
         version: str = "1.0.0",
         requires: tuple[str, ...] = (),
-        selectors: Mapping[str, Any] | None = None,
-        hooks: Mapping[str, Any] | None = None,
-        observers: Mapping[str, Any] | None = None,
+        selectors: Mapping[str, InputSelector] | None = None,
+        hooks: Mapping[str, NodeHookContribution | NodeHook | Callable[..., object]]
+        | None = None,
+        observers: Mapping[str, RuntimeObserver] | None = None,
     ) -> None:
         self._selectors = {} if selectors is None else dict(selectors)
         self._hooks = {} if hooks is None else dict(hooks)
         self._observers = {} if observers is None else dict(observers)
-        provides = tuple(
+        contributes = tuple(
             capability
             for capability, entries in (
                 (CAP_INPUT_SELECTOR, self._selectors),
@@ -388,7 +433,7 @@ class ContributionPlugin:
             plugin_id,
             version,
             requires=requires,
-            provides=provides,
+            contributes=contributes,
         )
 
     def setup(self, context: PluginContext) -> None:

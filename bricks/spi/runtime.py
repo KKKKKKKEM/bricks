@@ -13,7 +13,7 @@ from ..engine.events import Event
 from ..engine.execution import Execution, ExecutionLimits
 from ..engine.graph import ExecutionPlan, Graph
 from ..engine.hooks import HookHandle, HookPhase, NodeHook
-from ..engine.slots import Slot, SlotPool, _SlotLease
+from ..engine.slots import Slot, SlotLease, SlotPool
 
 EventHandler = Callable[[Event], None]
 
@@ -41,7 +41,7 @@ class Delivery:
 
     work: Work
     attempt: int = 1
-    _slot_lease: _SlotLease | None = field(
+    slot_lease: SlotLease | None = field(
         default=None,
         compare=False,
         repr=False,
@@ -53,6 +53,8 @@ class Delivery:
             raise TypeError("delivery work must be Work")
         if type(self.attempt) is not int or self.attempt < 1:
             raise ValueError("delivery attempt must be an integer greater than zero")
+        if self.slot_lease is not None and not isinstance(self.slot_lease, SlotLease):
+            raise TypeError("delivery slot_lease must implement SlotLease or be None")
 
 
 class DeliveryOutcome(str, enum.Enum):
@@ -127,8 +129,8 @@ class TaskPublisher(Protocol):
 class LocalTaskPublisher(TaskPublisher, Protocol):
     """可在当前进程延续 Slot 链的可选任务发布能力。"""
 
-    def submit_local(self, queue: str, work: Work, lease: _SlotLease) -> None:
-        """提交带进程内 lease 的 Work；调用方转移一个 lease 引用。"""
+    def submit_local(self, queue: str, work: Work, lease: SlotLease) -> None:
+        """正常返回时接管一个 lease 引用；抛错时引用仍由调用方持有。"""
 
 
 class TaskConsumer(Protocol):

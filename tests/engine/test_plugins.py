@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from threading import enumerate as enumerate_threads
+
 import pytest
 
 from bricks import Graph, Node, Output, Ports, Runtime
@@ -13,6 +15,9 @@ from bricks.plugins import (
     CAP_EVENT_ROUTER,
     CAP_GRAPH_EXECUTOR,
     CAP_GRAPH_WORKER,
+    CAP_INPUT_SELECTOR,
+    CAP_NODE_HOOK,
+    CAP_RUNTIME_OBSERVER,
     CAP_TASK_BACKEND,
     ContributionPlugin,
     NodeHookContribution,
@@ -20,6 +25,131 @@ from bricks.plugins import (
     PluginHost,
 )
 from bricks.runtime import LocalRuntimePlugin
+
+
+def test_multiple_plugins_can_contribute_each_extension_kind() -> None:
+    observed = [[], []]
+    calls = []
+    plugins = tuple(
+        ContributionPlugin(
+            f"example/{index}",
+            selectors={f"example/{index}": AnySelector()},
+            hooks={f"example/{index}": lambda call: calls.append(call.node_id) or call},
+            observers={f"example/{index}": observed[index].append},
+        )
+        for index in range(2)
+    )
+    with Runtime(plugins=plugins) as runtime:
+        runtime.register("work", Graph(entrypoint="node").add(node=Source()))
+        assert runtime.run("work", "hello") == (Output("hello", "value"),)
+        for capability in (CAP_INPUT_SELECTOR, CAP_NODE_HOOK, CAP_RUNTIME_OBSERVER):
+            assert len(runtime.plugin_host.contributions(capability)) == 2
+    assert calls == ["node", "node"]
+    assert observed[0] == observed[1]
+    assert observed[0]
+
+
+def test_duplicate_contribution_names_across_plugins_are_rejected() -> None:
+    plugins = tuple(
+        ContributionPlugin(
+            f"example/{index}", observers={"example/shared": lambda e: None}
+        )
+        for index in range(2)
+    )
+    with pytest.raises(ValueError, match="already exists"):
+        PluginHost(plugins).start()
+
+
+def test_aggregate_declarations_cannot_be_fulfilled_by_singletons() -> None:
+    class WrongKind(RecordingPlugin):
+        def setup(self, context):
+            context.provide("example/items", object())
+
+    plugin = WrongKind("example/wrong", [])
+    plugin.descriptor = PluginDescriptor(
+        "example/wrong", "1", contributes=("example/items",)
+    )
+    with pytest.raises(ValueError, match="did not declare"):
+        PluginHost((plugin,)).start()
+
+
+def test_host_rejects_missing_contribution_and_mixed_capability_kinds() -> None:
+    plugin = RecordingPlugin("example/aggregate", [])
+    plugin.descriptor = PluginDescriptor(
+        "example/aggregate", "1", contributes=("example/items",)
+    )
+    with pytest.raises(RuntimeError, match="did not provide declared"):
+        PluginHost((plugin,)).start()
+    singleton = RecordingPlugin("example/singleton", [], capability="example/items")
+    with pytest.raises(ValueError, match="both singleton and aggregate"):
+        PluginHost((plugin, singleton))
+
+
+@pytest.mark.parametrize("stage", ["validation", "setup", "start"])
+def test_failed_runtime_construction_does_not_leave_runner_threads(stage) -> None:
+    class Broken(RecordingPlugin):
+        def setup(self, context):
+            if stage == "setup":
+                raise RuntimeError("setup failed")
+            super().setup(context)
+
+        def start(self, context):
+            if stage == "start":
+                raise RuntimeError("start failed")
+
+    plugin = Broken(
+        "example/broken",
+        [],
+        requires=("example/missing",) if stage == "validation" else (),
+    )
+    before = {
+        thread.ident
+        for thread in enumerate_threads()
+        if thread.name == "bricks-async-runner"
+    }
+    for _ in range(3):
+        with pytest.raises(
+            (ValueError, RuntimeError),
+            match="missing required plugin|setup failed|start failed",
+        ):
+            Runtime(plugins=(plugin,))
+    after = {
+        thread.ident
+        for thread in enumerate_threads()
+        if thread.name == "bricks-async-runner"
+    }
+    assert after == before
+
+
+def test_builtin_setup_rolls_back_partially_created_components(monkeypatch) -> None:
+    bus = memory.EventBus()
+    closed = []
+    original_close = bus.close
+
+    def close():
+        closed.append(True)
+        original_close()
+
+    def broken_tasks():
+        raise RuntimeError("task construction failed")
+
+    monkeypatch.setattr(bus, "close", close)
+    monkeypatch.setattr("bricks.runtime.plugin.memory.EventBus", lambda: bus)
+    monkeypatch.setattr("bricks.runtime.plugin.memory.TaskBackend", broken_tasks)
+    with pytest.raises(RuntimeError, match="task construction failed"):
+        Runtime()
+    assert closed == [True]
+
+
+@pytest.mark.parametrize(
+    ("hook", "phase", "error"),
+    [(object(), None, TypeError), (lambda call: call, "invalid", ValueError)],
+)
+def test_hook_contribution_validates_hook_and_phase_before_registration(
+    hook, phase, error
+) -> None:
+    with pytest.raises(error):
+        NodeHookContribution(hook, phase=phase, graph="not-yet-registered")
 
 
 class RecordingPlugin:
@@ -60,9 +190,7 @@ class RecordingPlugin:
 def test_host_orders_dependencies_and_stops_in_reverse() -> None:
     events: list[str] = []
     base = RecordingPlugin("example/base", events, capability="example/base-value")
-    feature = RecordingPlugin(
-        "example/feature", events, requires=("example/base",)
-    )
+    feature = RecordingPlugin("example/feature", events, requires=("example/base",))
 
     host = PluginHost((feature, base)).start()
 
@@ -101,12 +229,8 @@ def test_host_rejects_missing_cycle_and_capability_conflict() -> None:
             (RecordingPlugin("example/feature", events, requires=("example/base",)),)
         )
 
-    left = RecordingPlugin(
-        "example/left", events, requires=("example/right",)
-    )
-    right = RecordingPlugin(
-        "example/right", events, requires=("example/left",)
-    )
+    left = RecordingPlugin("example/left", events, requires=("example/right",))
+    right = RecordingPlugin("example/right", events, requires=("example/left",))
     with pytest.raises(ValueError, match="cyclic plugin dependency"):
         PluginHost((left, right))
 
@@ -118,9 +242,7 @@ def test_host_rejects_missing_cycle_and_capability_conflict() -> None:
 
 def test_host_rejects_incompatible_plugin_api() -> None:
     class FuturePlugin:
-        descriptor = PluginDescriptor(
-            "example/future", "1.0.0", api_version="2"
-        )
+        descriptor = PluginDescriptor("example/future", "1.0.0", api_version="2")
 
         def setup(self, context):
             del context
@@ -206,7 +328,7 @@ def test_contributions_reject_duplicate_names_and_freeze_after_start() -> None:
         descriptor = PluginDescriptor(
             "example/contributions",
             "1.0.0",
-            provides=("example/items",),
+            contributes=("example/items",),
         )
 
         def setup(self, context) -> None:

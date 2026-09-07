@@ -389,7 +389,10 @@ class Execution:
                             ),
                         )
                     )
-            if self._step_timeout is not None and self._node_started_monotonic is not None:
+            if (
+                self._step_timeout is not None
+                and self._node_started_monotonic is not None
+            ):
                 deadline = self._node_started_monotonic + self._step_timeout
                 if now >= deadline:
                     expired.append(
@@ -414,10 +417,11 @@ class Execution:
             now = time.monotonic()
             remaining: list[float] = []
             if self.limits.timeout is not None and self._started_monotonic is not None:
-                remaining.append(
-                    self.limits.timeout - (now - self._started_monotonic)
-                )
-            if self._step_timeout is not None and self._node_started_monotonic is not None:
+                remaining.append(self.limits.timeout - (now - self._started_monotonic))
+            if (
+                self._step_timeout is not None
+                and self._node_started_monotonic is not None
+            ):
                 remaining.append(
                     self._step_timeout - (now - self._node_started_monotonic)
                 )

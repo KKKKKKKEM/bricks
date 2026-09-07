@@ -30,13 +30,14 @@ from ..engine.observation import (
     RuntimeObserver,
 )
 from ..engine.policies import InputSelector, PolicyRegistry
-from ..engine.slots import Slot, SlotPool, _SlotLease
+from ..engine.slots import Slot, SlotPool
 from ..spi import (
     Delivery,
     DeliveryResult,
     Emit,
     GraphExecutor,
     HookableGraphExecutor,
+    SlotLease,
     TaskConsumer,
     Work,
 )
@@ -52,7 +53,7 @@ class GraphWorker:
         consumer: TaskConsumer,
         executor: GraphExecutor | None = None,
         emit: Emit | None = None,
-        emit_local: Callable[[Event, _SlotLease], None] | None = None,
+        emit_local: Callable[[Event, SlotLease], None] | None = None,
         close_injected: bool = False,
         observations: ObservationHub | None = None,
         policies: PolicyRegistry | None = None,
@@ -88,7 +89,11 @@ class GraphWorker:
         self._executions: OrderedDict[str, Execution] = OrderedDict()
         self._pending_hooks: dict[
             str,
-            list[tuple[NodeHook | Callable[..., object], HookPhase | str | None, str | None]],
+            list[
+                tuple[
+                    NodeHook | Callable[..., object], HookPhase | str | None, str | None
+                ]
+            ],
         ] = {}
         self._history_limit = 1000
         self._closed = False
@@ -319,9 +324,7 @@ class GraphWorker:
             try:
                 return self._executions[execution_id]
             except KeyError as exc:
-                raise BricksRuntimeError(
-                    f"unknown execution {execution_id!r}"
-                ) from exc
+                raise BricksRuntimeError(f"unknown execution {execution_id!r}") from exc
 
     def executions(self) -> tuple[Execution, ...]:
         """返回当前进程保留的 Execution 快照。"""
@@ -381,9 +384,7 @@ class GraphWorker:
             node = require_non_empty_string(node, "hook node")
             if node not in registered.nodes:
                 raise ValueError(f"graph {graph!r} has no node {node!r}")
-        return self._attach_executor_hook(
-            hook, phase=phase, graph=graph, node=node
-        )
+        return self._attach_executor_hook(hook, phase=phase, graph=graph, node=node)
 
     def _attach_executor_hook(
         self,
@@ -395,9 +396,7 @@ class GraphWorker:
     ) -> HookHandle:
         if not isinstance(self._executor, HookableGraphExecutor):
             raise TypeError("the configured GraphExecutor does not support hooks")
-        return self._executor.attach(
-            hook, phase=phase, graph=graph, node=node
-        )
+        return self._executor.attach(hook, phase=phase, graph=graph, node=node)
 
     def register_policy(self, name: str, selector: InputSelector) -> GraphWorker:
         """注册 selector contribution；使用它的 Graph 必须尚未冻结。"""
@@ -483,7 +482,7 @@ class GraphWorker:
 
         work = delivery.work
         try:
-            self._execute_work(work, delivery._slot_lease)
+            self._execute_work(work, delivery.slot_lease)
         except BaseException as exc:  # noqa: BLE001
             self._observations.publish(
                 RuntimeEvent(
@@ -509,7 +508,7 @@ class GraphWorker:
         )
         return DeliveryResult.ack()
 
-    def _execute_work(self, work: Work, lease: _SlotLease | None) -> None:
+    def _execute_work(self, work: Work, lease: SlotLease | None) -> None:
         execution = Execution(
             work.graph,
             limits=work.limits,
@@ -520,14 +519,14 @@ class GraphWorker:
             graph = self._get_graph(work.graph)
             if lease is None:
                 raise BricksRuntimeError("TaskConsumer dispatched Work without a Slot")
-            with lease.slot._execution_lock:
+            with lease.execution() as slot:
                 emit = partial(self._emit_with_lease, lease)
                 self._execute(
                     execution,
                     graph,
                     work.inputs,
                     emit,
-                    slot=lease.slot,
+                    slot=slot,
                 )
         except BaseException as exc:
             if execution.status is ExecutionStatus.PENDING:
@@ -650,7 +649,7 @@ class GraphWorker:
             else:
                 break
 
-    def _emit_with_lease(self, lease: _SlotLease, event: Event) -> None:
+    def _emit_with_lease(self, lease: SlotLease, event: Event) -> None:
         if self._emit_local is None:
             self._emit(event)
             return
@@ -662,9 +661,7 @@ class GraphWorker:
             try:
                 return self._graphs[name]
             except KeyError as exc:
-                raise UnknownGraphError(
-                    f"unknown registered graph {name!r}"
-                ) from exc
+                raise UnknownGraphError(f"unknown registered graph {name!r}") from exc
 
     def _ensure_open(self) -> None:
         with self._lock:
