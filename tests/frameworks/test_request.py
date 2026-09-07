@@ -108,6 +108,76 @@ def test_body_copy_overrides_replace_content_headers():
     assert request.headers["content-length"] == "100"
 
 
+@pytest.mark.parametrize("changes", [{"body": b"abcdef"}, {"body_type": "json"}])
+def test_copy_clears_length_from_explicit_headers(changes):
+    request = Request(
+        "https://example.com", body="abc", headers={"Content-Length": "3"}
+    )
+    copied = request.copy(headers=request.headers, **changes)
+    assert "Content-Length" not in copied.headers
+    assert request.headers["Content-Length"] == "3"
+
+
+def test_copy_tracks_new_generated_content_type():
+    request = Request(
+        "https://example.com",
+        body={"a": 1},
+        headers={"Content-Type": "application/custom"},
+    )
+    copied = request.copy(headers={})
+    assert copied.headers["Content-Type"] == "application/json"
+    copied.body = b"raw"
+    assert "Content-Type" not in copied.headers
+    assert request.headers["Content-Type"] == "application/custom"
+
+
+def test_copy_keeps_explicit_content_type_ownership():
+    request = Request("https://example.com", body={"a": 1})
+    copied = request.copy(headers={"Content-Type": "application/json"})
+    copied.body = b"raw"
+    assert copied.headers["Content-Type"] == "application/json"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "abc; admin=yes",
+        "a,b",
+        'a"b',
+        "a\\b",
+        "a b",
+        "\t",
+        "\r\n",
+        "\x00",
+        "\x7f",
+        "\u4e2d",
+    ],
+)
+def test_request_cookie_values_reject_unsafe_serialization(value):
+    with pytest.raises(ValueError):
+        Request("https://example.com", cookies={"session": value})
+    request = Request("https://example.com", cookies={"session": "valid"})
+    with pytest.raises(ValueError):
+        request.cookies["session"] = value
+    assert request.cookies == {"session": "valid"}
+
+
+def test_request_cookie_mutations_are_validated():
+    request = Request("https://example.com", cookies={"session": "abc=="})
+    with pytest.raises(ValueError):
+        request.cookies["bad name"] = "value"
+    with pytest.raises(TypeError):
+        request.cookies["session"] = cast(Any, 1)
+    with pytest.raises(ValueError):
+        request.cookies.update({"session": "bad; other=yes"})
+    request.cookies.setdefault("empty", "")
+    assert request.cookies == {"session": "abc==", "empty": ""}
+    restored = Request.from_curl(request.to_curl())
+    assert restored.cookies == request.cookies
+    del request.cookies["empty"]
+    assert request.cookies == {"session": "abc=="}
+
+
 def test_response_headers_remain_read_only_and_detached():
     request = Request("https://example.com", headers={"X-Test": "original"})
     response = Response(headers=request.headers)

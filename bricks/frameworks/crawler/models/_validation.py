@@ -74,3 +74,15 @@ def cookies(values: Mapping[str, str] | None) -> Mapping[str, str]:
             raise ValueError("cookie values must not contain CR, LF or NUL")
         result[name] = value
     return MappingProxyType(result)
+
+
+def request_cookies(values: Mapping[str, str] | None) -> Mapping[str, str]:
+    result = cookies(values)
+    for value in result.values():
+        if any(
+            ord(char) < 0x21 or ord(char) > 0x7E or char in '",;\\' for char in value
+        ):
+            raise ValueError(
+                "request cookie values must contain only HTTP cookie octets"
+            )
+    return result

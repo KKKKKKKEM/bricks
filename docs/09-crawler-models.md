@@ -42,12 +42,20 @@ JSON 和 form 在没有手动指定 Content-Type 时自动添加请求头。切�
 
 替换 body 或切换类型会清除旧 Content-Length。`copy()` 隔离可变数据；没有覆盖 body 或类型时，保留实际请求体字节，
 包括 multipart boundary。UploadFile 接受内存中的字节或文本，不打开文件、不接管文件句柄，也不支持流式上传。
+同时覆盖 body 和 headers 时，也会清除传入 headers 中的 Content-Length。
 
 ## 编辑与共享
 
 Request 可以在请求前 Hook 中原地修改 headers、params、cookies 和 body；独立分支应先 copy。Headers 查询不区分大小写，
 赋值替换所有同名字段，add 追加字段；params 同样支持赋值替换与 add 追加，但键名区分大小写。
 运行时不会自动复制领域对象，也没有提供下载开始后的请求快照机制。
+
+headers 和 params 的 `update()` 遵循普通映射语义；传入另一个多值容器时，只读取每个名称的最后一个值。
+需要保留全部重复值时，使用 `source.raw` 逐项调用 `add(name, value)`，或直接赋值整个容器以构造独立副本。
+
+请求 cookies 是受校验的可变映射，构造、整体赋值和逐项修改均校验名称和值。值使用未加引号的 HTTP cookie-octet
+字符集合：允许空值，不接受空白、控制字符、非 ASCII 字符、双引号、逗号、分号和反斜杠；模型不自动转义或编码。
+批量 `update()` 按普通映射语义逐项执行，后续项失败不会撤销此前成功的项。
 
 ## cURL 导入与导出
 
@@ -104,6 +112,8 @@ Response 以读取为主，允许直接修改 content 和 encoding；其他字�
 Cookies 保存标准库 Cookie 记录，保留域、路径、Secure、有效期及扩展属性。省略 cookies 参数时，从响应头的
 Set-Cookie 自动提取，需要来源 URL；显式提供 Cookies、CookieJar、Cookie 序列或简写字典时使用提供的数据。
 解析时使用标准库 CookieJar 的来源和有效期策略；原始 Set-Cookie 始终保留在 headers 中。
+因此 `Max-Age=0` 等删除指令不会出现在 response.cookies 中。后续会话组件必须使用原始 Set-Cookie 和来源 URL
+更新已有会话 CookieJar，不能只合并 response.cookies，否则会遗漏删除操作。
 
 `cookies.get(name)` 返回单个值，同名记录有歧义时要求指定 domain/path。`to_string()` 和 `str()` 提取全部记录，
 不筛选有效期；`to_string(url=目标地址)` 根据域、路径、Secure 和有效期筛选。不带来源域的简写记录只用于提取，
@@ -136,5 +146,6 @@ records = result.to_list()
 `rename(mapping)` 同时执行重命名，允许字段互换，忽略不存在的源字段；一条记录中目标名称冲突时报错。
 `unique(*fields)` 按指定字段联合去重，保留第一次出现的记录，缺少指定字段时报错；不传字段时比较整条记录。
 去重支持嵌套列表和字典；不可哈希值使用逐项比较，大集合优先指定 URL 等可哈希字段。
+可哈希性不改变相等语义，例如相等的 set 和 frozenset 字段也会合并，并保留首次出现的记录。
 
 [文档目录](README.md)

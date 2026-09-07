@@ -7,11 +7,9 @@ from copy import deepcopy
 from typing import Any, Literal, get_args
 from urllib.parse import urlencode
 
-from ._validation import (
-    cookies as normalize_cookies,
-)
 from ._validation import duration, entries, http_url, token
 from .body import BodyInput, BodyType, encode_json, encode_multipart
+from .cookies import RequestCookies
 from .headers import HeaderInput, MutableHeaders
 
 HttpMethod = Literal[
@@ -198,7 +196,7 @@ class Request:
     method: HttpMethod  # HTTP 方法，赋值后统一为大写。
     params: QueryParams  # 追加到 URL 的有序查询参数，允许同名多值。
     headers: MutableHeaders  # 可编辑请求头，查询不区分大小写。
-    cookies: dict[str, str]  # 本次请求显式携带的 Cookie，不是会话 Cookie 容器。
+    cookies: RequestCookies  # 本次请求显式携带的 Cookie，不是会话 Cookie 容器。
     _body: bytes | None
     _body_source: BodyInput
     _body_type: BodyType
@@ -281,7 +279,7 @@ class Request:
         elif name == "headers":
             value = MutableHeaders(value)
         elif name == "cookies":
-            value = dict(normalize_cookies(value))
+            value = RequestCookies(value)
         elif name == "timeout":
             value = duration(value, "timeout")
         elif name == "allow_redirects":
@@ -421,17 +419,19 @@ class Request:
             self._body_content_type,
         ):
             del headers["Content-Type"]
-        if "body" in changes or "body_type" in changes:
-            headers.pop("Content-Length", None)
         values.update(body=self._body_source, body_type=self.body_type, headers=headers)
         values.update(changes)
+        if "body" in changes or "body_type" in changes:
+            headers = MutableHeaders(values["headers"])
+            headers.pop("Content-Length", None)
+            values["headers"] = headers
         copied = type(self)(**values)
         if not {"body", "body_type"}.intersection(changes):
             # 不改变请求体时，复制必须保留原始字节及对应的 multipart boundary。
             copied._body = self._body
-            copied._body_content_type = self._body_content_type
             if self._body_content_type is not None and self.body_type == "multipart":
                 copied.headers["Content-Type"] = self._body_content_type
+                copied._body_content_type = self._body_content_type
         return copied
 
     def to_curl(self, *, body_file: str | None = None) -> str:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, MutableMapping
 from copy import deepcopy
 from email.message import Message
 from http.client import HTTPResponse
@@ -12,8 +12,30 @@ from urllib.parse import urlsplit
 from urllib.request import Request as URLRequest
 
 from ._validation import cookies as validate_cookies
-from ._validation import http_url
+from ._validation import http_url, request_cookies
 from .headers import Headers
+
+
+class RequestCookies(MutableMapping[str, str]):
+    """Editable request cookies with validation on every write."""
+
+    def __init__(self, values: Mapping[str, str] | None = None) -> None:
+        self._values = dict(request_cookies(values))
+
+    def __getitem__(self, name: str) -> str:
+        return self._values[name]
+
+    def __setitem__(self, name: str, value: str) -> None:
+        self._values.update(request_cookies({name: value}))
+
+    def __delitem__(self, name: str) -> None:
+        del self._values[name]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
 
 
 class _CookieResponse:

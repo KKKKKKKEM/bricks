@@ -246,11 +246,11 @@ class Items(MutableSequence[dict[str, Any]]):
             try:
                 hash(key)
             except TypeError:
-                if key in unhashable:
+                if key in unhashable or any(key == prior for prior in hashed):
                     continue
                 unhashable.append(key)
             else:
-                if key in hashed:
+                if key in hashed or key in unhashable:
                     continue
                 hashed.add(key)
             result.append(row)

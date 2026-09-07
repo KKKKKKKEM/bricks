@@ -106,6 +106,14 @@ def test_update_all_does_not_share_nested_values_between_rows():
     assert items[1]["data"] == []
 
 
+@pytest.mark.parametrize("keys", [[{1}, frozenset({1})], [frozenset({1}), {1}]])
+def test_unique_compares_equal_keys_across_hashability(keys):
+    items = Items([{"key": key, "position": i} for i, key in enumerate(keys)])
+    result = items.unique("key")
+    assert result.values("position") == [0]
+    assert type(result[0]["key"]) is type(keys[0])
+
+
 def test_invalid_bulk_records_leave_original_unchanged():
     items = Items({"a": 1})
     invalid = cast(Any, [{"b": 2}, {1: "bad key"}])
