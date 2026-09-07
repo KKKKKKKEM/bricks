@@ -21,9 +21,30 @@ classifiers = [
 ]
 requires-python = ">=3.10,<3.14"
 dependencies = [
-    "interlace @ git+https://github.com/KKKKKKKEM/interlace.git@a980688df232f41694de5a7684abb2bd9920a1ca",
+    "interlace @ git+https://github.com/KKKKKKKEM/interlace.git@bcd29eb85e0e00bcc08a0163d7e9eaa535156ee8",
     "urllib3>=2,<3",
+    "curl-cffi>=0.16.3,<0.17",
+]
+
+[project.optional-dependencies]
+httpx = ["httpx>=0.28,<1"]
+requests = ["requests>=2.32,<3"]
+requests-go = ["requests-go==1.0.9"]
+wreq = ["wreq>=0.12.1,<0.13; python_version >= '3.11'"]
+primp = ["primp==2.0.0"]
+playwright = ["playwright==1.62.0"]
+camoufox = ["camoufox==0.5.6", "playwright==1.62.0"]
+
+[dependency-groups]
+dev = [
     "httpx>=0.28,<1",
+    "requests>=2.32,<3",
+    "types-requests>=2.32",
+    "requests-go==1.0.9",
+    "wreq>=0.12.1,<0.13; python_version >= '3.11'",
+    "primp==2.0.0",
+    "playwright==1.62.0",
+    "camoufox==0.5.6",
 ]
 
 [project.urls]

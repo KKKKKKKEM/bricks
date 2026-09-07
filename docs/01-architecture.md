@@ -16,7 +16,7 @@ Bricks 单向依赖 Interlace 的公开 API。领域模型不持有 Runtime；�
 ```python
 from interlace import Graph, Runtime
 from bricks import DownloadNode, Request, Response
-from bricks.downloaders.httpx import HttpxDownloader
+from bricks.downloaders.curl_cffi import CurlCffiDownloader
 ```
 
 Bricks 顶层只导出爬虫领域类型，不转导出 Interlace 的引擎 API。下载器通过结构化协议替换；
@@ -42,7 +42,8 @@ uv run --no-sync --with pytest pytest -q
 ## 可靠性边界
 
 默认运行时是进程内实现，不提供持久 broker、自动重试、跨进程恢复或 exactly-once。
-URL 去重、下载重试、代理与会话策略属于爬虫领域，目前没有这些策略的内建实现。
+URL 去重、下载重试、代理与会话策略属于爬虫领域。当前下载器支持代理和按 Slot 装配的会话，
+默认使用 curl_cffi，HTTPX 与 requests 为可选依赖；尚未内建 URL 去重或自动重试。
 取消和同步超时保持协作式语义；已发布的事件或已交付的输出不因后续失败而撤回。
 
 [文档目录](README.md) · [下一章：爬虫领域模型](02-crawler-models.md)

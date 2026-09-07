@@ -26,6 +26,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install browser runtimes
+        run: |
+          uv sync --locked --python "${{ matrix.python-version }}"
+          uv run python -m playwright install --with-deps chromium firefox
+          uv run python -m camoufox fetch official/stable/152.0.4-beta.30
       - name: Run tests
         run: uv run --python "${{ matrix.python-version }}" --with pytest pytest -q
 

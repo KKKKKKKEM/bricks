@@ -1,16 +1,14 @@
 import asyncio
-import gzip
-import json
-import time
+from http.cookies import SimpleCookie
 from concurrent.futures import ThreadPoolExecutor
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Event, Thread
+from contextlib import ExitStack
+from threading import Barrier
 
 import httpx
 import pytest
-
-from interlace import Context, Graph, Runtime
+from interlace import AsyncNode, Context, Graph, Node, Ports, Runtime, Slot, SlotPool
 from interlace.engine.errors import ExecutionCancelledError, NodeTimeoutError
+
 from bricks import (
     AsyncDownloadNode,
     DownloadNode,
@@ -19,99 +17,146 @@ from bricks import (
 )
 from bricks.downloaders.httpx import (
     AsyncHttpxDownloader,
+    AsyncHttpxSessionDownloader,
     HttpxDownloader,
+    HttpxSessionDownloader,
 )
+from bricks.downloaders import AsyncSessionDownloader, SessionDownloader
 
 
-@pytest.fixture
-def server():
-    """启动本地 HTTP 服务，并在用例结束后关闭服务和线程。
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_context_session_policy_preserves_existing_session(server, asynchronous):
+    """验证临时请求隔离 Cookie 和连接，且不破坏已有会话。
 
-    Yields:
-        服务基础 URL、收到的请求记录和慢请求启动事件。
+    Args:
+        server: 本地 HTTP 服务。
+        asynchronous: 是否验证异步下载节点。
     """
 
-    seen = []
-    slow_started = Event()
+    base, _, _ = server
 
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            """处理本地测试 HTTP 请求并生成当前场景的响应。"""
+    async def run():
+        """在同一事件循环内创建、使用和关闭会话。"""
 
-            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-            seen.append((self.command, self.path, self.headers, body))
-            headers = []
-            status = 200
-            data = json.dumps(
-                {
-                    "path": self.path,
-                    "cookie": self.headers.get("Cookie", ""),
-                    "body": body.decode(),
-                }
-            ).encode()
-            if self.path == "/redirect":
-                status = 302
-                headers = [
-                    ("Location", "/delete"),
-                    ("Set-Cookie", "session=abc; Path=/"),
-                ]
-            elif self.path == "/delete":
-                status = 302
-                headers = [
-                    ("Location", "/echo"),
-                    ("Set-Cookie", "session=; Max-Age=0; Path=/"),
-                ]
-            elif self.path == "/loop":
-                status = 302
-                headers = [("Location", "/loop")]
-            elif self.path == "/post-redirect":
-                status = 303
-                headers = [("Location", "/echo")]
-            elif self.path == "/cross":
-                status = 302
-                headers = [
-                    ("Location", f"http://localhost:{self.server.server_port}/echo")
-                ]
-            elif self.path == "/gzip":
-                data = gzip.compress(b"hello" * 100)
-                headers = [("Content-Encoding", "gzip")]
-            elif self.path == "/slow":
-                slow_started.set()
-                time.sleep(0.2)
-            elif self.path == "/error":
-                status = 500
-            elif self.path == "/cookies":
-                headers = [("Set-Cookie", "a=1; Path=/"), ("Set-Cookie", "b=2; Path=/")]
-            self.send_response(status)
-            for name, value in headers:
-                self.send_header(name, value)
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            try:
-                self.wfile.write(data)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
+        downloader = AsyncHttpxDownloader() if asynchronous else HttpxDownloader()
+        session = (
+            await downloader.prepare_session()
+            if asynchronous
+            else downloader.prepare_session()
+        )
+        slot = Slot({"crawler.downloaders": {"default": session}})
+        node_type = AsyncDownloadNode if asynchronous else DownloadNode
+        node = node_type(
+            lambda current: current["crawler.downloaders"],
+            isolated_downloaders={"default": downloader},
+        )
 
-        do_POST = do_GET
-
-        def log_message(self, *args):
-            """屏蔽本地测试 HTTP 服务的常规访问日志。
+        async def fetch(path, *, isolated=False, cookies=None):
+            """按本次调用策略执行下载。
 
             Args:
-                *args: 调用协议传入的位置参数。
+                path: 本地请求路径。
+                isolated: 是否禁用会话复用。
+                cookies: 本次请求显式提供的 Cookie。
+
+            Returns:
+                服务端回显的请求信息。
             """
 
-            pass
+            context = Context(
+                lambda event: None,
+                None if isolated else slot,
+                options={"crawler.session.reuse": False} if isolated else {},
+            )
+            result = node.execute(
+                {"request": Request(base + path, cookies=cookies)}, context
+            )
+            output = await result if asynchronous else result
+            return output.value.json()
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
+        try:
+            login = await fetch("/login/original")
+            before = await fetch("/echo")
+            isolated = await fetch("/login/temporary", isolated=True, cookies={"explicit": "yes"})
+            fresh = await fetch("/echo", isolated=True)
+            after = await fetch("/echo")
+            assert before["cookie"] == after["cookie"] == "account=original"
+            assert isolated["cookie"] == "explicit=yes"
+            assert fresh["cookie"] == ""
+            assert login["peer_port"] == before["peer_port"] == after["peer_port"]
+            assert isolated["peer_port"] != before["peer_port"]
+            assert fresh["peer_port"] != before["peer_port"]
+        finally:
+            if asynchronous:
+                await downloader.close_session(session)
+            else:
+                downloader.close_session(session)
+
+    asyncio.run(run())
+
+
+def test_runtime_session_options_reach_download_node(server):
+    """验证 Runtime 配置通过 Context 影响真实 HTTP 下载。
+
+    Args:
+        server: 本地 HTTP 服务。
+    """
+
+    base, _, _ = server
+    downloader = HttpxDownloader()
+    session = downloader.prepare_session()
     try:
-        yield f"http://127.0.0.1:{httpd.server_port}", seen, slow_started
+        graph = Graph(entrypoint="download").add(
+            download=DownloadNode(
+                {"default": session}, isolated_downloaders={"default": downloader}
+            )
+        )
+        with Runtime() as runtime:
+            runtime.register("crawl", graph)
+            runtime.run("crawl", Request(base + "/login/original"))
+            response = runtime.run(
+                "crawl", Request(base + "/echo"), options={"crawler.session.reuse": False}
+            )[0].value
+            assert response.json()["cookie"] == ""
+            response = runtime.run("crawl", Request(base + "/echo"))[0].value
+            assert response.json()["cookie"] == "account=original"
     finally:
-        httpd.shutdown()
-        httpd.server_close()
-        thread.join()
+        downloader.close_session(session)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_invalid_session_policy_fails_before_download(asynchronous):
+    """验证错误策略或缺失临时下载器在网络调用之前失败。
+
+    Args:
+        asynchronous: 是否验证异步节点。
+    """
+
+    downloader = AsyncHttpxDownloader() if asynchronous else HttpxDownloader()
+    node_type = AsyncDownloadNode if asynchronous else DownloadNode
+    node = node_type({"default": downloader})
+
+    def invoke(value):
+        """执行非法配置用例。
+
+        Args:
+            value: 本次会话复用选项。
+        """
+
+        result = node.execute(
+            {"request": Request("https://example.com")},
+            Context(lambda event: None, options={"crawler.session.reuse": value}),
+        )
+        if asynchronous:
+            asyncio.run(result)
+
+    for value in (None, "false", 0, 1):
+        with pytest.raises(TypeError, match="boolean"):
+            invoke(value)
+    with pytest.raises(ValueError, match="isolated_downloaders"):
+        invoke(False)
+
+
 
 
 @pytest.fixture(params=[False, True], ids=["sync", "async"])
@@ -129,6 +174,444 @@ def fetch(request):
         downloader = AsyncHttpxDownloader(max_redirects=2)
         return lambda value: asyncio.run(downloader.fetch(value))
     return HttpxDownloader(max_redirects=2).fetch
+
+
+def test_slot_sessions_follow_events_and_isolate_concurrent_chains(server):
+    """验证真实事件链跨图复用会话且不同 Slot 并发隔离。
+
+    Args:
+        server: 本地 HTTP 服务夹具。
+    """
+
+    base, _, _ = server
+    barrier = Barrier(2)
+    results = []
+
+    def resolve(slot):
+        """读取槽内资源并让两个根执行链同时进入下载。
+
+        Args:
+            slot: 当前执行槽。
+
+        Returns:
+            当前槽专用下载器映射。
+        """
+
+        if not slot.get("started"):
+            slot["started"] = True
+            barrier.wait(timeout=5)
+        return slot["downloaders"]
+
+    class Continue(Node):
+        """登录后发出携带同一 Slot 的后续请求。"""
+
+        input_ports = Ports(response=Response)  # 登录响应端口。
+
+        def execute(self, inputs, context):
+            """保存账号标记并显式发出后续事件。
+
+            Args:
+                inputs: 登录响应。
+                context: 当前槽及事件发布接口。
+            """
+
+            context.slot["account"] = inputs["response"].url.rsplit("/", 1)[1]
+            context.emit("follow", Request(base + "/echo"))
+
+    class Collect(Node):
+        """收集跨图延续的响应及会话归属。"""
+
+        input_ports = Ports(response=Response)  # 后续请求响应端口。
+
+        def execute(self, inputs, context):
+            """记录响应 Cookie 与 Slot 身份。
+
+            Args:
+                inputs: 后续响应。
+                context: 当前执行槽。
+            """
+
+            results.append(
+                (
+                    context.slot.id,
+                    context.slot["account"],
+                    inputs["response"].json()["cookie"],
+                )
+            )
+
+    with ExitStack() as resources:
+        clients = [
+            resources.enter_context(httpx.Client(trust_env=False)) for _ in range(2)
+        ]
+        slots = [
+            Slot({"downloaders": {"default": HttpxSessionDownloader(c)}})
+            for c in clients
+        ]
+        pool = SlotPool(slots=slots)
+        resources.callback(pool.close)
+        node = DownloadNode(resolve)
+        with Runtime() as runtime:
+            runtime.register(
+                "login",
+                Graph(entrypoint="download")
+                .add(download=node, next=Continue())
+                .connect(
+                    "download", "next", source_port="response", target_port="response"
+                ),
+            )
+            runtime.register(
+                "follow",
+                Graph(entrypoint="download")
+                .add(download=node, collect=Collect())
+                .connect(
+                    "download",
+                    "collect",
+                    source_port="response",
+                    target_port="response",
+                ),
+            )
+            runtime.on("login", graph="login", queue="login", concurrency=2, slots=pool)
+            runtime.on(
+                "follow", graph="follow", queue="follow", concurrency=2, slots=pool
+            )
+            runtime.emit("login", Request(base + "/login/A"))
+            runtime.emit("login", Request(base + "/login/B"))
+            runtime.wait_idle(timeout=10)
+        assert pool.available == 2
+        assert all(not client.is_closed for client in clients)
+        assert len({slot_id for slot_id, _, _ in results}) == 2
+        assert sorted((account, cookie) for _, account, cookie in results) == [
+            ("A", "account=A"),
+            ("B", "account=B"),
+        ]
+    assert all(client.is_closed for client in clients)
+
+
+def test_async_slot_sessions_and_cancellation(server):
+    """验证异步同槽复用、不同槽隔离和取消后的外部所有权。
+
+    Args:
+        server: 本地 HTTP 服务夹具。
+    """
+
+    base, _, slow_started = server
+
+    async def run():
+        """在同一事件循环内使用并关闭所有异步会话。"""
+
+        async with (
+            httpx.AsyncClient(trust_env=False) as a,
+            httpx.AsyncClient(trust_env=False) as b,
+        ):
+            node = AsyncDownloadNode(lambda slot: slot["downloaders"])
+            contexts = [
+                Context(
+                    lambda event: None,
+                    Slot(
+                        {
+                            "downloaders": {
+                                "default": AsyncHttpxSessionDownloader(client)
+                            }
+                        }
+                    ),
+                )
+                for client in (a, b)
+            ]
+
+            async def chain(context, account):
+                """在一个槽内先登录再读取 Cookie。
+
+                Args:
+                    context: 当前槽上下文。
+                    account: 本链独立账号。
+
+                Returns:
+                    后续请求实际携带的 Cookie。
+                """
+
+                await node.execute(
+                    {"request": Request(base + "/login/" + account)}, context
+                )
+                output = await node.execute(
+                    {"request": Request(base + "/echo")}, context
+                )
+                return output.value.json()["cookie"]
+
+            assert await asyncio.gather(
+                chain(contexts[0], "A"), chain(contexts[1], "B")
+            ) == ["account=A", "account=B"]
+            task = asyncio.create_task(
+                node.execute({"request": Request(base + "/slow")}, contexts[0])
+            )
+            assert await asyncio.to_thread(slow_started.wait, 2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert not a.is_closed
+            assert await chain(contexts[0], "C") == "account=C"
+        assert a.is_closed and b.is_closed
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_slot_resolver_contracts(asynchronous):
+    """验证无槽、非法解析结果和同步异步类别错误明确失败。
+
+    Args:
+        asynchronous: 是否使用异步下载节点。
+    """
+
+    node_type = AsyncDownloadNode if asynchronous else DownloadNode
+
+    def invoke(resolver, context):
+        """执行当前类别节点。
+
+        Args:
+            resolver: 待校验资源解析函数。
+            context: 有槽或无槽上下文。
+        """
+
+        result = node_type(resolver).execute(
+            {"request": Request("https://example.com")}, context
+        )
+        if asynchronous:
+            asyncio.run(result)
+
+    with pytest.raises(RuntimeError, match="Slot"):
+        invoke(lambda slot: {}, Context(lambda event: None))
+    context = Context(lambda event: None, Slot())
+    with pytest.raises(ValueError, match="not registered"):
+        invoke(lambda slot: {}, context)
+    with pytest.raises(TypeError, match="mapping"):
+        invoke(lambda slot: None, context)
+    wrong = HttpxDownloader() if asynchronous else AsyncHttpxDownloader()
+    with pytest.raises(TypeError, match="fetch"):
+        invoke(lambda slot: {"default": wrong}, context)
+    with pytest.raises(KeyError, match="missing"):
+        invoke(lambda slot: slot["missing"], context)
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_session_request_options_and_errors(server, asynchronous):
+    """验证会话模式保持请求策略、复制、传输错误与配置错误语义。
+
+    Args:
+        server: 本地 HTTP 服务夹具。
+        asynchronous: 是否测试异步会话下载器。
+    """
+
+    base, _, _ = server
+
+    async def check(fetch):
+        """对同步和异步下载器运行相同请求契约。
+
+        Args:
+            fetch: 当前下载方法。
+        """
+
+        async def send(request):
+            """统一等待当前方法。
+
+            Args:
+                request: 待发送请求。
+
+            Returns:
+                下载结果。
+            """
+
+            result = fetch(request)
+            return await result if asynchronous else result
+
+        request = Request(base + "/redirect", allow_redirects=False)
+        assert (await send(request)).status_code == 302
+        assert "Cookie" not in request.headers
+        assert (await send(Request(base + "/echo"))).json()["cookie"] == "session=abc"
+        assert (await send(Request(base + "/delete"))).json()["cookie"] == ""
+        assert (await send(Request(base + "/error"))).status_code == 500
+        assert (await send(Request(base + "/slow", timeout=0.01))).status_code == -1
+        with pytest.raises(ValueError, match="proxy"):
+            await send(Request(base + "/echo", proxy="http://127.0.0.1:1"))
+
+    async def run():
+        """在所有者作用域内运行会话契约。"""
+
+        if asynchronous:
+            async with httpx.AsyncClient(trust_env=False) as client:
+                await check(AsyncHttpxSessionDownloader(client).fetch)
+        else:
+            with httpx.Client(trust_env=False) as client:
+                await check(HttpxSessionDownloader(client).fetch)
+
+    asyncio.run(run())
+
+
+def test_session_example(server):
+    """验证示例使用真实 SlotPool 完成下载并释放资源。
+
+    Args:
+        server: 本地 HTTP 服务夹具。
+    """
+
+    from examples.crawler_session import run
+
+    base, _, _ = server
+    responses = run([base + "/cookies", base + "/echo"], concurrency=1)
+    assert len(responses) == 2
+    cookies = SimpleCookie(responses[1].json()["cookie"])
+    assert {name: morsel.value for name, morsel in cookies.items()} == {"a": "1", "b": "2"}
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_optional_session_lifecycle(server, asynchronous):
+    """验证可选会话协议的独立准备、配置继承和重复关闭。
+
+    Args:
+        server: 本地 HTTP 服务夹具。
+        asynchronous: 是否使用异步会话能力。
+    """
+
+    base, _, _ = server
+
+    async def run():
+        """对两种会话能力执行相同生命周期契约。"""
+
+        downloader = (
+            AsyncHttpxDownloader(max_redirects=0)
+            if asynchronous
+            else HttpxDownloader(max_redirects=0)
+        )
+        protocol = AsyncSessionDownloader if asynchronous else SessionDownloader
+        assert isinstance(downloader, protocol)
+        assert not isinstance(FakeDownloader("plain"), protocol)
+        sessions = []
+        try:
+            for _ in range(2):
+                session = (
+                    await downloader.prepare_session()
+                    if asynchronous
+                    else downloader.prepare_session()
+                )
+                sessions.append(session)
+            assert sessions[0].client is not sessions[1].client
+            ports = []
+            for _ in range(2):
+                response = (
+                    await sessions[0].fetch(Request(base + "/echo"))
+                    if asynchronous
+                    else sessions[0].fetch(Request(base + "/echo"))
+                )
+                ports.append(response.json()["peer_port"])
+            assert ports[0] == ports[1]
+            for session in sessions:
+                response = (
+                    await session.fetch(Request(base + "/redirect"))
+                    if asynchronous
+                    else session.fetch(Request(base + "/redirect"))
+                )
+                assert response.status_code == -1
+                assert isinstance(response.error, httpx.TooManyRedirects)
+            sessions[0].client.cookies.set("private", "A")
+            assert "private" not in sessions[1].client.cookies
+        finally:
+            for session in sessions:
+                for _ in range(2):
+                    if asynchronous:
+                        await downloader.close_session(session)
+                    else:
+                        downloader.close_session(session)
+                assert session.client.is_closed
+        with pytest.raises(RuntimeError, match="closed"):
+            if asynchronous:
+                await sessions[0].fetch(Request(base + "/echo"))
+            else:
+                sessions[0].fetch(Request(base + "/echo"))
+
+    asyncio.run(run())
+
+
+def test_async_runtime_session_lifecycle(server):
+    """验证准备、下载和关闭通过公开 Node API 在同一执行循环完成。
+
+    Args:
+        server: 本地 HTTP 服务夹具。
+    """
+
+    from examples.crawler_session import Collect
+
+    base, _, _ = server
+    downloader = AsyncHttpxDownloader()
+    slot = Slot()
+    pool = SlotPool(slots=[slot])
+    sessions = []
+    from queue import SimpleQueue
+
+    results = SimpleQueue()
+
+    class Prepare(AsyncNode):
+        """在执行器事件循环准备会话。"""
+
+        async def execute(self, inputs, context):
+            """创建并登记当前槽会话。
+
+            Args:
+                inputs: 本节点无输入端口。
+                context: 执行器提供的上下文。
+            """
+
+            session = await downloader.prepare_session()
+            sessions.append(session)
+            slot["downloaders"] = {"default": session}
+
+    class Close(AsyncNode):
+        """在执行器停止前关闭其循环中的会话。"""
+
+        async def execute(self, inputs, context):
+            """调用可选协议关闭已停止下载的会话。
+
+            Args:
+                inputs: 本节点无输入端口。
+                context: 执行器提供的上下文。
+            """
+
+            for session in sessions:
+                await downloader.close_session(session)
+
+    try:
+        with Runtime() as runtime:
+            runtime.register(
+                "prepare", Graph(entrypoint="prepare").add(prepare=Prepare())
+            )
+            runtime.register("close", Graph(entrypoint="close").add(close=Close()))
+            runtime.register(
+                "download",
+                Graph(entrypoint="download")
+                .add(
+                    download=AsyncDownloadNode(lambda current: current["downloaders"]),
+                    collect=Collect(results),
+                )
+                .connect(
+                    "download",
+                    "collect",
+                    source_port="response",
+                    target_port="response",
+                ),
+            )
+            try:
+                runtime.run("prepare")
+                runtime.on("request", graph="download", queue="download", slots=pool)
+                runtime.emit("request", Request(base + "/cookies"))
+                runtime.emit("request", Request(base + "/echo"))
+                runtime.wait_idle(timeout=10)
+            finally:
+                runtime.run("close")
+        assert len(sessions) == 1 and sessions[0].client.is_closed
+        assert results.qsize() == 2
+        first, second = results.get_nowait(), results.get_nowait()
+        assert second.json()["cookie"] == "a=1; b=2"
+        assert first.json()["peer_port"] == second.json()["peer_port"]
+    finally:
+        pool.close()
 
 
 def test_http_round_trip_and_actual_sent_snapshot(server, fetch):
