@@ -424,10 +424,10 @@ def test_stop_graph_preserves_published_outputs_in_result_and_stream(
         try:
             engine.attach(Stop(), graph="work", node="last")
             execution = Execution("work")
-            result = engine.execute(
-                "work", graph.freeze(), None, lambda e: None, execution=execution
-            )
-            assert result == execution.result() == tuple(execution) == expected
+            execution.start(graph.freeze())
+            engine.execute("work", graph, None, lambda e: None, execution=execution)
+            execution.succeed()
+            assert execution.result() == tuple(execution) == expected
         finally:
             engine.close()
         return

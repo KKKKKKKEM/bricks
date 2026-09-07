@@ -59,7 +59,7 @@ Event、Context、Execution、ExecutionLimits、ExecutionStatus、Slot、SlotPoo
 
 1. Runtime 注册 Graph，用 `on(event, graph, queue, concurrency)` 组合路由与本地消费，并用 `observe()` 独立注册
    观察者；高级组合可以分别调用 `route()` 与 `consume()`。
-2. Runtime 的默认构造必须通过 PluginHost 安装 LocalRuntimePlugin，再取得 EventRouter 与 GraphWorker；不得另设
+2. Runtime 的默认构造必须通过 PluginHost 安装 LocalRuntimePlugin，再取得 RouterRole 与 WorkerRole；不得另设
    只供内建实现使用的装配路径。
 3. Router 组装事件发布和任务投递，Worker 组装任务消费和 Graph 执行。显式传入 Runtime 的 Router/Worker 由
    Runtime 管理；注入角色或插件的底层组件默认仍由调用方管理。
@@ -70,10 +70,13 @@ Event、Context、Execution、ExecutionLimits、ExecutionStatus、Slot、SlotPoo
 
 1. EventBus 只负责 Event 发布、订阅和投递生命周期。
 2. TaskPublisher 负责工作投递，TaskConsumer 负责命名执行通道、本地并发和消费；TaskBackend 是两者的组合。
-3. GraphExecutor 只负责执行冻结 Graph。
+3. GraphExecutor 只负责执行冻结 Graph，通过 Execution 的公开输出接口交付结果；同步返回 None，异步返回
+   Awaitable[None]。执行宿主管理 start/succeed/fail，不依靠整批返回值补发输出。
 4. EventBus、任务传输和 GraphExecutor 必须可以独立替换和组合，不得合并为万能 Backend。
 5. SPI 位于高级扩展层，不进入顶层 `bricks` API。
 6. Runtime 和插件装配层只依赖公开角色或能力协议，不得使用默认内存实现的私有状态。
+7. RouterRole、WorkerRole 和 SlotProvider 按结构化协议替换，不要求继承默认实现。ExecutionFactory 可注入
+   OutputStore 与 ExecutionNotifier，默认实现与第三方实现均经同一装配路径。
 
 ## 第七条：可靠性不得夸大
 
@@ -107,7 +110,7 @@ Event、Context、Execution、ExecutionLimits、ExecutionStatus、Slot、SlotPoo
 5. 等待 Slot 的根 Work 不得占用 Consumer 的执行线程，也不得阻塞已携带 Slot 的延续 Work。
 6. Slot、SlotPool 和进程内 lease 不跨进程序列化；Work 穿过进程或消息边界后开始新的本地 Slot 链，远程适配器不得
    宣称保留原进程的 Slot 连续性。
-7. 适配器通过 SlotPool 的公开申请和可用通知接口取得 `bricks.spi.SlotLease`，通过 `Delivery.slot_lease` 传递；
+7. 适配器通过 `bricks.spi.SlotProvider` 的公开申请和可用通知接口取得 `SlotLease`，通过 `Delivery.slot_lease` 传递；
    lease 提供引用管理和串行 execution 能力，不暴露内部锁。每个接管的引用必须释放，执行期间的引用由 lease 保护。
 
 ## 第十一条：Execution 控制必须默认开放
@@ -119,6 +122,8 @@ Event、Context、Execution、ExecutionLimits、ExecutionStatus、Slot、SlotPoo
 5. 跨 Graph 的每个 Work 是独立 execution，独立计步和计时。
 6. Execution 是同步等待、异步等待和 terminal Output 流的统一句柄；便利接口不得维护不同执行语义。
 7. 已交给流消费者的 terminal Output 不因后续 Graph 失败而撤回。
+8. 输出存储与等待通知实现可替换；存储必须维持追加顺序和可重放性。完整结果按需读取，流式消费不得强制物化
+   全量结果；同步与异步交付共享背压、取消和超时约束。
 
 ## 第十二条：扩展点保持受控
 
@@ -137,9 +142,10 @@ Event、Context、Execution、ExecutionLimits、ExecutionStatus、Slot、SlotPoo
 5. 示例必须只通过相同顶层 API 组合，并覆盖核心编排方式。
 6. 文档不得把计划能力写成已实现能力。
 
-## 第十四条：插件化止于内核语义
+## 第十四条：核心实现可替换，公共契约保持稳定
 
-1. Graph、Node、Ports、Edge、Output、Event、Execution 的基本语义、冻结校验和错误契约属于微内核，不得由插件替换。
+1. Graph、Node、Ports、Edge、Output、Event、Execution 的基本语义、冻结校验规则和错误契约属于微内核，插件不得
+   改写这些契约；满足相同契约的核心实现可以通过公开协议替换。
 2. 部署能力和非本质策略通过具名 capability 扩展；默认实现必须与第三方实现经过同一 PluginHost 装配路径。
 3. 插件必须声明 namespaced ID、插件版本、SPI 主版本、依赖与提供的 capability；宿主按依赖顺序 setup/start，
    并按逆序 stop。

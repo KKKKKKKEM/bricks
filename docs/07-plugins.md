@@ -30,7 +30,7 @@ runtime = Runtime(plugins=(contributions,))
 ```
 
 `Runtime()` 会检查插件声明的 capability，并通过 `LocalRuntimePlugin` 逐项补齐缺失的 EventBus、TaskBackend 和
-GraphExecutor，再组装标准 Router 与 Worker。因此默认内存组合也是普通内建插件，而不是 Runtime 的隐藏特例；只
+GraphExecutor、ExecutionFactory，再组装标准 Router 与 Worker。因此默认内存组合也是普通内建插件，而不是 Runtime 的隐藏特例；只
 提供一个基础设施 capability 的插件可以与其余默认实现组合。插件只从 `PluginContext` 取得已声明 capability，
 不应读取 Runtime、Router 或 Worker 的私有字段。
 
@@ -153,8 +153,13 @@ tasks = memory.TaskBackend()
 | `SlotLease` | 引用管理、读取 Slot 和串行 execution | 由 `SlotPool` 返回 |
 | `TaskConsumer` | 调度带 Slot 的 Work，并控制当前实例的本地并发 | `memory.TaskBackend` |
 | `TaskBackend` | 同时实现发布与消费的组合协议 | `memory.TaskBackend` |
-| `GraphExecutor` | 执行已冻结 Graph 并返回终端 Output | `Engine` |
+| `SlotProvider` | 申请资源、查询容量和可用通知 | `SlotPool` |
+| `RouterRole` / `WorkerRole` | Runtime 所依赖的事件与执行角色 | EventRouter / GraphWorker |
+| `GraphExecutor` | 执行已冻结 Graph，通过 Execution 交付终端 Output | `Engine` |
 | `HookableGraphExecutor` | GraphExecutor 的可选动态 Hook 能力 | `Engine` |
+| `ExecutionFactory` | 为每次直接执行和 Work 创建独立句柄及资源 | `Execution` 构造器 |
+| `OutputStore` | 顺序追加、按索引重放终端输出 | MemoryOutputStore |
+| `ExecutionNotifier` | 同步和异步等待的版本化唤醒 | LocalExecutionNotifier |
 
 ## 适配器的最低要求
 
@@ -169,18 +174,66 @@ TaskPublisher 的 `submit()` 正常返回即表示后端已接受 Work，同时�
     `bind(queue, handler, concurrency=..., slots=...)` 在调度根 Work 前通过 `slots.try_acquire()` 获取 lease。Work 只包含 Graph
     名、输入、领域 trigger、ID 和 limits；进程内 lease 只存在于 `Delivery.slot_lease`。支持 `LocalTaskPublisher` 的本地后端
     可以延续 lease；等待 Slot 的根 Work 不能占用 concurrency，交付完成或失败后必须释放 Delivery 持有的 lease。
-- GraphExecutor 接收注册名、冻结 Graph、入口输入、Event emitter、可选 ExecutionPlan，以及关键字参数
-  `slot=` 和 `execution=`。GraphWorker 会把冻结后的 Node timeout 快照绑定到 Execution；替换执行器必须为每次
+- GraphExecutor 接收注册名、冻结 Graph、入口输入、Event emitter、可选 ExecutionPlan，以及可选 `slot=` 和必需的
+  `execution=`。GraphWorker 会把冻结后的 Node timeout 快照绑定到 Execution 并开始执行；替换执行器必须为每次
   Node firing 使用 `with execution.step(node_id): ...` 包住完整调用，并在调度边界调用
-  `execution.checkpoint()`，从而保留步数、取消和 timeout 语义。自定义执行器若还实现
+  `execution.checkpoint()`，从而保留步数、取消和 timeout 语义。终端输出逐项调用 `execution.publish_output(output)`，
+  异步执行器使用 `await execution.apublish_output(output)` 避免背压阻塞事件循环。同步执行返回 None，异步执行返回
+  Awaitable[None]，不得返回结果 tuple；所有结果都来自同一输出存储。自定义执行器若还实现
   `HookableGraphExecutor` 的 `attach()`，`Runtime.attach()` 会按结构化能力委托给它。
 
 可参考 [test_runtime_spi.py](../tests/engine/test_runtime_spi.py) 中的同步替身：它验证三个能力可独立替换，也验证
 Runtime 不依赖默认内存实现的私有字段。
 
+## 核心实现的替换
+
+`RouterRole`、`WorkerRole` 是结构化协议，替换角色无需继承 EventRouter 或 GraphWorker。显式装配时仍需提供完整
+角色组合；可以只替换其中一个角色的实现，另一个使用默认类。插件装配时使用 `CAP_EVENT_ROUTER` 和
+`CAP_GRAPH_WORKER` 提供角色。自定义角色插件负责通过公开角色接口安装自己的贡献并管理关闭顺序。
+
+WorkerRole 的基本执行入口是 `start()`，同步 `Runtime.run()` 和异步 `Runtime.arun()` 分别等待它返回的同一个
+Execution。`iter()`、`aiter()` 必须先建立输出订阅再启动执行，保证首批输出也受到背压约束。替换 Worker 仍须在注册时
+冻结 Graph、验证 ExecutionPlan，保持 Work 并发、Slot 链、错误传播和等待关闭的契约。
+
+替换执行器可以通过 `graph.spec_for(node_id)` 读取冻结后的端口、输入策略和 timeout，通过 `graph.outgoing_for()`
+读取原图连接；ExecutionPlan 的 `graph` 和 `outgoing_for()` 描述计划所属图及计划内的连接，不需要读取私有字段。
+执行宿主调用 `execution.start(graph)` 开始计时，执行器正常完成后调用 `succeed()`，异常时调用 `fail(error)`。
+`start()` 返回 False 表示句柄已在启动前取消，宿主不得继续执行。取消和 timeout 的解释仍由 Execution 统一负责。
+
+`ExecutionFactory` 可以通过 LocalRuntimePlugin 的 `execution_factory=` 注入，也可以通过
+`CAP_EXECUTION_FACTORY` capability 提供。其签名为：
+
+```python
+def make_execution(graph, *, limits, id=None, output_buffer=64):
+    return Execution(
+        graph,
+        limits=limits,
+        id=id,
+        output_buffer=output_buffer,
+        output_store=make_output_store(),
+        notifier=make_notifier(),
+    )
+```
+
+`make_output_store()` 和 `make_notifier()` 由应用实现；每次调用必须创建独立资源。工厂必须保留收到的 Graph 名、
+Work ID、limits、output_buffer，并返回 PENDING 状态的 Execution。默认工厂也是经 LocalRuntimePlugin 装配的
+普通 capability，没有为内存实现单独设置创建路径。
+
+OutputStore 提供 `append(output)`、`len(store)` 和 `store[index]`。存储在绑定时必须为空，追加必须原子完成，已接受
+输出必须保持顺序且可重复读取；不能通过丢弃旧输出来悄悄改变重放契约。存储资源的生命周期由提供工厂的应用或插件
+管理，必须至少覆盖 Execution 的读取期。框架只在调用方请求完整结果时读取全量数据。
+
+ExecutionNotifier 提供单调版本 `version`、`notify()`、`wait(version, timeout)` 和 `wait_async(version)`。
+通知递增版本并唤醒全部等待者；等待旧版本应立即完成，等待当前版本必须允许后续跨线程通知唤醒。取消异步等待时
+必须移除对应等待者，不能影响其他消费者。同步与异步输出接口在该通知机制上共享背压、取消和 timeout 规则。
+
+[执行资源替换测试](../tests/engine/test_execution_extensions.py) 验证同步/异步第三方执行器、SQLite 输出存储和通知
+注入；[角色与资源池替换测试](../tests/engine/test_role_extensions.py) 验证不继承默认类的角色组合及独立 SlotProvider。
+
 ## Slot 的公开资源接口
 
-适配器从 `bricks.spi` 导入 `SlotLease` 协议，通过已有 `SlotPool` 获取实现，不构造内部 lease、不读取内部锁。
+适配器从 `bricks.spi` 导入 `SlotProvider` 和 `SlotLease` 协议。默认 SlotPool 和第三方资源池经过相同的结构化检查，
+适配器通过协议获取 lease，不构造内部 lease、不读取内部锁。
 
 | 接口 | 契约 |
 | --- | --- |

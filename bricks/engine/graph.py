@@ -53,13 +53,13 @@ class NodeSpec:
 class ExecutionPlan:
     """一张冻结 Graph 的单次执行子图。"""
 
-    _graph: Graph
+    graph: Graph
     entrypoint: str
     nodes: frozenset[str]
     edges: tuple[Edge, ...]
     _outgoing: Mapping[tuple[str, str], tuple[Edge, ...]]
 
-    def _outgoing_for(self, node_id: str, port: str) -> tuple[Edge, ...]:
+    def outgoing_for(self, node_id: str, port: str) -> tuple[Edge, ...]:
         """返回计划内指定 output port 的有序下游连接。"""
 
         return self._outgoing.get((node_id, port), ())
@@ -301,7 +301,7 @@ class Graph:
         self._frozen = True
         return self
 
-    def _spec_for(self, node_id: str) -> NodeSpec:
+    def spec_for(self, node_id: str) -> NodeSpec:
         """返回冻结后的 Node 执行元数据。"""
 
         self._ensure_frozen()
@@ -315,7 +315,7 @@ class Graph:
             {node_id: spec.timeout for node_id, spec in self._node_specs.items()}
         )
 
-    def _outgoing_for(self, node_id: str, port: str) -> tuple[Edge, ...]:
+    def outgoing_for(self, node_id: str, port: str) -> tuple[Edge, ...]:
         """返回指定 output port 的有序下游连接。
 
         参数：

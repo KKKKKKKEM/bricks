@@ -19,6 +19,7 @@ from ..spi import (
     DeliveryResult,
     EventHandler,
     SlotLease,
+    SlotProvider,
     Work,
     WorkHandler,
 )
@@ -122,7 +123,7 @@ class _Consumer:
     handler: WorkHandler
     concurrency: int
     executor: ThreadPoolExecutor
-    slots: SlotPool
+    slots: SlotProvider
     active: int = 0
 
 
@@ -146,7 +147,9 @@ class TaskBackend:
         self._pending: set[Future[DeliveryResult]] = set()
         self._failures: deque[BaseException] = deque()
         self._condition = Condition(RLock())
-        self._slot_subscriptions: dict[int, tuple[SlotPool, Callable[[], None]]] = {}
+        self._slot_subscriptions: dict[
+            int, tuple[SlotProvider, Callable[[], None]]
+        ] = {}
         self._owned_slot_pools: list[SlotPool] = []
         self._next_channel = 0
         self._closed = False
@@ -164,7 +167,7 @@ class TaskBackend:
         handler: WorkHandler,
         *,
         concurrency: int,
-        slots: SlotPool | None = None,
+        slots: SlotProvider | None = None,
     ) -> None:
         queue = require_non_empty_string(queue, "task queue")
         if not callable(handler):
@@ -173,8 +176,8 @@ class TaskBackend:
             raise TypeError("queue concurrency must be an integer")
         if concurrency < 1:
             raise ValueError("queue concurrency must be at least 1")
-        if slots is not None and not isinstance(slots, SlotPool):
-            raise TypeError("slots must be a SlotPool or None")
+        if slots is not None and not isinstance(slots, SlotProvider):
+            raise TypeError("slots must implement SlotProvider or be None")
         with self._condition:
             if self._closed:
                 raise RuntimeError("task backend is closed")
@@ -381,7 +384,7 @@ class TaskBackend:
             consumer for consumer in ordered if consumer.active < consumer.concurrency
         ]
 
-    def _subscribe_slots(self, slots: SlotPool) -> None:
+    def _subscribe_slots(self, slots: SlotProvider) -> None:
         key = id(slots)
         if key in self._slot_subscriptions:
             return

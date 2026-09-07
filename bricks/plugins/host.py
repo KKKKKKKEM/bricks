@@ -396,6 +396,7 @@ class PluginHost:
 CAP_EVENT_BUS = "bricks.runtime/event-bus"
 CAP_TASK_BACKEND = "bricks.runtime/task-backend"
 CAP_GRAPH_EXECUTOR = "bricks.runtime/graph-executor"
+CAP_EXECUTION_FACTORY = "bricks.runtime/execution-factory"
 CAP_EVENT_ROUTER = "bricks.runtime/event-router"
 CAP_GRAPH_WORKER = "bricks.runtime/graph-worker"
 CAP_INPUT_SELECTOR = "bricks.contribution/input-selector"

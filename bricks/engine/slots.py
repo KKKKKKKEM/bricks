@@ -34,6 +34,27 @@ class SlotLease(Protocol):
         """串行占用 Slot 执行 Graph；退出前保留资源，不释放调用方引用。"""
 
 
+@runtime_checkable
+class SlotProvider(Protocol):
+    """Consumer 使用的本地 Slot 池能力，不要求继承默认 SlotPool。"""
+
+    @property
+    def size(self) -> int: ...
+
+    @property
+    def available(self) -> int: ...
+
+    def try_acquire(self) -> SlotLease | None: ...
+
+    def acquire(self, timeout: float | None = None) -> SlotLease: ...
+
+    def subscribe_available(
+        self, listener: Callable[[], None]
+    ) -> Callable[[], None]: ...
+
+    def close(self) -> None: ...
+
+
 class Slot(MutableMapping[str, Any]):
     """保存一条逻辑执行链可复用的状态，与线程和 Worker 无关。"""
 

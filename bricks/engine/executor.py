@@ -65,9 +65,9 @@ class Engine:
         plan: ExecutionPlan | None = None,
         *,
         slot: Slot | None = None,
-        execution: Execution | None = None,
-    ) -> tuple[Output, ...]:
-        """执行一张 Graph 并返回终端 Output。"""
+        execution: Execution,
+    ) -> None:
+        """执行一张 Graph，通过统一 Execution 输出接口交付终端 Output。"""
 
         name = require_non_empty_string(name, "graph name")
         if not isinstance(graph, Graph):
@@ -76,10 +76,8 @@ class Engine:
             raise TypeError("emit must be callable")
         if slot is not None and not isinstance(slot, Slot):
             raise TypeError("slot must be a Slot or None")
-        if execution is None:
-            execution = Execution(name)
-        elif not isinstance(execution, Execution):
-            raise TypeError("execution must be an Execution or None")
+        if not isinstance(execution, Execution):
+            raise TypeError("execution must be an Execution")
         elif execution.graph != name:
             raise ValueError("execution belongs to a different registered Graph")
         if not graph.frozen:
@@ -87,36 +85,13 @@ class Engine:
         if plan is not None:
             if not isinstance(plan, ExecutionPlan):
                 raise TypeError("plan must be an ExecutionPlan")
-            if plan._graph is not graph:
+            if plan.graph is not graph:
                 raise ValueError("execution plan belongs to a different Graph")
-        execution._bind_node_timeouts(graph._execution_timeouts())
-
-        manages_lifecycle = execution.status is ExecutionStatus.PENDING
-        if manages_lifecycle and not execution._start():
-            return execution.result(0)
-        if not manages_lifecycle and execution.status is not ExecutionStatus.RUNNING:
-            raise RuntimeError("execution must be pending or running")
-        try:
-            prepared = self._coerce_inputs(graph, inputs)
-            snapshot = self.hooks.snapshot(name)
-            outputs = self._run(
-                name,
-                graph,
-                prepared,
-                emit,
-                snapshot,
-                plan,
-                slot,
-                execution,
-            )
-            if manages_lifecycle:
-                execution._succeed(outputs)
-                return execution.result(0)
-            return outputs
-        except BaseException as exc:
-            if manages_lifecycle:
-                execution._fail(exc)
-            raise
+        if execution.status is not ExecutionStatus.RUNNING:
+            raise RuntimeError("execution must be running")
+        prepared = self._coerce_inputs(graph, inputs)
+        snapshot = self.hooks.snapshot(name)
+        self._run(name, graph, prepared, emit, snapshot, plan, slot, execution)
 
     def close(self) -> None:
         """关闭 Hook 注册表和后台异步 Runner。"""
@@ -146,11 +121,11 @@ class Engine:
         plan: ExecutionPlan | None,
         slot: Slot | None,
         execution: Execution,
-    ) -> tuple[Output, ...]:
+    ) -> None:
         nodes = graph.nodes
         active_nodes = set(nodes) if plan is None else plan.nodes
         specs = {
-            node_id: graph._spec_for(node_id)
+            node_id: graph.spec_for(node_id)
             for node_id in nodes
             if node_id in active_nodes
         }
@@ -166,11 +141,10 @@ class Engine:
             for node_id in nodes
             if node_id in active_nodes
         }
-        outgoing_for = graph._outgoing_for if plan is None else plan._outgoing_for
+        outgoing_for = graph.outgoing_for if plan is None else plan.outgoing_for
         for port, value in initial_inputs.items():
             queues[graph.entrypoint][port].append(value)
         started: set[str] = set()
-        terminal: list[Output] = []
         ready: deque[str] = deque((graph.entrypoint,))
         scheduled = {graph.entrypoint}
         local_state: dict[tuple[str, str], MutableMapping[str, Any]] = {}
@@ -192,7 +166,7 @@ class Engine:
                 scheduled.add(node_id)
 
         while ready:
-            execution._checkpoint()
+            execution.checkpoint()
             node_id = ready.popleft()
             scheduled.remove(node_id)
             node = nodes[node_id]
@@ -250,9 +224,8 @@ class Engine:
                     signal.outputs, graph_name, None, "StopGraph"
                 )
                 for output in outputs:
-                    terminal.append(output)
-                    execution._publish_output(output)
-                return tuple(terminal)
+                    execution.publish_output(output)
+                return
             except BaseException as exc:
                 node_error = exc
                 raise
@@ -288,8 +261,7 @@ class Engine:
                     )
                 edges = outgoing_for(node_id, output.port)
                 if not edges:
-                    terminal.append(output)
-                    execution._publish_output(output)
+                    execution.publish_output(output)
                     continue
                 for edge in edges:
                     target_type = specs[edge.target].input_ports[edge.target_port]
@@ -320,7 +292,6 @@ class Engine:
             )
         for finalize in tuple(finalizers):
             finalize()
-        return tuple(terminal)
 
     def _call_node(
         self,
@@ -402,11 +373,10 @@ class Engine:
         return self._coerce_outputs(resolved, graph_name, node_id, "Hook")
 
     def _resolve(self, value: object, execution: Execution) -> object:
-        checkpoint, wait_timeout = execution._callbacks()
         return self._runner.resolve(
             value,
-            checkpoint=checkpoint,
-            wait_timeout=wait_timeout,
+            checkpoint=execution.checkpoint,
+            wait_timeout=execution.wait_timeout,
         )
 
     @staticmethod
@@ -498,7 +468,7 @@ class Engine:
 
     @staticmethod
     def _coerce_inputs(graph: Graph, value: Any) -> Mapping[str, Any]:
-        ports = graph._spec_for(graph.entrypoint).input_ports
+        ports = graph.spec_for(graph.entrypoint).input_ports
         names = tuple(ports)
         if not names:
             if value not in (None, {}):

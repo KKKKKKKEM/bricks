@@ -369,7 +369,7 @@ def test_runtime_role_validation_failure_closes_started_plugin_host() -> None:
             self.stopped = True
 
     plugin = InvalidRoles()
-    with pytest.raises(TypeError, match="router must be an EventRouter"):
+    with pytest.raises(TypeError, match="router must implement RouterRole"):
         Runtime(plugins=(plugin,))
 
     assert plugin.stopped

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import inspect
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor, wait
@@ -30,14 +31,17 @@ from ..engine.observation import (
     RuntimeObserver,
 )
 from ..engine.policies import InputSelector, PolicyRegistry
+from ..engine.runner import LocalRunner
 from ..engine.slots import Slot, SlotPool
 from ..spi import (
     Delivery,
     DeliveryResult,
     Emit,
+    ExecutionFactory,
     GraphExecutor,
     HookableGraphExecutor,
     SlotLease,
+    SlotProvider,
     TaskConsumer,
     Work,
 )
@@ -52,6 +56,7 @@ class GraphWorker:
         *,
         consumer: TaskConsumer,
         executor: GraphExecutor | None = None,
+        execution_factory: ExecutionFactory | None = None,
         emit: Emit | None = None,
         emit_local: Callable[[Event, SlotLease], None] | None = None,
         close_injected: bool = False,
@@ -60,6 +65,8 @@ class GraphWorker:
     ) -> None:
         if type(close_injected) is not bool:
             raise TypeError("close_injected must be a boolean")
+        if execution_factory is not None and not callable(execution_factory):
+            raise TypeError("execution_factory must be callable")
         owned: list[object] = []
         if observations is None:
             observations = ObservationHub()
@@ -67,7 +74,13 @@ class GraphWorker:
             executor = Engine(observations=observations)
             owned.append(executor)
         self._consumer = consumer
+        if not isinstance(executor, GraphExecutor):
+            raise TypeError("executor must implement GraphExecutor")
         self._executor = executor
+        self._execution_factory = (
+            Execution if execution_factory is None else execution_factory
+        )
+        self._executor_runner: LocalRunner | None = None
         self._emit = _reject_emit if emit is None else emit
         if not callable(self._emit):
             raise TypeError("worker emitter must be callable")
@@ -79,13 +92,13 @@ class GraphWorker:
         self._observations = observations
         self._policies = PolicyRegistry() if policies is None else policies
         self._graphs: dict[str, Graph] = {}
-        self._queues: dict[str, tuple[int, SlotPool]] = {}
+        self._queues: dict[str, tuple[int, SlotProvider]] = {}
         self._owned_slot_pools: list[SlotPool] = []
         self._lock = RLock()
         self._direct_executor = ThreadPoolExecutor(
             thread_name_prefix="bricks-direct",
         )
-        self._direct_pending: set[Future[tuple[Output, ...]]] = set()
+        self._direct_pending: set[Future[None]] = set()
         self._executions: OrderedDict[str, Execution] = OrderedDict()
         self._pending_hooks: dict[
             str,
@@ -141,7 +154,7 @@ class GraphWorker:
         queue: str,
         *,
         concurrency: int = 1,
-        slots: SlotPool | None = None,
+        slots: SlotProvider | None = None,
     ) -> GraphWorker:
         """消费队列；concurrency 控制本地执行，slots 控制逻辑执行链。"""
 
@@ -151,8 +164,8 @@ class GraphWorker:
             raise TypeError("queue concurrency must be an integer")
         if concurrency < 1:
             raise ValueError("queue concurrency must be at least 1")
-        if slots is not None and not isinstance(slots, SlotPool):
-            raise TypeError("slots must be a SlotPool or None")
+        if slots is not None and not isinstance(slots, SlotProvider):
+            raise TypeError("slots must implement SlotProvider or be None")
         with self._lock:
             configured = self._queues.get(queue)
             if configured is not None:
@@ -245,7 +258,7 @@ class GraphWorker:
                     plan,
                 )
             except BaseException as exc:
-                execution._fail(exc)
+                execution.fail(exc)
                 raise
             self._direct_pending.add(future)
             future.add_done_callback(self._direct_done)
@@ -461,6 +474,8 @@ class GraphWorker:
         )
         failure = _close_components(reversed(components), failure)
         self._direct_executor.shutdown(wait=True)
+        if self._executor_runner is not None:
+            failure = _close_components((self._executor_runner,), failure)
         failure = _close_components(reversed(self._owned_slot_pools), failure)
         if failure is not None:
             raise failure
@@ -509,7 +524,7 @@ class GraphWorker:
         return DeliveryResult.ack()
 
     def _execute_work(self, work: Work, lease: SlotLease | None) -> None:
-        execution = Execution(
+        execution = self._make_execution(
             work.graph,
             limits=work.limits,
             id=work.id,
@@ -529,9 +544,7 @@ class GraphWorker:
                     slot=slot,
                 )
         except BaseException as exc:
-            if execution.status is ExecutionStatus.PENDING:
-                execution._start()
-            execution._fail(exc)
+            execution.fail(exc)
             if isinstance(exc, ExecutionError) and exc.event is None:
                 exc.event = work.trigger
             raise
@@ -549,7 +562,7 @@ class GraphWorker:
     ) -> Execution:
         self._ensure_open()
         self._get_graph(graph)
-        execution = Execution(
+        execution = self._make_execution(
             graph,
             limits=ExecutionLimits(max_steps, timeout),
             output_buffer=output_buffer,
@@ -557,14 +570,40 @@ class GraphWorker:
         self._record_execution(execution)
         return execution
 
+    def _make_execution(
+        self,
+        graph: str,
+        *,
+        limits: ExecutionLimits,
+        id: str | None = None,
+        output_buffer: int = 64,
+    ) -> Execution:
+        execution = self._execution_factory(
+            graph,
+            limits=limits,
+            id=id,
+            output_buffer=output_buffer,
+        )
+        if not isinstance(execution, Execution):
+            raise TypeError("execution_factory must return Execution")
+        if (
+            execution.graph != graph
+            or execution.limits != limits
+            or execution.output_buffer != output_buffer
+            or (id is not None and execution.id != id)
+            or execution.status is not ExecutionStatus.PENDING
+        ):
+            raise ValueError("execution_factory changed the execution contract")
+        return execution
+
     def _execute_direct(
         self,
         execution: Execution,
         inputs: Any,
         plan: ExecutionPlan | None,
-    ) -> tuple[Output, ...]:
+    ) -> None:
         graph = self._get_graph(execution.graph)
-        return self._execute(
+        self._execute(
             execution,
             graph,
             inputs,
@@ -581,10 +620,9 @@ class GraphWorker:
         *,
         plan: ExecutionPlan | None = None,
         slot: Slot | None = None,
-    ) -> tuple[Output, ...]:
-        execution._bind_node_timeouts(graph._execution_timeouts())
-        if not execution._start():
-            return execution.result(0)
+    ) -> None:
+        if not execution.start(graph):
+            return
         self._observations.publish(
             RuntimeEvent(
                 RuntimeEventKind.EXECUTION_STARTED,
@@ -593,7 +631,12 @@ class GraphWorker:
             )
         )
         try:
-            outputs = self._executor.execute(
+            if plan is not None:
+                if not isinstance(plan, ExecutionPlan):
+                    raise TypeError("plan must be an ExecutionPlan")
+                if plan.graph is not graph:
+                    raise ValueError("execution plan belongs to a different Graph")
+            result = self._executor.execute(
                 execution.graph,
                 graph,
                 inputs,
@@ -602,9 +645,21 @@ class GraphWorker:
                 slot=slot,
                 execution=execution,
             )
-            execution._complete_outputs(outputs)
+            if inspect.isawaitable(result):
+                with self._lock:
+                    if self._executor_runner is None:
+                        self._executor_runner = LocalRunner()
+                    runner = self._executor_runner
+                result = runner.resolve(
+                    result,
+                    checkpoint=execution.checkpoint,
+                    wait_timeout=execution.wait_timeout,
+                )
+            if result is not None:
+                raise TypeError("GraphExecutor must publish outputs and return None")
+            execution.succeed()
         except BaseException as exc:
-            execution._fail(exc)
+            execution.fail(exc)
             self._observations.publish(
                 RuntimeEvent(
                     RuntimeEventKind.EXECUTION_FINISHED,
@@ -616,7 +671,6 @@ class GraphWorker:
                 )
             )
             raise
-        execution._succeed(outputs)
         self._observations.publish(
             RuntimeEvent(
                 RuntimeEventKind.EXECUTION_FINISHED,
@@ -626,7 +680,6 @@ class GraphWorker:
                 attributes={"steps": execution.steps},
             )
         )
-        return execution.result(0)
 
     def _record_execution(self, execution: Execution) -> None:
         with self._lock:
@@ -635,7 +688,7 @@ class GraphWorker:
             self._executions[execution.id] = execution
             self._trim_execution_history_locked()
 
-    def _direct_done(self, future: Future[tuple[Output, ...]]) -> None:
+    def _direct_done(self, future: Future[None]) -> None:
         with self._lock:
             self._direct_pending.discard(future)
             self._trim_execution_history_locked()

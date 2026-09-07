@@ -11,7 +11,7 @@
 | 用户门面 | `bricks.runtime`，由 `bricks` 导出 | Runtime | 注册 Graph，代理执行、事件、观察和控制入口 |
 | 装配宿主 | `bricks.plugins`、`bricks.runtime.plugin` | PluginHost、LocalRuntimePlugin | 解析插件依赖，注册 capability，管理统一生命周期 |
 | 运行角色 | `bricks.runtime` | EventRouter、GraphWorker | 分别处理 Event -> Work 与 Work -> Graph execution |
-| 能力端口 | `bricks.spi` | EventBus、TaskPublisher、TaskConsumer、GraphExecutor | 隔离事件传输、任务传输和执行实现 |
+| 能力端口 | `bricks.spi` | RouterRole、WorkerRole、EventBus、任务传输、GraphExecutor、SlotProvider、执行资源协议 | 隔离编排、传输、执行和资源实现 |
 | 默认适配器 | `bricks.adapters.memory`、`bricks.engine.executor` | EventBus、TaskBackend、Engine | 提供单进程内存运行时 |
 
 Runtime 是面向应用的稳定门面，PluginHost 是系统装配根。普通应用不需要看到后四层。
@@ -27,6 +27,7 @@ bricks/
 │   ├── core.py              # Ports、Node、AsyncNode、Output、InputPolicy
 │   ├── graph.py             # Edge、Graph、ExecutionPlan 与冻结校验
 │   ├── execution.py         # Execution 句柄、限制与状态
+│   ├── execution_resources.py # 输出存储与等待通知协议及默认实现
 │   ├── executor.py          # 单张冻结 Graph 的默认执行器 Engine
 │   ├── events.py            # Event 与 Context
 │   ├── slots.py             # Slot 与 SlotPool
@@ -100,7 +101,7 @@ flowchart TB
     Contributions --> Observers[RuntimeObserver contributions]
 ```
 
-`Runtime()` 根据已声明 capability 让 LocalRuntimePlugin 逐项补齐缺失的 EventBus、TaskBackend 和 GraphExecutor，
+`Runtime()` 根据已声明 capability 让 LocalRuntimePlugin 逐项补齐缺失的 EventBus、TaskBackend、GraphExecutor 和 ExecutionFactory，
 再组装 Router 与 Worker。内建实现和应用插件使用相同的依赖解析、capability 注册、启动和停止流程。显式
 `Runtime(router=..., worker=...)` 用于 Router/Worker 独立部署，此模式不创建 PluginHost。
 
@@ -119,6 +120,15 @@ flowchart LR
 
 GraphWorker 管理注册表、Execution 句柄和直接执行线程；GraphExecutor 只负责执行一张已经冻结的 Graph。这个边界
 允许替换执行器，而不把 Graph 注册、队列消费或事件路由混入执行算法。
+
+Runtime 按 `RouterRole`、`WorkerRole` 接受结构化实现，具体的 EventRouter 与 GraphWorker 是默认角色实现。
+ExecutionFactory 为直接执行和队列 Work 创建同一类句柄，可注入 OutputStore 与 ExecutionNotifier。宿主调用公开的
+`execution.start(graph)`、`succeed()` 和 `fail(error)`；执行器调用 `step()`、`checkpoint()` 与输出交付接口，
+不负责切换 execution 的最终状态。
+
+GraphExecutor 同步执行后返回 None，也可以返回 Awaitable[None]。默认 GraphWorker 会等待异步执行及其取消清理
+真正结束，仍占用该次 execution 的消费并发；需要其他调度方式时可替换 WorkerRole。两种执行器都通过统一输出接口
+交付结果，Worker 不再根据最终返回值补发输出或强制读取完整 tuple。
 
 ## 事件执行路径
 

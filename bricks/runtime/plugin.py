@@ -6,12 +6,14 @@ from typing import cast
 
 from ..adapters import memory
 from ..engine.executor import Engine
+from ..engine.execution import Execution
 from ..engine.observation import ObservationHub
 from ..engine.policies import PolicyRegistry
 from ..plugins import (
     CAP_EVENT_BUS,
     CAP_EVENT_ROUTER,
     CAP_GRAPH_EXECUTOR,
+    CAP_EXECUTION_FACTORY,
     CAP_GRAPH_WORKER,
     CAP_INPUT_SELECTOR,
     CAP_NODE_HOOK,
@@ -21,7 +23,7 @@ from ..plugins import (
     PluginContext,
     PluginDescriptor,
 )
-from ..spi import EventBus, GraphExecutor, TaskBackend
+from ..spi import EventBus, ExecutionFactory, GraphExecutor, TaskBackend
 from ._utils import _close_components, _unique
 from .router import EventRouter
 from .worker import GraphWorker
@@ -37,6 +39,7 @@ class LocalRuntimePlugin:
             CAP_EVENT_BUS,
             CAP_TASK_BACKEND,
             CAP_GRAPH_EXECUTOR,
+            CAP_EXECUTION_FACTORY,
             CAP_EVENT_ROUTER,
             CAP_GRAPH_WORKER,
         ),
@@ -48,6 +51,7 @@ class LocalRuntimePlugin:
         events: EventBus | None = None,
         tasks: TaskBackend | None = None,
         executor: GraphExecutor | None = None,
+        execution_factory: ExecutionFactory | None = None,
         close_injected: bool = False,
         _provide_capabilities: frozenset[str] | None = None,
     ) -> None:
@@ -62,6 +66,7 @@ class LocalRuntimePlugin:
             CAP_EVENT_BUS,
             CAP_TASK_BACKEND,
             CAP_GRAPH_EXECUTOR,
+            CAP_EXECUTION_FACTORY,
         }
         provided = (
             infrastructure
@@ -84,6 +89,8 @@ class LocalRuntimePlugin:
             raise TypeError(
                 "executor cannot be injected when graph executor is externally provided"
             )
+        if execution_factory is not None and CAP_EXECUTION_FACTORY not in provided:
+            raise TypeError("execution_factory is externally provided")
         self.descriptor = PluginDescriptor(
             "bricks.core/local-runtime",
             "1.0.0",
@@ -94,6 +101,7 @@ class LocalRuntimePlugin:
                     CAP_EVENT_BUS,
                     CAP_TASK_BACKEND,
                     CAP_GRAPH_EXECUTOR,
+                    CAP_EXECUTION_FACTORY,
                     CAP_EVENT_ROUTER,
                     CAP_GRAPH_WORKER,
                 )
@@ -107,6 +115,7 @@ class LocalRuntimePlugin:
         self._worker_observations = ObservationHub()
         self._policies = PolicyRegistry()
         self._executor = executor
+        self._execution_factory = execution_factory
         self._provided = frozenset(provided)
         self._owned = (
             CAP_EVENT_BUS in provided and events is None,
@@ -124,6 +133,8 @@ class LocalRuntimePlugin:
             self._tasks = memory.TaskBackend()
         if CAP_GRAPH_EXECUTOR in self._provided and self._executor is None:
             self._executor = Engine(observations=self._worker_observations)
+        if CAP_EXECUTION_FACTORY in self._provided and self._execution_factory is None:
+            self._execution_factory = Execution
         events = (
             self._events
             if CAP_EVENT_BUS in self._provided
@@ -145,6 +156,13 @@ class LocalRuntimePlugin:
             if CAP_GRAPH_EXECUTOR in self._provided
             else context.require(CAP_GRAPH_EXECUTOR)
         )
+        execution_factory = (
+            self._execution_factory
+            if CAP_EXECUTION_FACTORY in self._provided
+            else context.require(CAP_EXECUTION_FACTORY)
+        )
+        if not callable(execution_factory):
+            raise TypeError("execution factory capability must be callable")
         self.router = EventRouter(
             events=events,
             publisher=tasks,
@@ -153,6 +171,7 @@ class LocalRuntimePlugin:
         self.worker = GraphWorker(
             consumer=tasks,
             executor=executor,
+            execution_factory=execution_factory,
             emit=self.router.publish,
             emit_local=self.router.publish_local,
             observations=self._worker_observations,
@@ -164,6 +183,8 @@ class LocalRuntimePlugin:
             context.provide(CAP_TASK_BACKEND, tasks)
         if CAP_GRAPH_EXECUTOR in self._provided:
             context.provide(CAP_GRAPH_EXECUTOR, executor)
+        if CAP_EXECUTION_FACTORY in self._provided:
+            context.provide(CAP_EXECUTION_FACTORY, execution_factory)
         context.provide(CAP_EVENT_ROUTER, self.router)
         context.provide(CAP_GRAPH_WORKER, self.worker)
 

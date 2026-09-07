@@ -11,8 +11,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from threading import Condition, RLock
-from typing import TYPE_CHECKING
+from threading import RLock
 from uuid import uuid4
 
 from .core import Output, _validate_timeout, require_non_empty_string
@@ -22,9 +21,13 @@ from .errors import (
     NodeTimeoutError,
     StepLimitExceededError,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
+from .execution_resources import (
+    ExecutionNotifier,
+    LocalExecutionNotifier,
+    MemoryOutputStore,
+    OutputStore,
+)
+from .graph import Graph
 
 
 def _validate_duration(value: float | None, label: str) -> None:
@@ -108,14 +111,11 @@ class _AsyncOutputIterator(AsyncIterator[Output]):
         if self._closed:
             raise StopAsyncIteration
         try:
-            while True:
-                output, pending = self._execution._poll_output(self._stream_id)
-                if output is not None:
-                    return output
-                if not pending:
-                    self.close()
-                    raise StopAsyncIteration
-                await asyncio.sleep(0.01)
+            output = await self._execution._next_output_async(self._stream_id)
+            if output is None:
+                self.close()
+                raise StopAsyncIteration
+            return output
         except BaseException:
             self.close()
             raise
@@ -142,6 +142,8 @@ class Execution:
         limits: ExecutionLimits | None = None,
         id: str | None = None,
         output_buffer: int = 64,
+        output_store: OutputStore | None = None,
+        notifier: ExecutionNotifier | None = None,
     ) -> None:
         self.id = require_non_empty_string(
             str(uuid4()) if id is None else id,
@@ -158,7 +160,13 @@ class Execution:
         self.output_buffer = output_buffer
         self.created_at = datetime.now(timezone.utc)
 
-        self._condition = Condition(RLock())
+        self._condition = RLock()
+        self._store = MemoryOutputStore() if output_store is None else output_store
+        self._notifier = LocalExecutionNotifier() if notifier is None else notifier
+        if not isinstance(self._store, OutputStore) or len(self._store):
+            raise TypeError("output_store must be an empty OutputStore")
+        if not isinstance(self._notifier, ExecutionNotifier):
+            raise TypeError("notifier must implement ExecutionNotifier")
         self._status = ExecutionStatus.PENDING
         self._started_at: datetime | None = None
         self._finished_at: datetime | None = None
@@ -168,10 +176,8 @@ class Execution:
         self._node_timeouts: dict[str, float | None] | None = None
         self._current_node: str | None = None
         self._steps = 0
-        self._outputs: tuple[Output, ...] | None = None
         self._error: BaseException | None = None
         self._cancel_requested = False
-        self._published_outputs: list[Output] = []
         self._stream_counter = itertools.count()
         self._stream_cursors: dict[int, int] = {}
 
@@ -203,7 +209,9 @@ class Execution:
     @property
     def outputs(self) -> tuple[Output, ...] | None:
         with self._condition:
-            return self._outputs
+            if self._status is not ExecutionStatus.SUCCEEDED:
+                return None
+            return tuple(self._store[index] for index in range(len(self._store)))
 
     @property
     def error(self) -> BaseException | None:
@@ -232,7 +240,7 @@ class Execution:
                     graph=self.graph,
                 )
                 self._finish_locked(ExecutionStatus.CANCELLED, error=error)
-            self._condition.notify_all()
+            self._notifier.notify()
             return True
 
     def wait(self, timeout: float | None = None) -> bool:
@@ -240,13 +248,15 @@ class Execution:
 
         _validate_timeout(timeout)
         deadline = None if timeout is None else time.monotonic() + timeout
-        with self._condition:
-            while not self._status.terminal:
+        while True:
+            with self._condition:
+                if self._status.terminal:
+                    return True
+                version = self._notifier.version
                 remaining = None if deadline is None else deadline - time.monotonic()
                 if remaining is not None and remaining <= 0:
                     return False
-                self._condition.wait(remaining)
-            return True
+            self._notifier.wait(version, remaining)
 
     def result(self, timeout: float | None = None) -> tuple[Output, ...]:
         """等待并返回终端 Output，失败时重新抛出原始执行异常。"""
@@ -256,8 +266,9 @@ class Execution:
         with self._condition:
             if self._error is not None:
                 raise self._error
-            assert self._outputs is not None
-            return self._outputs
+            outputs = self.outputs
+            assert outputs is not None
+            return outputs
 
     def __await__(self):
         """异步等待最终结果；取消等待方会协作式取消 execution。"""
@@ -270,7 +281,7 @@ class Execution:
         stream_id = next(self._stream_counter)
         with self._condition:
             self._stream_cursors[stream_id] = 0
-            self._condition.notify_all()
+            self._notifier.notify()
         return _OutputIterator(self, stream_id)
 
     def __aiter__(self) -> AsyncIterator[Output]:
@@ -279,7 +290,7 @@ class Execution:
         stream_id = next(self._stream_counter)
         with self._condition:
             self._stream_cursors[stream_id] = 0
-            self._condition.notify_all()
+            self._notifier.notify()
         return _AsyncOutputIterator(self, stream_id)
 
     def checkpoint(self) -> None:
@@ -309,7 +320,12 @@ class Execution:
         finally:
             self._end_step()
 
-    def _start(self) -> bool:
+    def start(self, graph: Graph) -> bool:
+        """执行宿主绑定冻结 Graph 并开始计时；已取消时返回 False。"""
+
+        if not isinstance(graph, Graph) or not graph.frozen:
+            raise TypeError("execution requires a frozen Graph")
+        self._bind_node_timeouts(graph._execution_timeouts())
         with self._condition:
             if self._status is ExecutionStatus.CANCELLED:
                 return False
@@ -319,7 +335,7 @@ class Execution:
             self._status = ExecutionStatus.RUNNING
             self._started_at = now
             self._started_monotonic = time.monotonic()
-            self._condition.notify_all()
+            self._notifier.notify()
             return True
 
     def _bind_node_timeouts(
@@ -409,7 +425,7 @@ class Execution:
             if expired:
                 raise min(expired, key=lambda item: item[0])[1]
 
-    def _wait_timeout(self) -> float | None:
+    def wait_timeout(self) -> float | None:
         """返回当前异步等待预算；调用前也会解释取消和过期原因。"""
 
         self._checkpoint()
@@ -427,20 +443,21 @@ class Execution:
                 )
             return None if not remaining else max(0.0, min(remaining))
 
-    def _succeed(self, outputs: tuple[Output, ...]) -> None:
+    def succeed(self) -> None:
+        """执行宿主在执行器完成后结束执行；结果来自已交付输出。"""
+
         with self._condition:
             if self._status.terminal:
                 return
-            if self._cancel_requested:
-                error = ExecutionCancelledError(
-                    f"execution {self.id!r} was cancelled",
-                    graph=self.graph,
-                )
-                self._finish_locked(ExecutionStatus.CANCELLED, error=error)
-                return
-            self._finish_locked(ExecutionStatus.SUCCEEDED, outputs=outputs)
+            self.checkpoint()
+            if self._status is not ExecutionStatus.RUNNING:
+                raise RuntimeError("execution must be running before success")
+            self._finish_locked(ExecutionStatus.SUCCEEDED)
 
-    def _fail(self, error: BaseException) -> None:
+    def fail(self, error: BaseException) -> None:
+        """执行宿主记录失败；已发布输出仍可由流消费者读取。"""
+        if not isinstance(error, BaseException):
+            raise TypeError("execution failure must be a BaseException")
         with self._condition:
             if self._status.terminal:
                 return
@@ -458,79 +475,102 @@ class Execution:
         self,
         status: ExecutionStatus,
         *,
-        outputs: tuple[Output, ...] | None = None,
         error: BaseException | None = None,
     ) -> None:
         self._status = status
-        self._outputs = outputs
         self._error = error
         self._current_node = None
         self._node_started_monotonic = None
         self._step_timeout = None
         self._finished_at = datetime.now(timezone.utc)
-        self._condition.notify_all()
+        self._notifier.notify()
 
-    def _publish_output(self, output: Output) -> None:
-        """发布 terminal Output；活跃消费者落后时施加有界背压。"""
-
+    def _try_publish(self, output: Output) -> bool:
         if not isinstance(output, Output):
             raise TypeError("execution can publish only Output")
         with self._condition:
-            while self._stream_cursors and any(
-                len(self._published_outputs) - cursor >= self.output_buffer
+            self.checkpoint()
+            if self._status is not ExecutionStatus.RUNNING:
+                raise RuntimeError("output publication requires RUNNING status")
+            if any(
+                len(self._store) - cursor >= self.output_buffer
                 for cursor in self._stream_cursors.values()
             ):
-                self._checkpoint()
-                self._condition.wait(0.05)
-            self._published_outputs.append(output)
-            self._condition.notify_all()
+                return False
+            self._store.append(output)
+            self._notifier.notify()
+            return True
 
-    def _complete_outputs(self, outputs: tuple[Output, ...]) -> None:
-        """为不支持增量 sink 的 GraphExecutor 补发尚未发布的最终结果。"""
+    def publish_output(self, output: Output) -> None:
+        """同步交付 terminal Output；应用取消、超时和流消费者背压。"""
 
-        with self._condition:
-            published = len(self._published_outputs)
-        for output in outputs[published:]:
-            self._publish_output(output)
+        while True:
+            with self._condition:
+                version = self._notifier.version
+                if self._try_publish(output):
+                    return
+                timeout = self.wait_timeout()
+            self._notifier.wait(version, timeout)
+
+    async def apublish_output(self, output: Output) -> None:
+        """异步交付 terminal Output，等待背压时不阻塞事件循环。"""
+
+        while True:
+            with self._condition:
+                version = self._notifier.version
+                if self._try_publish(output):
+                    return
+                timeout = self.wait_timeout()
+            try:
+                await asyncio.wait_for(self._notifier.wait_async(version), timeout)
+            except asyncio.TimeoutError:
+                self.checkpoint()
 
     async def _await_result(self) -> tuple[Output, ...]:
         try:
-            return await asyncio.to_thread(self.result)
+            while True:
+                with self._condition:
+                    version = self._notifier.version
+                    if self._status.terminal:
+                        return self.result(0)
+                await self._notifier.wait_async(version)
         except asyncio.CancelledError:
             self.cancel()
             raise
 
     def _next_output(self, stream_id: int) -> Output | None:
-        with self._condition:
-            while True:
-                cursor = self._stream_cursors[stream_id]
-                if cursor < len(self._published_outputs):
-                    output = self._published_outputs[cursor]
-                    self._stream_cursors[stream_id] = cursor + 1
-                    self._condition.notify_all()
+        while True:
+            with self._condition:
+                version = self._notifier.version
+                output, pending = self._poll_output(stream_id)
+                if output is not None or not pending:
                     return output
-                if self.done:
-                    self.result(0)
-                    return None
-                self._condition.wait()
+            self._notifier.wait(version)
+
+    async def _next_output_async(self, stream_id: int) -> Output | None:
+        while True:
+            with self._condition:
+                version = self._notifier.version
+                output, pending = self._poll_output(stream_id)
+                if output is not None or not pending:
+                    return output
+            await self._notifier.wait_async(version)
 
     def _poll_output(self, stream_id: int) -> tuple[Output | None, bool]:
         with self._condition:
             cursor = self._stream_cursors[stream_id]
-            if cursor < len(self._published_outputs):
-                output = self._published_outputs[cursor]
+            if cursor < len(self._store):
+                output = self._store[cursor]
                 self._stream_cursors[stream_id] = cursor + 1
-                self._condition.notify_all()
+                self._notifier.notify()
                 return output, True
             if self.done:
-                self.result(0)
+                if self._error is not None:
+                    raise self._error
                 return None, False
             return None, True
 
     def _detach_stream(self, stream_id: int) -> None:
         with self._condition:
             self._stream_cursors.pop(stream_id, None)
-            self._condition.notify_all()
-
-    def _callbacks(self) -> tuple[Callable[[], None], Callable[[], float | None]]:
-        return self.checkpoint, self._wait_timeout
+            self._notifier.notify()

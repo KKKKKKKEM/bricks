@@ -19,21 +19,19 @@ from ..engine.observation import (
     RuntimeObserver,
 )
 from ..engine.policies import InputSelector
-from ..engine.slots import SlotPool
 from ..plugins import (
     CAP_EVENT_BUS,
     CAP_EVENT_ROUTER,
     CAP_GRAPH_EXECUTOR,
+    CAP_EXECUTION_FACTORY,
     CAP_GRAPH_WORKER,
     CAP_TASK_BACKEND,
     Plugin,
     PluginHost,
 )
-from ..spi import EventHandler
+from ..spi import EventHandler, RouterRole, SlotProvider, WorkerRole
 from ._utils import _close_components, _remaining
 from .plugin import LocalRuntimePlugin
-from .router import EventRouter
-from .worker import GraphWorker
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,8 +42,8 @@ class Runtime:
     def __init__(
         self,
         *,
-        router: EventRouter | None = None,
-        worker: GraphWorker | None = None,
+        router: RouterRole | None = None,
+        worker: WorkerRole | None = None,
         plugins: Iterable[Plugin] | None = None,
     ) -> None:
         if plugins is not None and (router is not None or worker is not None):
@@ -68,6 +66,7 @@ class Runtime:
                     CAP_EVENT_BUS,
                     CAP_TASK_BACKEND,
                     CAP_GRAPH_EXECUTOR,
+                    CAP_EXECUTION_FACTORY,
                 }
                 selected = (
                     LocalRuntimePlugin(
@@ -80,10 +79,10 @@ class Runtime:
                 host.start()
                 router = host.require(CAP_EVENT_ROUTER)
                 worker = host.require(CAP_GRAPH_WORKER)
-                if not isinstance(router, EventRouter):
-                    raise TypeError("router must be an EventRouter")
-                if not isinstance(worker, GraphWorker):
-                    raise TypeError("worker must be a GraphWorker")
+                if not isinstance(router, RouterRole):
+                    raise TypeError("router must implement RouterRole")
+                if not isinstance(worker, WorkerRole):
+                    raise TypeError("worker must implement WorkerRole")
             except BaseException:
                 try:
                     host.close()
@@ -91,10 +90,10 @@ class Runtime:
                     _LOGGER.exception("failed to roll back Runtime plugin host")
                 raise
         else:
-            if not isinstance(router, EventRouter):
-                raise TypeError("router must be an EventRouter")
-            if not isinstance(worker, GraphWorker):
-                raise TypeError("worker must be a GraphWorker")
+            if not isinstance(router, RouterRole):
+                raise TypeError("router must implement RouterRole")
+            if not isinstance(worker, WorkerRole):
+                raise TypeError("worker must implement WorkerRole")
         self.router = router
         self.worker = worker
         self._plugin_host = host
@@ -140,7 +139,7 @@ class Runtime:
         queue: str,
         *,
         concurrency: int = 1,
-        slots: SlotPool | None = None,
+        slots: SlotProvider | None = None,
     ) -> Runtime:
         self.worker.consume(queue, concurrency=concurrency, slots=slots)
         return self
@@ -158,14 +157,14 @@ class Runtime:
         timeout: float | None = None,
         output_buffer: int = 64,
     ) -> tuple[Output, ...]:
-        return self.worker.run(
+        return self.worker.start(
             graph,
             inputs,
             plan=plan,
             max_steps=max_steps,
             timeout=timeout,
             output_buffer=output_buffer,
-        )
+        ).result()
 
     def iter(
         self,
@@ -234,7 +233,7 @@ class Runtime:
         timeout: float | None = None,
         output_buffer: int = 64,
     ) -> tuple[Output, ...]:
-        return await self.worker.arun(
+        return await self.worker.start(
             graph,
             inputs,
             plan=plan,
@@ -280,7 +279,7 @@ class Runtime:
         graph: str,
         queue: str,
         concurrency: int = 1,
-        slots: SlotPool | None = None,
+        slots: SlotProvider | None = None,
         subscription: str | None = None,
         max_steps: int = 0,
         timeout: float | None = None,

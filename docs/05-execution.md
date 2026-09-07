@@ -52,6 +52,13 @@ Execution 保留完整 terminal Output，因此迭代可以重放，`result()` �
 Output 后失败，已发布 Output 不撤回，迭代器在读完它们后抛出执行异常。停止迭代不会隐式取消 Graph，需要调用
 `execution.cancel()` 显式取消。
 
+保留完整输出是逻辑契约，存放位置可以替换。默认 OutputStore 使用内存，也可以由 ExecutionFactory 为每次执行
+创建磁盘或其他追加式存储。`wait()`、执行结束和流消费结束不会自动读取全量输出；`result()`、`await execution`
+或成功后的 `outputs` 属性会按需读取完整 tuple，因此这些调用仍需要容纳全量结果的内存。
+
+默认异步等待通过 ExecutionNotifier 接收版本化通知，不使用轮询或阻塞线程等待结果。同步和异步等待共享相同
+状态、取消和输出可见性；替换通知实现必须保证跨线程唤醒以及“通知先发生、等待后注册”时不会丢失通知。
+
 ## 执行控制
 
 `run()`、`arun()`、`start()`、`iter()` 和 `aiter()` 接受相同的整图控制参数：

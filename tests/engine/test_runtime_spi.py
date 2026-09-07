@@ -11,7 +11,7 @@ from uuid import UUID
 
 import pytest
 
-from bricks import Event, Graph, InputPolicy, Node, Output, Ports, Runtime
+from bricks import Event, Graph, InputPolicy, Node, Ports, Runtime
 from bricks.adapters import memory
 from bricks.engine.hooks import HookRegistry
 from bricks.engine.slots import SlotPool
@@ -137,14 +137,12 @@ class RecordingExecutor:
         plan=None,
         *,
         slot=None,
-        execution=None,
-    ) -> tuple[Output, ...]:
+        execution,
+    ) -> None:
         del emit, plan, slot
-        if execution is not None:
-            with execution.step(graph.entrypoint):
-                pass
+        with execution.step(graph.entrypoint):
+            pass
         self.calls.append((name, inputs))
-        return ()
 
     def close(self) -> None:
         self.closed = True

@@ -64,6 +64,8 @@ flowchart LR
 - Execution 的状态、步数、超时、取消和错误语义。
 
 如果插件可以改写这些规则，同一张 Graph 在不同环境中就可能具有不同含义，静态校验也会失去价值。
+稳定的是公共契约，不是默认实现。满足相同契约的执行器、Router、Worker、Slot 池、输出存储和通知机制都可以
+通过公开协议替换；应用仍使用同一套 Graph、Event 和 Execution 模型。
 
 ## 可插拔能力：哪些东西允许变化
 
@@ -71,6 +73,8 @@ flowchart LR
 
 - EventBus 与任务传输；
 - GraphExecutor；
+- RouterRole、WorkerRole 和 SlotProvider；
+- ExecutionFactory、OutputStore 和 ExecutionNotifier；
 - InputSelector；
 - Node Hook；
 - Runtime Observer；
@@ -88,7 +92,7 @@ flowchart TB
     App --> Kernel
     Contributions -->|只能通过 capability| Kernel
 
-    subgraph Fixed[不可替换]
+    subgraph Fixed[稳定契约]
         Kernel --> Types[Ports / Edge 类型]
         Kernel --> Freeze[Graph freeze]
         Kernel --> Exec[Execution 状态机]

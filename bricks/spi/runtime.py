@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import enum
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
 
-from ..engine.core import Output, require_non_empty_string
+from ..engine.core import require_non_empty_string
 from ..engine.events import Event
 from ..engine.execution import Execution, ExecutionLimits
 from ..engine.graph import ExecutionPlan, Graph
 from ..engine.hooks import HookHandle, HookPhase, NodeHook
-from ..engine.slots import Slot, SlotLease, SlotPool
+from ..engine.slots import Slot, SlotLease, SlotProvider
 
 EventHandler = Callable[[Event], None]
 
@@ -146,7 +146,7 @@ class TaskConsumer(Protocol):
         handler: WorkHandler,
         *,
         concurrency: int,
-        slots: SlotPool | None = None,
+        slots: SlotProvider | None = None,
     ) -> None:
         """绑定通道，并为不携带 Slot 的根 Work 分配执行槽。"""
 
@@ -164,6 +164,7 @@ class TaskBackend(TaskPublisher, TaskConsumer, Protocol):
 Emit = Callable[[Event], None]
 
 
+@runtime_checkable
 class GraphExecutor(Protocol):
     """执行单张 Graph 的替换协议。"""
 
@@ -176,9 +177,9 @@ class GraphExecutor(Protocol):
         plan: ExecutionPlan | None = None,
         *,
         slot: Slot | None = None,
-        execution: Execution | None = None,
-    ) -> tuple[Output, ...]:
-        """执行 Graph 并返回终端 Output。"""
+        execution: Execution,
+    ) -> None | Awaitable[None]:
+        """执行冻结 Graph，通过 execution.publish_output/apublish_output 交付结果。"""
 
     def close(self) -> None:
         """关闭执行器持有的资源。"""
@@ -197,3 +198,15 @@ class HookableGraphExecutor(GraphExecutor, Protocol):
         node: str | None = None,
     ) -> HookHandle:
         """挂载 Hook，并返回可用于卸载的句柄。"""
+
+
+class ExecutionFactory(Protocol):
+    def __call__(
+        self,
+        graph: str,
+        *,
+        limits: ExecutionLimits,
+        id: str | None = None,
+        output_buffer: int = 64,
+    ) -> Execution:
+        """创建全新的 Execution，可为其注入独立存储和通知实现。"""
