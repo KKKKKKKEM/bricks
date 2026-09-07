@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, MutableMapping
+from typing import Any
+
 from bricks import Context
 
 
 def test_context_state_is_shared_by_scope_and_namespace() -> None:
-    local = {}
+    local: dict[tuple[str, str], MutableMapping[str, Any]] = {}
     first = Context(lambda event: None, local=local, scope="first")
     same = Context(lambda event: None, local=local, scope="first")
     other = Context(lambda event: None, local=local, scope="other")
@@ -27,7 +30,7 @@ def test_context_state_does_not_cross_execution_storage() -> None:
 
 
 def test_context_scope_and_namespace_cannot_collide_on_separators() -> None:
-    local = {}
+    local: dict[tuple[str, str], MutableMapping[str, Any]] = {}
     first = Context(lambda event: None, local=local, scope="a:b")
     other = Context(lambda event: None, local=local, scope="a")
     unscoped = Context(lambda event: None, local=local)
@@ -40,7 +43,7 @@ def test_context_scope_and_namespace_cannot_collide_on_separators() -> None:
 
 def test_context_registers_quiescence_callbacks_in_order() -> None:
     callbacks = []
-    finalizers = []
+    finalizers: list[Callable[[], None]] = []
     context = Context(lambda event: None, finalizers=finalizers)
     context.on_quiescence(lambda: callbacks.append("first"))
     context.on_quiescence(lambda: callbacks.append("second"))

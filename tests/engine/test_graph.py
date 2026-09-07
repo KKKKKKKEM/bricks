@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Any, cast
 
 import pytest
 
@@ -111,7 +112,7 @@ def test_graph_keyword_add_is_atomic() -> None:
     graph = Graph(entrypoint="source")
 
     with pytest.raises(TypeError, match="sink.*Node"):
-        graph.add(source=Source(), sink=object())  # type: ignore[arg-type]
+        graph.add(source=Source(), sink=cast(Any, object()))
 
     assert graph.nodes == {}
 
@@ -120,7 +121,7 @@ def test_graph_add_rejects_mixed_forms() -> None:
     """单 Node 位置参数与关键字批量形式不能混用。"""
 
     with pytest.raises(TypeError, match="either"):
-        Graph().add("source", Source(), sink=Sink())
+        cast(Any, Graph().add)("source", Source(), sink=Sink())
 
 
 def test_graph_accepts_cycle() -> None:

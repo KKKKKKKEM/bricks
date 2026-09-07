@@ -30,6 +30,7 @@ from bricks.engine.errors import (
     StepLimitExceededError,
 )
 from bricks.engine.hooks import NodeHook
+from bricks.runtime import GraphWorker
 
 
 @pytest.mark.parametrize("control", ["cancel", "timeout"])
@@ -325,7 +326,9 @@ def test_unconsumed_stream_can_be_closed_without_blocking_execution() -> None:
     runtime = Runtime()
     runtime.register("many.graph", Graph(entrypoint="many").add(many=Many()))
     stream = runtime.iter("many.graph", 3, output_buffer=1)
-    stream.close()
+    close = getattr(stream, "close")
+    assert callable(close)
+    close()
     runtime.wait_idle(1)
     runtime.close()
 
@@ -669,6 +672,7 @@ def test_completed_execution_burst_is_trimmed_to_history_limit() -> None:
             release.wait()
 
     with Runtime() as runtime:
+        assert isinstance(runtime.worker, GraphWorker)
         runtime.worker._history_limit = 2
         runtime.register("block.graph", Graph(entrypoint="block").add(block=Block()))
         executions = [runtime.start("block.graph", value) for value in range(3)]

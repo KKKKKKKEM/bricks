@@ -3,6 +3,8 @@
 import asyncio
 import pickle
 import sqlite3
+from collections.abc import Awaitable
+from typing import Any, cast
 from threading import Event as ThreadEvent
 
 import pytest
@@ -29,7 +31,9 @@ class SyncExecutor:
         self.gate = gate
         self.closed = False
 
-    def execute(self, name, graph, inputs, emit, plan=None, *, slot=None, execution):
+    def execute(
+        self, name, graph, inputs, emit, plan=None, *, slot=None, execution
+    ) -> Awaitable[None] | None:
         assert graph.frozen and len(graph.nodes) == 1
         assert graph.spec_for(graph.entrypoint).input_ports["default"] is object
         assert graph.outgoing_for(graph.entrypoint, "default") == ()
@@ -47,6 +51,7 @@ class SyncExecutor:
                     execution.checkpoint()
             if self.fail:
                 raise ValueError("executor failed after output")
+        return None
 
     def close(self):
         self.closed = True
@@ -220,7 +225,7 @@ class Notifier:
 
 
 def test_plugin_execution_factory_replaces_storage_for_direct_and_queued_work(tmp_path):
-    stores = []
+    stores: list[DiskStore] = []
 
     def factory(name, *, limits, id=None, output_buffer=64):
         store = DiskStore(tmp_path / f"{len(stores)}.sqlite")
@@ -280,7 +285,7 @@ def test_notifier_wakes_async_result_and_stream_without_waiting_threads(monkeypa
             return await execution
 
         result = asyncio.create_task(result_waiter())
-        first = asyncio.create_task(stream.__anext__())
+        first = asyncio.ensure_future(stream.__anext__())
         await asyncio.sleep(0)
         await execution.apublish_output(Output(1))
         assert await first == Output(1)
@@ -309,7 +314,7 @@ def test_public_execution_control_rejects_invalid_lifecycle_and_outputs():
         execution.start(graph())
     execution.start(graph().freeze())
     with pytest.raises(TypeError, match="only Output"):
-        execution.publish_output(1)
+        execution.publish_output(cast(Any, 1))  # 验证运行时拒绝非 Output 值。
     execution.publish_output(Output(2))
     execution.succeed()
     with pytest.raises(RuntimeError, match="RUNNING"):
@@ -318,8 +323,8 @@ def test_public_execution_control_rejects_invalid_lifecycle_and_outputs():
 
 
 def test_execution_factory_cannot_silently_change_limits():
-    def broken(name, **kwargs):
-        return Execution(name, limits=ExecutionLimits(max_steps=999))
+    def broken(graph, **kwargs):
+        return Execution(graph, limits=ExecutionLimits(max_steps=999))
 
     with Runtime(plugins=(LocalRuntimePlugin(execution_factory=broken),)) as runtime:
         runtime.register("work", graph())
@@ -333,7 +338,9 @@ def test_executor_cannot_return_a_second_result_channel():
             self, name, graph, inputs, emit, plan=None, *, slot=None, execution
         ):
             execution.publish_output(Output("accepted"))
-            return (Output("not accepted"),)
+            return cast(
+                Any, (Output("not accepted"),)
+            )  # 验证执行器拒绝第二条结果通道。
 
     with Runtime(plugins=(LocalRuntimePlugin(executor=Invalid()),)) as runtime:
         runtime.register("work", graph())
@@ -371,8 +378,8 @@ def test_output_store_failure_preserves_previously_accepted_outputs():
                 raise OSError("storage unavailable")
             self.items.append(output)
 
-    def factory(name, **kwargs):
-        return Execution(name, **kwargs, output_store=FailingStore())
+    def factory(graph, **kwargs):
+        return Execution(graph, **kwargs, output_store=FailingStore())
 
     with Runtime(plugins=(LocalRuntimePlugin(execution_factory=factory),)) as runtime:
         runtime.register("work", graph())

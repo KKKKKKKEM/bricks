@@ -7,6 +7,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from threading import Event as ThreadEvent
 from threading import Thread
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -23,6 +24,7 @@ from bricks.spi import (
     EventHandler,
     Work,
     WorkHandler,
+    SlotProvider,
 )
 
 
@@ -91,7 +93,7 @@ class RecordingTasks:
         handler: WorkHandler,
         *,
         concurrency: int,
-        slots: SlotPool | None = None,
+        slots: SlotProvider | None = None,
     ) -> None:
         if slots is None:
             slots = SlotPool(concurrency)
@@ -420,7 +422,7 @@ def test_task_backend_drains_all_failures_after_idle() -> None:
 
 def test_task_backend_requires_explicit_delivery_result() -> None:
     backend = memory.TaskBackend()
-    backend.bind("invalid", lambda delivery: None, concurrency=1)  # type: ignore[arg-type]
+    backend.bind("invalid", cast(Any, lambda delivery: None), concurrency=1)
     backend.submit("invalid", Work("graph"))
 
     with pytest.raises(TypeError, match="must return DeliveryResult"):

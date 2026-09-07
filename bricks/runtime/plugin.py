@@ -5,15 +5,15 @@ from __future__ import annotations
 from typing import cast
 
 from ..adapters import memory
-from ..engine.executor import Engine
 from ..engine.execution import Execution
+from ..engine.executor import Engine
 from ..engine.observation import ObservationHub
 from ..engine.policies import PolicyRegistry
 from ..plugins import (
     CAP_EVENT_BUS,
     CAP_EVENT_ROUTER,
-    CAP_GRAPH_EXECUTOR,
     CAP_EXECUTION_FACTORY,
+    CAP_GRAPH_EXECUTOR,
     CAP_GRAPH_WORKER,
     CAP_INPUT_SELECTOR,
     CAP_NODE_HOOK,
@@ -171,7 +171,7 @@ class LocalRuntimePlugin:
         self.worker = GraphWorker(
             consumer=tasks,
             executor=executor,
-            execution_factory=execution_factory,
+            execution_factory=cast(ExecutionFactory, execution_factory),
             emit=self.router.publish,
             emit_local=self.router.publish_local,
             observations=self._worker_observations,

@@ -94,8 +94,9 @@ def test_contributed_policy_is_bound_when_graph_freezes() -> None:
 
 def test_missing_contributed_policy_fails_at_registration() -> None:
     graph = Graph(entrypoint="join").add(join=ContributedNode())
-    with Runtime() as runtime, pytest.raises(
-        GraphValidationError, match="not registered"
+    with (
+        Runtime() as runtime,
+        pytest.raises(GraphValidationError, match="not registered"),
     ):
         runtime.register("missing.graph", graph)
 

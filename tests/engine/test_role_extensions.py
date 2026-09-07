@@ -9,6 +9,7 @@ import pytest
 
 from bricks import Graph, Node, Output, Runtime, Slot, SlotPool
 from bricks.adapters import memory
+from bricks.engine.observation import RuntimeEvent
 from bricks.plugins import CAP_EVENT_ROUTER, CAP_GRAPH_WORKER, PluginDescriptor
 from bricks.runtime import EventRouter, GraphWorker
 from bricks.spi import RouterRole, SlotProvider, WorkerRole
@@ -137,9 +138,9 @@ def test_roles_can_be_independently_decorated_and_composed_without_inheritance(
         if plugin
         else Runtime(router=selected_router, worker=selected_worker)
     )
-    observations = []
+    observations: list[RuntimeEvent] = []
     try:
-        runtime.observe_runtime(observations.append)
+        runtime.observe_runtime(lambda event: observations.append(event))
         runtime.register("echo", Graph(entrypoint="node").add(node=Echo()))
         assert runtime.run("echo", 1) == (Output(1),)
         assert tuple(runtime.iter("echo", 2)) == (Output(2),)
@@ -152,8 +153,10 @@ def test_roles_can_be_independently_decorated_and_composed_without_inheritance(
         runtime.close()
         tasks.close()
     if wrapped in ("router", "both"):
+        assert isinstance(selected_router, RouterWrapper)
         assert selected_router.closed
     if wrapped in ("worker", "both"):
+        assert isinstance(selected_worker, WorkerWrapper)
         assert selected_worker.closed
 
 
@@ -250,12 +253,14 @@ def test_non_default_slot_provider_and_lease_preserve_cross_graph_resources():
 
     class Source(Node):
         def execute(self, inputs, context):
+            assert context.slot is not None
             context.slot["value"] = inputs["default"]
             seen.append(context.slot)
             context.emit("next")
 
     class Target(Node):
         def execute(self, inputs, context):
+            assert context.slot is not None
             seen.append(context.slot)
             return Output(context.slot["value"])
 

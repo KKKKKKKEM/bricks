@@ -9,6 +9,8 @@ import pytest
 from bricks import Graph, Node, Output, Ports, Runtime
 from bricks.adapters import memory
 from bricks.engine.executor import Engine
+from bricks.engine.hooks import NodeCall
+from bricks.engine.observation import RuntimeEvent
 from bricks.engine.policies import PolicyRef
 from bricks.plugins import (
     CAP_EVENT_BUS,
@@ -28,14 +30,23 @@ from bricks.runtime import LocalRuntimePlugin
 
 
 def test_multiple_plugins_can_contribute_each_extension_kind() -> None:
-    observed = [[], []]
-    calls = []
+    observed: list[list[RuntimeEvent]] = [[], []]
+    calls: list[str] = []
+
+    def record_call(call: NodeCall) -> NodeCall:
+        calls.append(call.node_id)
+        return call
+
     plugins = tuple(
         ContributionPlugin(
             f"example/{index}",
             selectors={f"example/{index}": AnySelector()},
-            hooks={f"example/{index}": lambda call: calls.append(call.node_id) or call},
-            observers={f"example/{index}": observed[index].append},
+            hooks={f"example/{index}": record_call},
+            observers={
+                f"example/{index}": lambda event, index=index: observed[index].append(
+                    event
+                )
+            },
         )
         for index in range(2)
     )
@@ -43,6 +54,7 @@ def test_multiple_plugins_can_contribute_each_extension_kind() -> None:
         runtime.register("work", Graph(entrypoint="node").add(node=Source()))
         assert runtime.run("work", "hello") == (Output("hello", "value"),)
         for capability in (CAP_INPUT_SELECTOR, CAP_NODE_HOOK, CAP_RUNTIME_OBSERVER):
+            assert runtime.plugin_host is not None
             assert len(runtime.plugin_host.contributions(capability)) == 2
     assert calls == ["node", "node"]
     assert observed[0] == observed[1]
@@ -52,7 +64,7 @@ def test_multiple_plugins_can_contribute_each_extension_kind() -> None:
 def test_duplicate_contribution_names_across_plugins_are_rejected() -> None:
     plugins = tuple(
         ContributionPlugin(
-            f"example/{index}", observers={"example/shared": lambda e: None}
+            f"example/{index}", observers={"example/shared": lambda event: None}
         )
         for index in range(2)
     )
@@ -491,7 +503,7 @@ def test_runtime_fills_defaults_around_custom_event_bus_capability() -> None:
 )
 def test_runtime_fills_defaults_around_each_infrastructure_capability(
     capability: str,
-    component: object,
+    component: memory.EventBus | memory.TaskBackend | Engine,
 ) -> None:
     class InfrastructurePlugin:
         descriptor = PluginDescriptor(

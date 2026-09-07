@@ -5,13 +5,14 @@ from __future__ import annotations
 import enum
 import math
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Awaitable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, get_origin
 
 if TYPE_CHECKING:
     from .events import Context
+    from .policies import PolicyRef
 
 
 def require_non_empty_string(value: object, label: str) -> str:
@@ -118,7 +119,7 @@ class Node(ABC):
 
     input_ports = Ports(default=object)
     output_ports = Ports(default=object)
-    input_policy = InputPolicy.ALL
+    input_policy: InputPolicy | PolicyRef = InputPolicy.ALL
     timeout: float | None = None
 
     @abstractmethod
@@ -126,7 +127,7 @@ class Node(ABC):
         self,
         inputs: Mapping[str, Any],
         context: Context,
-    ) -> Output | Iterable[Output] | None:
+    ) -> Output | Iterable[Output] | Awaitable[Output | Iterable[Output] | None] | None:
         """执行一次节点行为。"""
 
 
@@ -134,7 +135,7 @@ class AsyncNode(Node):
     """显式在 asyncio 环境中执行的异步图节点。"""
 
     @abstractmethod
-    async def execute(  # type: ignore[override]
+    async def execute(
         self,
         inputs: Mapping[str, Any],
         context: Context,

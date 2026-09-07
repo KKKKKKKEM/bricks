@@ -1,6 +1,7 @@
 """Public Slot resource capabilities for adapter authors."""
 
 import pickle
+from typing import Any, cast
 from threading import Event as ThreadEvent, Thread
 
 import pytest
@@ -19,7 +20,7 @@ def test_slot_lease_is_an_extension_protocol_only() -> None:
     lease.release()
     pool.close()
     with pytest.raises(TypeError, match="SlotLease"):
-        Delivery(Work("graph"), slot_lease=object())
+        Delivery(Work("graph"), slot_lease=cast(Any, object()))  # 验证非法 lease。
 
 
 def test_pool_acquisition_reference_ownership_and_exhaustion() -> None:

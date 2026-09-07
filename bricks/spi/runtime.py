@@ -93,6 +93,7 @@ class EventBus(Protocol):
     @property
     def idle(self) -> bool:
         """返回当前是否没有尚未投递完成的 Event。"""
+        ...
 
     def subscribe(
         self,
@@ -139,6 +140,7 @@ class TaskConsumer(Protocol):
     @property
     def idle(self) -> bool:
         """返回当前实例是否没有尚未完成的 Work。"""
+        ...
 
     def bind(
         self,
@@ -198,6 +200,7 @@ class HookableGraphExecutor(GraphExecutor, Protocol):
         node: str | None = None,
     ) -> HookHandle:
         """挂载 Hook，并返回可用于卸载的句柄。"""
+        ...
 
 
 class ExecutionFactory(Protocol):
@@ -210,3 +213,4 @@ class ExecutionFactory(Protocol):
         output_buffer: int = 64,
     ) -> Execution:
         """创建全新的 Execution，可为其注入独立存储和通知实现。"""
+        ...

@@ -83,7 +83,7 @@ class PumpTasks:
     """Deterministic adapter; the test explicitly pumps queued deliveries."""
 
     def __init__(self):
-        self.queued = deque()
+        self.queued: deque[tuple[str, Delivery]] = deque()
         self.consumers = {}
         self.leases = []
         self.detachers = []
@@ -95,8 +95,9 @@ class PumpTasks:
     def idle(self):
         return not self.queued
 
-    def bind(self, queue, handler, *, concurrency, slots):
+    def bind(self, queue, handler, *, concurrency, slots=None):
         assert concurrency == 1
+        assert slots is not None
         self.consumers[queue] = (handler, slots)
         self.detachers.append(slots.subscribe_available(self.available))
 
@@ -158,6 +159,7 @@ def test_independent_adapter_preserves_chain_and_recovers_pool(failure):
 
     class Source(Node):
         def execute(self, inputs, context):
+            assert context.slot is not None
             context.slot["root"] = inputs["default"]
             seen.append(("source", context.slot, context.slot["root"]))
             if inputs["default"] == 1:
@@ -166,6 +168,7 @@ def test_independent_adapter_preserves_chain_and_recovers_pool(failure):
 
     class Target(Node):
         def execute(self, inputs, context):
+            assert context.slot is not None
             seen.append(("target", context.slot, context.slot["root"]))
             if failure == "graph":
                 raise ValueError("target failed")

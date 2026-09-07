@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import enum
 import itertools
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from threading import RLock
 from types import MappingProxyType
@@ -37,18 +37,18 @@ class NodeCall:
 class NodeHook:
     """通过 enter、exit 和 error 介入一次 Node 执行。"""
 
-    def enter(self, call: NodeCall) -> NodeCall:
+    def enter(self, call: NodeCall) -> NodeCall | Awaitable[NodeCall]:
         """在 Node 执行前转换调用参数。"""
 
         return call
 
-    def exit(self, call: NodeCall, outputs: Outputs) -> Outputs:
+    def exit(self, call: NodeCall, outputs: Outputs) -> Outputs | Awaitable[Outputs]:
         """在 Node 成功或被短路后转换结果。"""
 
         del call
         return outputs
 
-    def error(self, call: NodeCall, error: Exception) -> Outputs:
+    def error(self, call: NodeCall, error: Exception) -> Outputs | Awaitable[Outputs]:
         """处理 Node 异常；默认继续抛出。"""
 
         del call

@@ -23,6 +23,7 @@ class SlotLease(Protocol):
     @property
     def slot(self) -> Slot:
         """返回当前执行链使用的 Slot；不转移引用所有权。"""
+        ...
 
     def retain(self) -> None:
         """为分支或后续投递增加一个引用，必须匹配一次 release。"""
@@ -32,6 +33,7 @@ class SlotLease(Protocol):
 
     def execution(self) -> AbstractContextManager[Slot]:
         """串行占用 Slot 执行 Graph；退出前保留资源，不释放调用方引用。"""
+        ...
 
 
 @runtime_checkable

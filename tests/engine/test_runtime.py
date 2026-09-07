@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any, cast
 from threading import Lock, current_thread
 
 import pytest
@@ -35,7 +36,7 @@ class Split(Node):
     input_ports = Ports(value=int)
     output_ports = Ports(left=int, right=int)
 
-    def execute(self, inputs, context: Context):
+    def execute(self, inputs, context: Context) -> Output | tuple[Output, ...]:
         """把整数复制到两个端口。
 
         参数：
@@ -424,7 +425,7 @@ def test_runtime_classifies_invalid_node_results(node: str) -> None:
 
         def execute(self, inputs, context: Context):
             del inputs, context
-            return 1
+            return cast(Any, 1)  # 验证同步 Node 的非法返回值。
 
     class InvalidAsync(AsyncNode):
         input_ports = Ports()
@@ -433,7 +434,7 @@ def test_runtime_classifies_invalid_node_results(node: str) -> None:
 
         async def execute(self, inputs, context: Context):
             del inputs, context
-            return ["not-an-output"]
+            return cast(Any, ["not-an-output"])  # 验证异步 Node 的非法返回值。
 
     invalid = InvalidSync() if node == "sync" else InvalidAsync()
     graph = Graph(entrypoint="invalid").add("invalid", invalid)
@@ -494,7 +495,7 @@ def test_context_emit_routes_to_another_graph() -> None:
 def test_runtime_keeps_observe_separate_from_combined_on() -> None:
     """observe 只观察 Event，on 组合 route 与 consume。"""
 
-    observed = []
+    observed: list[Event] = []
     received: list[str] = []
 
     class Consumer(Node):
@@ -585,7 +586,7 @@ def test_event_is_committed_even_if_source_node_later_fails() -> None:
             raise ValueError("boom")
 
     graph = Graph(entrypoint="broken").add("broken", Broken())
-    seen = []
+    seen: list[Event] = []
     with Runtime() as runtime:
         runtime.register("broken.graph", graph)
         runtime.observe("value.committed", seen.append)
