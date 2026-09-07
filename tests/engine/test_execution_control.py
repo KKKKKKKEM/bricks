@@ -35,6 +35,12 @@ from bricks.runtime import GraphWorker
 
 @pytest.mark.parametrize("control", ["cancel", "timeout"])
 def test_async_cleanup_finishes_before_execution_releases_slot(control) -> None:
+    """验证异步清理完成后才释放执行链 Slot。
+
+    Args:
+        control: 当前用例使用的 control 夹具或参数化输入。
+    """
+
     started, cleaning, release, finished, next_started = (
         ThreadEvent() for _ in range(5)
     )
@@ -42,6 +48,13 @@ def test_async_cleanup_finishes_before_execution_releases_slot(control) -> None:
 
     class Slow(AsyncNode):
         async def execute(self, inputs, context):
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             seen_slots.append(context.slot)
             started.set()
             try:
@@ -54,6 +67,13 @@ def test_async_cleanup_finishes_before_execution_releases_slot(control) -> None:
 
     class Next(Node):
         def execute(self, inputs, context):
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             assert finished.is_set()
             seen_slots.append(context.slot)
             next_started.set()
@@ -101,15 +121,38 @@ def test_async_cleanup_finishes_before_execution_releases_slot(control) -> None:
 
 
 class Increment(Node):
+    """当前契约测试使用的 Increment 替代实现。
+
+    Attributes:
+        input_ports: 节点声明的输入端口及其类型。
+        output_ports: 节点声明的输出端口及其类型。
+    """
+
     input_ports = Ports(value=int)
     output_ports = Ports(value=int)
 
     def execute(self, inputs, context: Context) -> Output:
+        """执行当前测试场景的节点行为，供外层契约断言检查。
+
+        Args:
+            inputs: 入口数据或按端口名称组织的输入映射。
+            context: 当前调用的执行或插件上下文。
+
+        Returns:
+            测试节点或替代执行器产生的返回值。
+        """
+
         del context
         return Output(inputs["value"] + 1, "value")
 
 
 def looping_graph() -> Graph:
+    """构造具有回边的计步测试 Graph。
+
+    Returns:
+        包含递增节点与回边的 Graph。
+    """
+
     return (
         Graph(entrypoint="increment")
         .add(increment=Increment())
@@ -118,6 +161,8 @@ def looping_graph() -> Graph:
 
 
 def test_execution_limits_default_to_unlimited() -> None:
+    """验证默认执行限制不限制步数和时长。"""
+
     limits = ExecutionLimits()
 
     assert limits.max_steps == 0
@@ -134,11 +179,20 @@ def test_execution_limits_default_to_unlimited() -> None:
     ],
 )
 def test_execution_limits_reject_invalid_values(kwargs, error) -> None:
+    """验证执行限制拒绝非法类型和值。
+
+    Args:
+        kwargs: 传给目标接口的关键字参数。
+        error: 需要传播、记录或用于恢复的异常。
+    """
+
     with pytest.raises(error):
         ExecutionLimits(**kwargs)
 
 
 def test_max_steps_counts_node_firings_and_preserves_execution_state() -> None:
+    """验证步数按节点触发计数且失败后保留执行状态。"""
+
     runtime = Runtime()
     runtime.register("loop.graph", looping_graph())
 
@@ -154,6 +208,8 @@ def test_max_steps_counts_node_firings_and_preserves_execution_state() -> None:
 
 
 def test_max_steps_allows_exact_boundary() -> None:
+    """验证恰好达到步数上限的执行能够成功。"""
+
     with Runtime() as runtime:
         runtime.register(
             "increment.graph",
@@ -164,11 +220,30 @@ def test_max_steps_allows_exact_boundary() -> None:
 
 
 def test_zero_max_steps_keeps_existing_unlimited_behavior() -> None:
+    """验证零步数上限表示无限制。"""
+
     class StopAt(Node):
+        """当前契约测试使用的 StopAt 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(again=int, done=int)
 
         def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             value = inputs["value"]
             return Output(value + 1, "again" if value < 20 else "done")
@@ -185,6 +260,8 @@ def test_zero_max_steps_keeps_existing_unlimited_behavior() -> None:
 
 
 def test_start_returns_successful_queryable_execution() -> None:
+    """验证启动接口返回可查询的成功执行句柄。"""
+
     with Runtime() as runtime:
         runtime.register(
             "increment.graph",
@@ -201,7 +278,15 @@ def test_start_returns_successful_queryable_execution() -> None:
 
 
 def test_execution_is_awaitable() -> None:
+    """验证可以直接 await Execution 取得结果。"""
+
     async def scenario() -> tuple[Output, ...]:
+        """组织当前测试的异步调用顺序与结果断言。
+
+        Returns:
+            符合声明端口契约的 Output 集合。
+        """
+
         with Runtime() as runtime:
             runtime.register(
                 "increment.graph",
@@ -213,11 +298,30 @@ def test_execution_is_awaitable() -> None:
 
 
 def test_runtime_iter_streams_terminal_outputs_and_keeps_final_result() -> None:
+    """验证同步输出流与最终完整结果共享输出记录。"""
+
     class Many(Node):
+        """当前契约测试使用的 Many 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(count=int)
         output_ports = Ports(value=int)
 
         def execute(self, inputs, context):
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             return tuple(Output(value, "value") for value in range(inputs["count"]))
 
@@ -238,15 +342,40 @@ def test_runtime_iter_streams_terminal_outputs_and_keeps_final_result() -> None:
 
 
 def test_async_output_iteration() -> None:
+    """验证异步迭代按产生顺序交付输出。"""
+
     class Many(Node):
+        """当前契约测试使用的 Many 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(count=int)
         output_ports = Ports(value=int)
 
         def execute(self, inputs, context):
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             return tuple(Output(value, "value") for value in range(inputs["count"]))
 
     async def scenario() -> list[Output]:
+        """组织当前测试的异步调用顺序与结果断言。
+
+        Returns:
+            符合声明端口契约的 Output。
+        """
+
         with Runtime() as runtime:
             runtime.register("many.graph", Graph(entrypoint="many").add(many=Many()))
             return [output async for output in runtime.aiter("many.graph", 3)]
@@ -259,19 +388,55 @@ def test_async_output_iteration() -> None:
 
 
 def test_stream_yields_committed_outputs_before_later_failure() -> None:
+    """验证后续失败不撤回已经交付的输出。"""
+
     class EmitThenFail(Node):
+        """当前契约测试使用的 EmitThenFail 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(result=int, next=int)
 
         def execute(self, inputs, context):
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             return Output(inputs["value"], "result"), Output(inputs["value"], "next")
 
     class Fail(Node):
+        """当前契约测试使用的 Fail 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports()
 
         def execute(self, inputs, context):
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Raises:
+                ValueError: 参数值或字段组合不合法。
+            """
+
             del inputs, context
             raise ValueError("after output")
 
@@ -291,11 +456,30 @@ def test_stream_yields_committed_outputs_before_later_failure() -> None:
 
 
 def test_active_stream_applies_bounded_backpressure() -> None:
+    """验证活跃输出订阅对生产者施加有界背压。"""
+
     class Many(Node):
+        """当前契约测试使用的 Many 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(count=int)
         output_ports = Ports(value=int)
 
         def execute(self, inputs, context):
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             return tuple(Output(value, "value") for value in range(inputs["count"]))
 
@@ -315,11 +499,30 @@ def test_active_stream_applies_bounded_backpressure() -> None:
 
 
 def test_unconsumed_stream_can_be_closed_without_blocking_execution() -> None:
+    """验证关闭未消费输出流后执行不再受其阻塞。"""
+
     class Many(Node):
+        """当前契约测试使用的 Many 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(count=int)
         output_ports = Ports(value=int)
 
         def execute(self, inputs, context):
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             return tuple(Output(value, "value") for value in range(inputs["count"]))
 
@@ -334,12 +537,32 @@ def test_unconsumed_stream_can_be_closed_without_blocking_execution() -> None:
 
 
 def test_async_node_timeout_interrupts_awaitable() -> None:
+    """验证异步节点超时会中断其等待对象。"""
+
     class Slow(AsyncNode):
+        """当前契约测试使用的 Slow 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+            timeout: 超时秒数，None 表示不限制。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(value=int)
         timeout = 0.02
 
         async def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             await asyncio.sleep(1)
             return Output(inputs["value"], "value")
@@ -356,11 +579,30 @@ def test_async_node_timeout_interrupts_awaitable() -> None:
 
 
 def test_none_timeouts_leave_slow_node_unlimited() -> None:
+    """验证空超时不会终止较慢节点。"""
+
     class Slow(AsyncNode):
+        """当前契约测试使用的 Slow 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(value=int)
 
         async def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             await asyncio.sleep(0.03)
             return Output(inputs["value"], "value")
@@ -375,11 +617,30 @@ def test_none_timeouts_leave_slow_node_unlimited() -> None:
 
 
 def test_async_node_business_timeout_is_not_misclassified_as_control_timeout() -> None:
+    """验证业务 TimeoutError 不会被误判为引擎控制超时。"""
+
     class Failing(AsyncNode):
+        """当前契约测试使用的 Failing 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports()
 
         async def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Raises:
+                TimeoutError: 等待未在指定时限内完成。
+            """
+
             del inputs, context
             raise TimeoutError("upstream timed out")
 
@@ -396,12 +657,32 @@ def test_async_node_business_timeout_is_not_misclassified_as_control_timeout() -
 
 
 def test_graph_timeout_is_distinct_from_node_timeout() -> None:
+    """验证 Graph 超时与节点超时采用不同异常。"""
+
     class SlowRelay(AsyncNode):
+        """当前契约测试使用的 SlowRelay 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+            timeout: 超时秒数，None 表示不限制。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(value=int)
         timeout = 0.2
 
         async def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             await asyncio.sleep(0.02)
             return Output(inputs["value"] + 1, "value")
@@ -423,11 +704,30 @@ def test_graph_timeout_is_distinct_from_node_timeout() -> None:
 
 
 def test_each_node_uses_its_own_timeout() -> None:
+    """验证各节点分别使用自身的超时限制。"""
+
     class SlowRelay(AsyncNode):
+        """当前契约测试使用的 SlowRelay 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(value=int)
 
         async def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             await asyncio.sleep(0.02)
             return Output(inputs["value"] + 1, "value")
@@ -451,11 +751,30 @@ def test_each_node_uses_its_own_timeout() -> None:
 
 
 def test_graph_freeze_snapshots_node_timeout() -> None:
+    """验证 Graph 冻结后使用节点超时快照。"""
+
     class Slow(AsyncNode):
+        """当前契约测试使用的 Slow 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(value=int)
 
         async def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             await asyncio.sleep(0.03)
             return Output(inputs["value"], "value")
@@ -472,12 +791,29 @@ def test_graph_freeze_snapshots_node_timeout() -> None:
 
 
 def test_sync_node_can_observe_timeout_at_context_checkpoint() -> None:
+    """验证同步节点可在上下文检查点观察超时。"""
+
     class Cooperative(Node):
+        """当前契约测试使用的 Cooperative 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+            timeout: 超时秒数，None 表示不限制。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(value=int)
         timeout = 0.02
 
         def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             while True:
                 time.sleep(0.005)
                 context.checkpoint()
@@ -493,12 +829,32 @@ def test_sync_node_can_observe_timeout_at_context_checkpoint() -> None:
 
 
 def test_non_cooperative_sync_node_is_checked_when_it_returns() -> None:
+    """验证不协作的同步节点返回后仍检查超时。"""
+
     class Blocking(Node):
+        """当前契约测试使用的 Blocking 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+            timeout: 超时秒数，None 表示不限制。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(value=int)
         timeout = 0.01
 
         def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             time.sleep(0.03)
             return Output(inputs["value"], "value")
@@ -514,11 +870,30 @@ def test_non_cooperative_sync_node_is_checked_when_it_returns() -> None:
 
 
 def test_execution_cancel_interrupts_async_node() -> None:
+    """验证执行取消能够中断异步节点。"""
+
     class Waiting(AsyncNode):
+        """当前契约测试使用的 Waiting 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(value=int)
 
         async def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             await asyncio.sleep(10)
             return Output(inputs["value"], "value")
@@ -544,18 +919,48 @@ def test_execution_cancel_interrupts_async_node() -> None:
 
 
 def test_control_timeout_bypasses_hook_business_error_recovery() -> None:
+    """验证控制超时不能被业务错误 Hook 恢复。"""
+
     class Waiting(AsyncNode):
+        """当前契约测试使用的 Waiting 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+            timeout: 超时秒数，None 表示不限制。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(value=int)
         timeout = 0.02
 
         async def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             await asyncio.sleep(1)
             return Output(inputs["value"], "value")
 
     class Recover(NodeHook):
         def error(self, call, error):
+            """在错误阶段执行回调，未恢复的异常继续传播。
+
+            Args:
+                call: Hook 当前处理的节点调用记录。
+                error: 需要传播、记录或用于恢复的异常。
+
+            Returns:
+                同步调用或异步等待完成后的处理结果。
+            """
+
             del call, error
             return (Output(99, "value"),)
 
@@ -571,16 +976,41 @@ def test_control_timeout_bypasses_hook_business_error_recovery() -> None:
 
 
 def test_arun_cancellation_cancels_underlying_execution() -> None:
+    """验证取消 arun 等待方会取消底层执行。"""
+
     class Waiting(AsyncNode):
+        """当前契约测试使用的 Waiting 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(value=int)
 
         async def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             await asyncio.sleep(10)
             return Output(inputs["value"], "value")
 
     async def scenario() -> ExecutionStatus:
+        """组织当前测试的异步调用顺序与结果断言。
+
+        Returns:
+            观测到的执行状态。
+        """
+
         runtime = Runtime()
         runtime.register(
             "waiting.graph",
@@ -601,6 +1031,8 @@ def test_arun_cancellation_cancels_underlying_execution() -> None:
 
 
 def test_queue_work_inherits_route_execution_limits() -> None:
+    """验证排队工作使用路由配置的执行限制。"""
+
     runtime = Runtime()
     runtime.register("loop.graph", looping_graph())
     runtime.on(
@@ -620,14 +1052,33 @@ def test_queue_work_inherits_route_execution_limits() -> None:
 
 
 def test_wait_idle_tracks_synchronous_run_from_another_thread() -> None:
+    """验证空闲等待包含其他线程提交的同步执行。"""
+
     entered = ThreadEvent()
     release = ThreadEvent()
 
     class Blocking(Node):
+        """当前契约测试使用的 Blocking 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(value=int)
 
         def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             entered.set()
             release.wait(1)
@@ -653,16 +1104,32 @@ def test_wait_idle_tracks_synchronous_run_from_another_thread() -> None:
 
 
 def test_completed_execution_burst_is_trimmed_to_history_limit() -> None:
+    """验证集中完成的执行记录按历史上限清理。"""
+
     entered = 0
     entered_all = ThreadEvent()
     counter_lock = Lock()
     release = ThreadEvent()
 
     class Block(Node):
+        """当前契约测试使用的 Block 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             nonlocal entered
             del inputs, context
             with counter_lock:
@@ -689,6 +1156,8 @@ def test_completed_execution_burst_is_trimmed_to_history_limit() -> None:
 
 
 def test_queued_unknown_graph_is_recorded_as_failed_execution() -> None:
+    """验证未知 Graph 的排队工作被记录为失败执行。"""
+
     runtime = Runtime()
     runtime.consume("missing")
     runtime.route("missing.requested", graph="missing.graph", queue="missing")

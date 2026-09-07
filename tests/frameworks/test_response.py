@@ -20,11 +20,20 @@ from bricks.frameworks.crawler import Cookies, Request, Response
     ],
 )
 def test_response_body_size(content, size):
+    """验证响应大小按实际内容字节数计算。
+
+    Args:
+        content: 响应或上传文件的内容字节。
+        size: 资源池容量或本次断言使用的预期字节数。
+    """
+
     response = Response(content, headers={"Content-Length": "999"})
     assert response.size() == size
 
 
 def test_response_body_size_follows_content_changes():
+    """验证修改内容后大小更新且不受解码设置影响。"""
+
     response = Response("\u4e2d\u6587".encode("utf-8"))
     assert response.size() == 6
     response.encoding = "latin-1"
@@ -34,6 +43,8 @@ def test_response_body_size_follows_content_changes():
 
 
 def test_internal_failure_retains_exception_and_cause():
+    """验证内部失败保留原异常身份和异常链。"""
+
     cause = OSError("connection refused")
     error = ConnectionError("proxy unavailable")
     error.__cause__ = cause
@@ -62,6 +73,12 @@ def test_internal_failure_retains_exception_and_cause():
     ],
 )
 def test_invalid_failure_combinations(kwargs):
+    """验证响应状态与异常的非法组合被拒绝。
+
+    Args:
+        kwargs: 传给目标接口的关键字参数。
+    """
+
     with pytest.raises((ValueError, TypeError)):
         Response(**kwargs)
 
@@ -75,12 +92,20 @@ def test_invalid_failure_combinations(kwargs):
     ],
 )
 def test_control_errors_propagate(error):
+    """验证引擎控制异常与取消信号原样传播。
+
+    Args:
+        error: 需要传播、记录或用于恢复的异常。
+    """
+
     with pytest.raises(type(error)) as caught:
         Response(status_code=-1, error=error)
     assert caught.value is error
 
 
 def test_encoding_and_content_hooks_always_refresh_decoding():
+    """验证修改编码或内容后解码结果即时更新。"""
+
     response = Response("\u4e2d\u6587".encode("gb18030"))
     response.encoding = "gb18030"
     assert response.text == "\u4e2d\u6587"
@@ -101,6 +126,8 @@ def test_encoding_and_content_hooks_always_refresh_decoding():
 
 
 def test_response_copies_request_and_history():
+    """验证响应复制隔离关联请求与重定向历史。"""
+
     request = Request("https://example.com", headers={"X-Test": "original"})
     previous = Response(b"before", status_code=302, request=request)
     response = Response(b"after", request=request, history=[previous])
@@ -119,6 +146,8 @@ def test_response_copies_request_and_history():
 
 
 def test_cookie_strings_preserve_duplicate_names_and_attributes():
+    """验证 Cookie 保留同名不同域路径的记录及属性。"""
+
     response = Response(
         url="https://example.com/account/login",
         headers=[
@@ -139,10 +168,11 @@ def test_cookie_strings_preserve_duplicate_names_and_attributes():
     assert cookies.get("missing", "fallback") == "fallback"
     assert cookies.to_string(url="https://other.com/") == ""
     assert cookies.to_string(url="https://sub.example.com/account") == "shared=yes"
-    # CookieJar does not guarantee ordering between equal-length paths.
-    assert sorted(
-        cookies.to_string(url="http://example.com/account").split("; ")
-    ) == ["session=root", "shared=yes"]
+    # CookieJar 不保证相同长度路径之间的 Cookie 顺序。
+    assert sorted(cookies.to_string(url="http://example.com/account").split("; ")) == [
+        "session=root",
+        "shared=yes",
+    ]
     assert "session=private" not in cookies.to_string(
         url="https://example.com/accounting"
     )
@@ -160,6 +190,8 @@ def test_cookie_strings_preserve_duplicate_names_and_attributes():
 
 
 def test_cookiejar_expiry_copy_and_mapping_convenience():
+    """验证 CookieJar 有效期筛选、复制和简写映射。"""
+
     source = Cookies({"token": "a"}, url="https://example.com")
     assert str(source) == "token=a"
     assert source.to_string(url="https://example.com") == "token=a"
@@ -176,6 +208,8 @@ def test_cookiejar_expiry_copy_and_mapping_convenience():
 
 
 def test_cookie_header_parsing_requires_origin_and_copy_reparses_headers():
+    """验证解析 Cookie 要求来源 URL 且覆盖响应头时重新解析。"""
+
     with pytest.raises(ValueError):
         Response(headers={"Set-Cookie": "a=b"})
     response = Response(url="https://example.com", headers={"Set-Cookie": "a=b"})
@@ -187,6 +221,13 @@ def test_cookie_header_parsing_requires_origin_and_copy_reparses_headers():
     "status,ok", [(100, False), (200, True), (302, True), (404, False), (500, False)]
 )
 def test_http_statuses_are_responses(status, ok):
+    """验证 HTTP 状态保留为正常响应且 ok 仅判断状态范围。
+
+    Args:
+        status: 需要记录或验证的状态值。
+        ok: 当前用例使用的 ok 夹具或参数化输入。
+    """
+
     response = Response(status_code=status)
     assert response.error is None
     assert response.ok is ok

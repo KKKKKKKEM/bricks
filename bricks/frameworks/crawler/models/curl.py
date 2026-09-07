@@ -1,4 +1,4 @@
-"""A strict, non-executing adapter for a single POSIX curl command."""
+"""单条 POSIX cURL 命令的严格转换器，不执行命令。"""
 
 from __future__ import annotations
 
@@ -21,10 +21,33 @@ if TYPE_CHECKING:
 
 class _Parser(argparse.ArgumentParser):
     def error(self, message: str) -> NoReturn:
+        """将命令行解析错误转换为 ValueError，避免终止进程。
+
+        Args:
+            message: 异常说明或示例使用的消息文本。
+
+        Raises:
+            ValueError: 参数值或字段组合不合法。
+        """
+
         raise ValueError(f"invalid or unsupported curl command: {message}")
 
 
 def _file(name: str, files: Mapping[str, bytes]) -> bytes:
+    """从调用方提供的文件映射读取字节，不访问文件系统。
+
+    Args:
+        name: 注册或查找使用的名称。
+        files: 文件名称到内容字节的显式映射，不访问本地文件系统。
+
+    Returns:
+        调用方显式提供的文件内容字节。
+
+    Raises:
+        TypeError: 参数类型或接口实现不符合当前契约。
+        ValueError: 参数值或字段组合不合法。
+    """
+
     if name not in files:
         raise ValueError(
             f"provide files[{name!r}] explicitly; no files or stdin are read"
@@ -36,7 +59,19 @@ def _file(name: str, files: Mapping[str, bytes]) -> bytes:
 
 
 def _split_command(command: str) -> list[str]:
-    # Remove continuations outside single quotes without losing literal newlines.
+    # 移除单引号外的续行标记，同时保留内容中的真实换行。
+    """解析单条 POSIX 命令，保留引号内数据并处理续行。
+
+    Args:
+        command: 需要解析的单条 POSIX cURL 命令。
+
+    Returns:
+        经过引号和续行处理的命令参数列表。
+
+    Raises:
+        ValueError: 参数值或字段组合不合法。
+    """
+
     prepared: list[str] = []
     quote = ""
     index = 0
@@ -63,7 +98,19 @@ def _split_command(command: str) -> list[str]:
 def parse_curl(
     command: str, files: Mapping[str, bytes] | None = None
 ) -> dict[str, Any]:
-    """Return Request constructor arguments without executing or reading files."""
+    """解析单条 cURL 命令并生成 Request 构造参数，不执行命令或读取文件。
+
+    Args:
+        command: 需要解析的单条 POSIX cURL 命令。
+        files: 文件名称到内容字节的显式映射，不访问本地文件系统。
+
+    Returns:
+        可直接用于 Request 构造器的关键字参数。
+
+    Raises:
+        TypeError: 参数类型或接口实现不符合当前契约。
+        ValueError: 参数值或字段组合不合法。
+    """
 
     if not isinstance(command, str):
         raise TypeError("curl command must be text")
@@ -270,7 +317,18 @@ def parse_curl(
 
 
 def render_curl(request: Request, body_file: str | None = None) -> str:
-    """Render POSIX shell arguments; body_file is a reference, never written."""
+    """生成 POSIX cURL 命令，请求体文件仅作为引用，不写入文件。
+
+    Args:
+        request: 当前 HTTP 请求或 pytest 提供的参数化夹具对象。
+        body_file: cURL 命令引用的请求体文件路径，本操作不写文件。
+
+    Returns:
+        经过 POSIX shell 引用处理的单条 cURL 命令。
+
+    Raises:
+        ValueError: 参数值或字段组合不合法。
+    """
 
     args = [
         "curl",

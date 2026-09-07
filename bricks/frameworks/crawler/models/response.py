@@ -18,10 +18,31 @@ from .request import Request
 
 
 def _invalid_constant(value: str) -> Any:
+    """拒绝 JSON 中的 NaN 和 Infinity 等非标准常量。
+
+    Args:
+        value: JSON 解码器遇到的非标准常量文本。
+
+    Raises:
+        ValueError: 参数值或字段组合不合法。
+    """
+
     raise ValueError(f"invalid JSON constant: {value}")
 
 
 def _text_encoding(value: str) -> str:
+    """校验编码名称对应文本解码器并返回规范名称。
+
+    Args:
+        value: 需要校验的文本编码名称。
+
+    Returns:
+        文本解码器的规范编码名称。
+
+    Raises:
+        LookupError: 指定编码不存在或不是文本编码。
+    """
+
     codec = codecs.lookup(value)
     try:
         decoded, _ = codec.decode(b"")
@@ -37,6 +58,20 @@ class Response:
 
     提供状态码、请求头、Cookie、文本和 JSON 读取能力，保留关联请求与重定向历史。
     支持修正编码和在响应 Hook 中替换内容；实际下载和页面解析由其他组件负责。
+
+    Attributes:
+        __slots__: 实例允许保存的字段名称，限制动态增加属性。
+        content: 当前保存的内容字节。
+        status_code: HTTP 状态码，-1 表示内部失败。
+        url: 绝对 HTTP 或 HTTPS 地址。
+        headers: 保留重复字段的 HTTP 头容器。
+        cookies: 当前请求或响应的 Cookie 数据，不表示跨请求会话。
+        encoding: 显式文本编码，None 根据内容与响应头推断。
+        reason: HTTP 状态或内部失败的说明。
+        error: 当前结果携带的原始异常，正常结果为 None。
+        cost: 请求耗时，单位秒，计时范围由下载器定义。
+        request: 响应关联的独立请求快照。
+        history: 按先后顺序保存的重定向响应快照。
     """
 
     __slots__ = (
@@ -196,13 +231,21 @@ class Response:
         object.__setattr__(self, name, value)
 
     def size(self) -> int:
-        """返回当前 content 的字节数，不读取 Content-Length，不包含响应头。"""
+        """返回当前 content 的字节数，不读取 Content-Length，不包含响应头。
+
+        Returns:
+            当前响应体的字节数，不包含响应头或对象内存开销。
+        """
 
         return len(self.content)
 
     @property
     def resolved_encoding(self) -> str:
-        """返回当前内容的有效编码：显式设置、BOM、响应头，最后回退 UTF-8。"""
+        """返回当前内容的有效编码：显式设置、BOM、响应头，最后回退 UTF-8。
+
+        Returns:
+            当前响应体适用的文本编码名称。
+        """
 
         if self.encoding is not None:
             return self.encoding
@@ -227,7 +270,11 @@ class Response:
 
     @property
     def text(self) -> str:
-        """按当前编码解码内容，非法字节替换为占位字符，不缓存解码结果。"""
+        """按当前编码解码内容，非法字节替换为占位字符，不缓存解码结果。
+
+        Returns:
+            按当前编码解码后的文本，非法字节替换为占位字符。
+        """
 
         return self.content.decode(self.resolved_encoding, errors="replace")
 
@@ -250,7 +297,11 @@ class Response:
 
     @property
     def ok(self) -> bool:
-        """状态码为 200–399 时返回 True，仅表示 HTTP 状态，不判断业务内容。"""
+        """状态码为 200–399 时返回 True，仅表示 HTTP 状态，不判断业务内容。
+
+        Returns:
+            满足当前操作的判断条件时返回 True，否则返回 False。
+        """
 
         return 200 <= self.status_code < 400
 

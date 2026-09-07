@@ -31,7 +31,12 @@ from bricks.runtime import GraphWorker
 
 
 class Split(Node):
-    """产生 join 所需的两个图内端口。"""
+    """产生 join 所需的两个图内端口。
+
+    Attributes:
+        input_ports: 节点声明的输入端口及其类型。
+        output_ports: 节点声明的输出端口及其类型。
+    """
 
     input_ports = Ports(value=int)
     output_ports = Ports(left=int, right=int)
@@ -39,11 +44,11 @@ class Split(Node):
     def execute(self, inputs, context: Context) -> Output | tuple[Output, ...]:
         """把整数复制到两个端口。
 
-        参数：
+        Args:
             inputs: 当前整数输入。
             context: 当前执行上下文。
 
-        返回：
+        Returns:
             两个命名 Output。
         """
 
@@ -53,7 +58,13 @@ class Split(Node):
 
 
 class Join(Node):
-    """等待两个输入端口后求和。"""
+    """等待两个输入端口后求和。
+
+    Attributes:
+        input_ports: 节点声明的输入端口及其类型。
+        output_ports: 节点声明的输出端口及其类型。
+        input_policy: 仅依据端口和 token 数量生效的输入策略。
+    """
 
     input_ports = Ports(left=int, right=int)
     output_ports = Ports(total=int)
@@ -62,11 +73,11 @@ class Join(Node):
     def execute(self, inputs, context: Context) -> Output:
         """求和并返回终端 Output。
 
-        参数：
+        Args:
             inputs: 同时包含 left 和 right。
             context: 当前执行上下文。
 
-        返回：
+        Returns:
             求和结果。
         """
 
@@ -77,7 +88,7 @@ class Join(Node):
 def join_graph() -> Graph:
     """构建用于测试图内 Edge 和 InputPolicy 的 Graph。
 
-    返回：
+    Returns:
         已冻结的两节点 Graph。
     """
 
@@ -107,10 +118,27 @@ def test_runtime_executes_self_loop_until_node_stops_emitting_feedback() -> None
     visits: list[int] = []
 
     class Counter(Node):
+        """通过回边递增计数并在达到边界时结束的示例节点。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(again=int, done=int)
 
         def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             value = inputs["value"]
             visits.append(value)
@@ -136,10 +164,27 @@ def test_runtime_does_not_impose_cycle_step_limit() -> None:
     """核心不会按 Node 执行次数截断合法长循环。"""
 
     class Counter(Node):
+        """通过回边递增计数并在达到边界时结束的示例节点。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(again=int, done=int)
 
         def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             value = inputs["value"]
             if value < 10_000:
@@ -165,10 +210,27 @@ def test_runtime_executes_cycle_across_multiple_nodes() -> None:
     calls: list[tuple[str, int]] = []
 
     class Check(Node):
+        """当前契约测试使用的 Check 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(continue_=int, done=int)
 
         def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             value = inputs["value"]
             calls.append(("check", value))
@@ -177,10 +239,27 @@ def test_runtime_executes_cycle_across_multiple_nodes() -> None:
             return Output(value, "done")
 
     class Increment(Node):
+        """当前契约测试使用的 Increment 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(value=int)
 
         def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             value = inputs["value"]
             calls.append(("increment", value))
@@ -213,10 +292,27 @@ def test_runtime_executes_cycle_inside_execution_plan() -> None:
     """ExecutionPlan 保留所选节点之间的回边。"""
 
     class Counter(Node):
+        """通过回边递增计数并在达到边界时结束的示例节点。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(again=int, done=int)
 
         def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             value = inputs["value"]
             if value < 2:
@@ -244,10 +340,27 @@ def test_cycle_scheduler_does_not_starve_ready_branch() -> None:
     calls: list[str] = []
 
     class Loop(Node):
+        """当前契约测试使用的 Loop 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(again=int, observe=int, done=int)
 
         def execute(self, inputs, context: Context):
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             value = inputs["value"]
             calls.append(f"loop:{value}")
@@ -259,10 +372,24 @@ def test_cycle_scheduler_does_not_starve_ready_branch() -> None:
             return Output(value, "done")
 
     class Observe(Node):
+        """当前契约测试使用的 Observe 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             del context
             calls.append(f"observe:{inputs['value']}")
 
@@ -293,10 +420,27 @@ def test_cycle_quiescence_reports_incomplete_inputs() -> None:
     """回路停止后，无法组成 ALL 输入的残留数据仍是执行错误。"""
 
     class Loop(Node):
+        """当前契约测试使用的 Loop 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(again=int, partial=int, absent=int, done=int)
 
         def execute(self, inputs, context: Context):
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             value = inputs["value"]
             if value < 2:
@@ -307,11 +451,26 @@ def test_cycle_quiescence_reports_incomplete_inputs() -> None:
             return Output(value, "done")
 
     class Join(Node):
+        """当前契约测试使用的 Join 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+            input_policy: 仅依据端口和 token 数量生效的输入策略。
+        """
+
         input_ports = Ports(left=int, right=int)
         output_ports = Ports()
         input_policy = InputPolicy.ALL
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             del inputs, context
 
     graph = (
@@ -334,22 +493,63 @@ def test_runtime_executes_different_plans_from_one_graph() -> None:
     calls: list[str] = []
 
     class SourceNode(Node):
+        """当前契约测试使用的 SourceNode 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(value=int)
 
         def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             calls.append("source")
             return Output(inputs["value"], "value")
 
     class Branch(Node):
+        """当前契约测试使用的 Branch 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+            name: 当前注册项或具名策略的名称。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports(result=str)
 
         def __init__(self, name: str) -> None:
+            """初始化实例及其依赖，建立当前对象独立维护的状态。
+
+            Args:
+                name: 注册或查找使用的名称。
+            """
+
             self.name = name
 
         def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             calls.append(self.name)
             return Output(f"{self.name}:{inputs['value']}", "result")
@@ -377,11 +577,26 @@ def test_runtime_rejects_plan_from_another_graph() -> None:
     """Plan 只能用于创建它的同一个 Graph 实例。"""
 
     class Start(Node):
+        """当前契约测试使用的 Start 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+            input_policy: 仅依据端口和 token 数量生效的输入策略。
+        """
+
         input_ports = Ports()
         output_ports = Ports()
         input_policy = InputPolicy.ON_START
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             del inputs, context
 
     first = Graph(entrypoint="source").add("source", Start()).freeze()
@@ -398,10 +613,27 @@ def test_single_port_receives_complete_mapping_payload() -> None:
     """单端口的 Mapping payload 不按多端口输入映射解释。"""
 
     class MappingConsumer(Node):
+        """当前契约测试使用的 MappingConsumer 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(task=dict)
         output_ports = Ports(result=dict)
 
         def execute(self, inputs, context: Context) -> Output:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             return Output(inputs["task"], "result")
 
@@ -416,23 +648,63 @@ def test_single_port_receives_complete_mapping_payload() -> None:
 
 @pytest.mark.parametrize("node", ["sync", "async"])
 def test_runtime_classifies_invalid_node_results(node: str) -> None:
-    """同步和异步 Node 的非法返回值都使用公共输出协议错误。"""
+    """同步和异步 Node 的非法返回值都使用公共输出协议错误。
+
+    Args:
+        node: 节点实例或作用域中的节点 ID，以接口类型为准。
+    """
 
     class InvalidSync(Node):
+        """当前契约测试使用的 InvalidSync 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+            input_policy: 仅依据端口和 token 数量生效的输入策略。
+        """
+
         input_ports = Ports()
         output_ports = Ports()
         input_policy = InputPolicy.ON_START
 
         def execute(self, inputs, context: Context):
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del inputs, context
             return cast(Any, 1)  # 验证同步 Node 的非法返回值。
 
     class InvalidAsync(AsyncNode):
+        """当前契约测试使用的 InvalidAsync 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+            input_policy: 仅依据端口和 token 数量生效的输入策略。
+        """
+
         input_ports = Ports()
         output_ports = Ports()
         input_policy = InputPolicy.ON_START
 
         async def execute(self, inputs, context: Context):
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del inputs, context
             return cast(Any, ["not-an-output"])  # 验证异步 Node 的非法返回值。
 
@@ -460,17 +732,45 @@ def test_context_emit_routes_to_another_graph() -> None:
     received: list[str] = []
 
     class Producer(Node):
+        """当前契约测试使用的 Producer 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=str)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             context.emit("value.created", inputs["value"])
 
     class Consumer(Node):
+        """当前契约测试使用的 Consumer 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=str)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             del context
             received.append(inputs["value"])
 
@@ -499,10 +799,24 @@ def test_runtime_keeps_observe_separate_from_combined_on() -> None:
     received: list[str] = []
 
     class Consumer(Node):
+        """当前契约测试使用的 Consumer 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=str)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             del context
             received.append(inputs["value"])
 
@@ -527,10 +841,24 @@ def test_runtime_on_forwards_subscription() -> None:
     """组合入口保留 route 的显式 subscription 身份。"""
 
     class Consumer(Node):
+        """当前契约测试使用的 Consumer 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=str)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             del inputs, context
 
     graph = Graph(entrypoint="consume").add(consume=Consumer())
@@ -548,10 +876,24 @@ def test_runtime_on_does_not_leave_route_when_consumer_setup_fails() -> None:
     """消费配置失败时，同一 route 仍可在修正参数后正常注册。"""
 
     class Consumer(Node):
+        """当前契约测试使用的 Consumer 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=str)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             del inputs, context
 
     with Runtime() as runtime:
@@ -578,10 +920,27 @@ def test_event_is_committed_even_if_source_node_later_fails() -> None:
     """emit 成功后的事件不因当前 Node 后续失败而撤回。"""
 
     class Broken(Node):
+        """当前契约测试使用的 Broken 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=str)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Raises:
+                ValueError: 参数值或字段组合不合法。
+            """
+
             context.emit("value.committed", inputs["value"])
             raise ValueError("boom")
 
@@ -602,10 +961,24 @@ def test_runtime_dispatches_each_event_without_domain_deduplication() -> None:
     received: list[str] = []
 
     class Consumer(Node):
+        """当前契约测试使用的 Consumer 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=str)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             del context
             received.append(inputs["value"])
 
@@ -628,10 +1001,24 @@ def test_queue_concurrency_limits_graph_executions() -> None:
     lock = Lock()
 
     class Slow(AsyncNode):
+        """当前契约测试使用的 Slow 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports()
 
         async def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             nonlocal active, maximum
             del inputs, context
             with lock:
@@ -665,17 +1052,45 @@ def test_event_can_drive_a_chain_of_graphs() -> None:
     received: list[str] = []
 
     class Relay(Node):
+        """当前契约测试使用的 Relay 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=str)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             context.emit("relayed", inputs["value"])
 
     class Sink(Node):
+        """当前契约测试使用的 Sink 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=str)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             del context
             received.append(inputs["value"])
 
@@ -698,20 +1113,48 @@ def test_slot_follows_work_across_consumers() -> None:
     seen: list[tuple[str, str, str]] = []
 
     class Producer(Node):
+        """当前契约测试使用的 Producer 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             assert context.slot is not None
             context.slot["value"] = inputs["value"]
             seen.append(("source", context.slot.id, current_thread().name))
             context.emit("slot.forwarded", inputs["value"])
 
     class Consumer(Node):
+        """当前契约测试使用的 Consumer 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             assert context.slot is not None
             assert context.slot["value"] == inputs["value"]
             seen.append(("sink", context.slot.id, current_thread().name))
@@ -757,10 +1200,24 @@ def test_default_slot_pool_matches_consumer_concurrency() -> None:
     lock = Lock()
 
     class Capture(AsyncNode):
+        """当前契约测试使用的 Capture 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports()
 
         async def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             nonlocal active, maximum
             del inputs
             assert context.slot is not None
@@ -798,22 +1255,57 @@ def test_slot_lease_waits_for_all_event_branches() -> None:
     seen: list[tuple[str, str]] = []
 
     class Fork(Node):
+        """当前契约测试使用的 Fork 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=str)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             assert context.slot is not None
             context.emit("branch.left", inputs["value"])
             context.emit("branch.right", inputs["value"])
 
     class Branch(Node):
+        """当前契约测试使用的 Branch 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+            name: 当前注册项或具名策略的名称。
+        """
+
         input_ports = Ports(value=str)
         output_ports = Ports()
 
         def __init__(self, name: str) -> None:
+            """初始化实例及其依赖，建立当前对象独立维护的状态。
+
+            Args:
+                name: 注册或查找使用的名称。
+            """
+
             self.name = name
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             del inputs
             assert context.slot is not None
             seen.append((self.name, context.slot.id))
@@ -841,10 +1333,27 @@ def test_failed_work_releases_its_slot() -> None:
     """Graph 异常不能泄漏 Slot，后续根 Work 仍可获得它。"""
 
     class Broken(Node):
+        """当前契约测试使用的 Broken 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Raises:
+                ValueError: 参数值或字段组合不合法。
+            """
+
             del inputs, context
             raise ValueError("broken slot work")
 
@@ -864,6 +1373,15 @@ def test_rejected_emitted_event_releases_its_retained_slot() -> None:
     """Emitter 拒绝接管 Event 时回滚为它保留的 Slot 引用。"""
 
     def reject(event) -> None:
+        """创建拒绝本次投递的交付决定。
+
+        Args:
+            event: 需要发布、观察或处理的事件。
+
+        Raises:
+            ValueError: 参数值或字段组合不合法。
+        """
+
         del event
         raise ValueError("rejected event")
 
@@ -887,13 +1405,36 @@ def test_failed_event_dispatch_releases_forwarded_slot_once() -> None:
     """EventBus 失败后 Router 与 Worker 交接 lease 时不会重复释放。"""
 
     class Relay(Node):
+        """当前契约测试使用的 Relay 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             context.emit("rejected", inputs["value"])
 
     def reject(event) -> None:
+        """创建拒绝本次投递的交付决定。
+
+        Args:
+            event: 需要发布、观察或处理的事件。
+
+        Raises:
+            ValueError: 参数值或字段组合不合法。
+        """
+
         del event
         raise ValueError("rejected event")
 
@@ -916,17 +1457,45 @@ def test_waiting_roots_do_not_starve_slot_continuations() -> None:
     received: list[int] = []
 
     class Relay(Node):
+        """当前契约测试使用的 Relay 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             context.emit("continued", inputs["value"])
 
     class Sink(Node):
+        """当前契约测试使用的 Sink 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             del context
             received.append(inputs["value"])
 
@@ -964,10 +1533,24 @@ def test_shared_pool_works_when_consumer_and_slot_sizes_differ() -> None:
     lock = Lock()
 
     class Slow(AsyncNode):
+        """当前契约测试使用的 Slow 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports()
 
         async def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             nonlocal active, maximum
             del inputs
             assert context.slot is not None
@@ -1004,20 +1587,55 @@ def test_multiple_routes_retain_one_slot_until_every_work_finishes() -> None:
     seen: list[tuple[str, str]] = []
 
     class FanOut(Node):
+        """当前契约测试使用的 FanOut 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             context.emit("fanout", inputs["value"])
 
     class Sink(Node):
+        """当前契约测试使用的 Sink 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+            name: 当前注册项或具名策略的名称。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports()
 
         def __init__(self, name: str) -> None:
+            """初始化实例及其依赖，建立当前对象独立维护的状态。
+
+            Args:
+                name: 注册或查找使用的名称。
+            """
+
             self.name = name
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             del inputs
             assert context.slot is not None
             seen.append((self.name, context.slot.id))
@@ -1063,10 +1681,24 @@ def test_returned_slot_keeps_state_for_later_root_work() -> None:
     counts: list[int] = []
 
     class Reuse(Node):
+        """当前契约测试使用的 Reuse 替代实现。
+
+        Attributes:
+            input_ports: 节点声明的输入端口及其类型。
+            output_ports: 节点声明的输出端口及其类型。
+        """
+
         input_ports = Ports(value=int)
         output_ports = Ports()
 
         def execute(self, inputs, context: Context) -> None:
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+            """
+
             del inputs
             assert context.slot is not None
             context.slot["uses"] = context.slot.get("uses", 0) + 1
@@ -1099,6 +1731,16 @@ def test_runtime_reports_incomplete_join() -> None:
 
     class LeftOnly(Split):
         def execute(self, inputs, context: Context):
+            """执行当前测试场景的节点行为，供外层契约断言检查。
+
+            Args:
+                inputs: 入口数据或按端口名称组织的输入映射。
+                context: 当前调用的执行或插件上下文。
+
+            Returns:
+                测试节点或替代执行器产生的返回值。
+            """
+
             del context
             return Output(inputs["value"], "left")
 

@@ -66,6 +66,9 @@ class QueryParams(MutableMapping[str, str]):
 
     支持按名称查询、修改、删除和追加参数，并保留参数顺序与同名多值，
     可通过 raw 取得完整键值对，用于构造查询字符串。
+
+    Attributes:
+        _pairs: 保留字段顺序与同名多值的键值对快照。
     """
 
     def __init__(self, values: QueryInput | None = None) -> None:
@@ -82,7 +85,11 @@ class QueryParams(MutableMapping[str, str]):
 
     @property
     def raw(self) -> tuple[tuple[str, str], ...]:
-        """返回包含重复字段的有序键值对快照，不允许原地修改。"""
+        """返回包含重复字段的有序键值对快照，不允许原地修改。
+
+        Returns:
+            包含重复字段的有序键值对元组。
+        """
 
         return self._pairs
 
@@ -144,12 +151,20 @@ class QueryParams(MutableMapping[str, str]):
         self._pairs = tuple(pair for pair in self._pairs if pair[0] != name)
 
     def __iter__(self) -> Iterator[str]:
-        """按首次出现顺序迭代不重复的参数名。"""
+        """按首次出现顺序迭代不重复的参数名。
+
+        Returns:
+            遍历当前对象内容的独立迭代入口。
+        """
 
         return iter(dict(self._pairs))
 
     def __len__(self) -> int:
-        """返回不同参数名的数量，不是键值对总数。"""
+        """返回不同参数名的数量，不是键值对总数。
+
+        Returns:
+            当前容器条目数量。
+        """
 
         return len(dict(self._pairs))
 
@@ -175,6 +190,13 @@ class Request:
     也可以复制为独立请求，或与 cURL 命令相互转换。
 
     Request 负责组织请求数据，实际网络发送由下载器完成。
+
+    Attributes:
+        __slots__: 实例允许保存的字段名称，限制动态增加属性。
+        _body: 已经编码的请求体字节，None 表示无请求体。
+        _body_source: 最后一次赋值的请求体数据副本，用于切换编码模式。
+        _body_type: 当前请求体编码模式。
+        _body_content_type: 自动生成的 Content-Type，用于同步维护请求体关联头。
     """
 
     __slots__ = (
@@ -292,7 +314,11 @@ class Request:
 
     @property
     def body(self) -> bytes | None:
-        """返回编码后的请求体字节；None 表示无请求体。"""
+        """返回编码后的请求体字节；None 表示无请求体。
+
+        Returns:
+            已经编码的请求体字节，None 表示无请求体。
+        """
 
         return self._body
 
@@ -312,7 +338,11 @@ class Request:
 
     @property
     def body_type(self) -> BodyType:
-        """返回编码模式：auto、json、form、multipart 或 raw。"""
+        """返回编码模式：auto、json、form、multipart 或 raw。
+
+        Returns:
+            当前请求体编码模式。
+        """
 
         return self._body_type
 
@@ -341,6 +371,9 @@ class Request:
         Args:
             value: 原始请求体。
             body_type: 已校验的编码模式。
+
+        Raises:
+            TypeError: 参数类型或接口实现不符合当前契约。
         """
 
         encoded: bytes | None
@@ -385,7 +418,11 @@ class Request:
 
     @property
     def real_url(self) -> str:
-        """返回移除片段并追加 params 的请求地址，不重新编码 URL 原有查询字符串。"""
+        """返回移除片段并追加 params 的请求地址，不重新编码 URL 原有查询字符串。
+
+        Returns:
+            移除片段并追加查询参数后的实际请求地址。
+        """
 
         base = self.url.split("#", 1)[0]
         if not self.params:

@@ -41,7 +41,13 @@ Emit = Callable[[Event], None]
 
 
 class Engine:
-    """执行 Graph 内的 Node、InputPolicy、Output 和 Edge。"""
+    """执行 Graph 内的 Node、InputPolicy、Output 和 Edge。
+
+    Attributes:
+        hooks: 节点 Hook 的注册与快照能力。
+        _runner: 解析同步值和异步结果的运行器。
+        _observations: 当前组件的只读生命周期事件分发中心。
+    """
 
     def __init__(
         self,
@@ -50,7 +56,13 @@ class Engine:
         runner: LocalRunner | None = None,
         observations: ObservationHub | None = None,
     ) -> None:
-        """组装动态 Hook 注册表和同步/异步调用 Runner。"""
+        """组装动态 Hook 注册表和同步/异步调用 Runner。
+
+        Args:
+            hooks: 待装配的节点 Hook 集合。
+            runner: 负责解析同步值和异步结果的调用运行器。
+            observations: 负责分发生命周期事件的观察中心。
+        """
 
         self.hooks = HookRegistry() if hooks is None else hooks
         self._runner = LocalRunner() if runner is None else runner
@@ -67,7 +79,22 @@ class Engine:
         slot: Slot | None = None,
         execution: Execution,
     ) -> None:
-        """执行一张 Graph，通过统一 Execution 输出接口交付终端 Output。"""
+        """执行一张 Graph，通过统一 Execution 输出接口交付终端 Output。
+
+        Args:
+            name: 注册或查找使用的名称。
+            graph: 目标 Graph 定义或其注册名称，以类型声明为准。
+            inputs: 入口数据或按端口名称组织的输入映射。
+            emit: 发布跨图事件的回调。
+            plan: 限定本次执行范围的计划，None 使用完整 Graph。
+            slot: 当前逻辑执行链使用的本地执行槽。
+            execution: 记录当前执行状态、控制限制及输出的句柄。
+
+        Raises:
+            RuntimeError: 当前生命周期状态或操作顺序不允许此操作。
+            TypeError: 参数类型或接口实现不符合当前契约。
+            ValueError: 参数值或字段组合不合法。
+        """
 
         name = require_non_empty_string(name, "graph name")
         if not isinstance(graph, Graph):
@@ -107,7 +134,17 @@ class Engine:
         graph: str | None = None,
         node: str | None = None,
     ) -> HookHandle:
-        """声明并实现 GraphExecutor 的可选动态 Hook 能力。"""
+        """声明并实现 GraphExecutor 的可选动态 Hook 能力。
+
+        Args:
+            hook: 节点 Hook 对象或单阶段回调。
+            phase: 函数 Hook 对应的执行阶段。
+            graph: 目标 Graph 定义或其注册名称，以类型声明为准。
+            node: 节点实例或作用域中的节点 ID，以接口类型为准。
+
+        Returns:
+            用于卸载本次注册的句柄。
+        """
 
         return self.hooks.attach(hook, phase=phase, graph=graph, node=node)
 
@@ -122,6 +159,25 @@ class Engine:
         slot: Slot | None,
         execution: Execution,
     ) -> None:
+        """推进 Graph 的可执行节点，直至数据流静止或执行终止。
+
+        Args:
+            graph_name: 执行或观测记录中的 Graph 注册名称。
+            graph: 目标 Graph 定义或其注册名称，以类型声明为准。
+            initial_inputs: 执行开始时注入入口节点的数据。
+            emit: 发布跨图事件的回调。
+            hook_snapshot: 本次 Graph 执行固定使用的 Hook 注册快照。
+            plan: 限定本次执行范围的计划，None 使用完整 Graph。
+            slot: 当前逻辑执行链使用的本地执行槽。
+            execution: 记录当前执行状态、控制限制及输出的句柄。
+
+        Raises:
+            HookExecutionError: Hook 的调用或返回结果违反约束。
+            IncompleteInputsError: 数据流静止时仍有无法组合的输入。
+            InvalidOutputError: 节点输出不符合 Output 契约。
+            PortValueTypeError: 实际输入或输出值不符合端口类型。
+        """
+
         nodes = graph.nodes
         active_nodes = set(nodes) if plan is None else plan.nodes
         specs = {
@@ -151,6 +207,12 @@ class Engine:
         finalizers: list[Callable[[], None]] = []
 
         def schedule_if_ready(node_id: str) -> None:
+            """根据已绑定输入策略，将具备可消费数据的节点加入就绪队列。
+
+            Args:
+                node_id: Graph 内绑定的节点 ID。
+            """
+
             if node_id in scheduled:
                 return
             spec = specs[node_id]
@@ -275,7 +337,7 @@ class Engine:
                     queues[edge.target][edge.target_port].append(output.value)
                     schedule_if_ready(edge.target)
 
-            # Consume one input group per turn so a hot cycle cannot starve peers.
+            # 每轮只消费一组输入，避免活跃循环使其他节点长期无法执行。
             schedule_if_ready(node_id)
 
         execution.checkpoint()
@@ -304,11 +366,41 @@ class Engine:
         input_ports: Mapping[str, type[Any]],
         execution: Execution,
     ) -> tuple[Output, ...]:
-        """在 Hook 生命周期内调用 Node，并保留原始异常供 error 处理。"""
+        """在 Hook 生命周期内调用 Node，并保留原始异常供 error 处理。
+
+        Args:
+            graph_name: 执行或观测记录中的 Graph 注册名称。
+            node_id: Graph 内绑定的节点 ID。
+            node: 节点实例或作用域中的节点 ID，以接口类型为准。
+            inputs: 入口数据或按端口名称组织的输入映射。
+            context: 当前调用的执行或插件上下文。
+            hooks: 待装配的节点 Hook 集合。
+            input_ports: 节点声明的输入端口集合。
+            execution: 记录当前执行状态、控制限制及输出的句柄。
+
+        Returns:
+            符合声明端口契约的 Output 集合。
+
+        Raises:
+            ExecutionError: Graph 或节点执行未能完成。
+        """
 
         original = NodeCall(graph_name, node_id, node, inputs, context)
 
         def invoke(index: int, call: NodeCall) -> Outputs:
+            """在输入与控制约束下调用当前节点的执行方法。
+
+            Args:
+                index: 条目的索引或切片。
+                call: Hook 当前处理的节点调用记录。
+
+            Returns:
+                符合声明端口契约的 Output。
+
+            Raises:
+                HookExecutionError: Hook 的调用或返回结果违反约束。
+            """
+
             if index == len(hooks):
                 try:
                     result = self._resolve(
@@ -369,10 +461,32 @@ class Engine:
         node_id: str,
         execution: Execution,
     ) -> Outputs:
+        """解析 Hook 输出并校验输出类型和端口契约。
+
+        Args:
+            value: 当前节点或 Hook 产生的待解析返回值。
+            graph_name: 执行或观测记录中的 Graph 注册名称。
+            node_id: Graph 内绑定的节点 ID。
+            execution: 记录当前执行状态、控制限制及输出的句柄。
+
+        Returns:
+            符合声明端口契约的 Output。
+        """
+
         resolved = self._resolve(value, execution)
         return self._coerce_outputs(resolved, graph_name, node_id, "Hook")
 
     def _resolve(self, value: object, execution: Execution) -> object:
+        """通过调用运行器解析同步值或等待异步结果。
+
+        Args:
+            value: 当前节点或 Hook 产生的待解析返回值。
+            execution: 记录当前执行状态、控制限制及输出的句柄。
+
+        Returns:
+            实现自行选择的组合结果，调用方不依赖其具体类型。
+        """
+
         return self._runner.resolve(
             value,
             checkpoint=execution.checkpoint,
@@ -386,6 +500,22 @@ class Engine:
         node_id: str | None,
         source: str,
     ) -> Outputs:
+        """规范化节点返回值，拒绝不符合 Output 契约的内容。
+
+        Args:
+            result: 待解析或校验的节点执行结果。
+            graph_name: 执行或观测记录中的 Graph 注册名称。
+            node_id: Graph 内绑定的节点 ID。
+            source: 源节点、原始对象或待转换数据。
+
+        Returns:
+            符合声明端口契约的 Output。
+
+        Raises:
+            ExecutionError: Graph 或节点执行未能完成。
+            InvalidOutputError: 节点输出不符合 Output 契约。
+        """
+
         try:
             return tuple(Engine._iter_outputs(result))
         except ExecutionError:
@@ -411,6 +541,23 @@ class Engine:
         graph_name: str,
         node_id: str,
     ) -> NodeCall:
+        """确保 Hook 仅修改允许的数据，不改变节点调用身份。
+
+        Args:
+            original: 修改前的原始调用或定义。
+            modified: 待校验的修改结果。
+            input_ports: 节点声明的输入端口集合。
+            graph_name: 执行或观测记录中的 Graph 注册名称。
+            node_id: Graph 内绑定的节点 ID。
+
+        Returns:
+            身份约束通过校验的 NodeCall。
+
+        Raises:
+            HookExecutionError: Hook 的调用或返回结果违反约束。
+            PortValueTypeError: 实际输入或输出值不符合端口类型。
+        """
+
         if not isinstance(modified, NodeCall):
             raise HookExecutionError(
                 "hook enter must return NodeCall",
@@ -447,7 +594,17 @@ class Engine:
 
     @staticmethod
     def _iter_outputs(result: object) -> Iterator[Output]:
-        """把 Node 返回值规范化为按顺序校验的 Output 迭代器。"""
+        """把 Node 返回值规范化为按顺序校验的 Output 迭代器。
+
+        Args:
+            result: 待解析或校验的节点执行结果。
+
+        Returns:
+            按产生顺序交付终端 Output 的迭代入口。
+
+        Raises:
+            TypeError: 参数类型或接口实现不符合当前契约。
+        """
 
         if result is None:
             return iter(())
@@ -459,6 +616,15 @@ class Engine:
             raise TypeError("Node must return Output, Iterable[Output], or None")
 
         def validated() -> Iterator[Output]:
+            """逐项校验输出类型和端口后继续交付。
+
+            Yields:
+                按原始顺序通过 Output 类型校验的节点输出。
+
+            Raises:
+                TypeError: 参数类型或接口实现不符合当前契约。
+            """
+
             for output in result:
                 if not isinstance(output, Output):
                     raise TypeError("Node output iterable must contain only Output")
@@ -468,6 +634,19 @@ class Engine:
 
     @staticmethod
     def _coerce_inputs(graph: Graph, value: Any) -> Mapping[str, Any]:
+        """将入口输入规范化为符合端口声明的映射。
+
+        Args:
+            graph: 目标 Graph 定义或其注册名称，以类型声明为准。
+            value: 当前节点或 Hook 产生的待解析返回值。
+
+        Returns:
+            按端口名称组织的已校验输入映射。
+
+        Raises:
+            PortValueTypeError: 实际输入或输出值不符合端口类型。
+        """
+
         ports = graph.spec_for(graph.entrypoint).input_ports
         names = tuple(ports)
         if not names:

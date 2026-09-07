@@ -1,4 +1,4 @@
-"""Shared field validation and normalization for crawler models."""
+"""爬虫模型共享的字段校验与规范化函数。"""
 
 from __future__ import annotations
 
@@ -15,6 +15,19 @@ _TOKEN = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 def entries(
     values: Mapping[str, Any] | Iterable[tuple[str, Any]], label: str
 ) -> Iterator[tuple[Any, Any]]:
+    """统一遍历映射或有序键值对，校验条目结构。
+
+    Args:
+        values: 字段映射或有序键值对迭代器。
+        label: 校验失败时用于指明字段的说明名称。
+
+    Yields:
+        按输入顺序排列的键值对，不合并同名字段。
+
+    Raises:
+        TypeError: 参数类型或接口实现不符合当前契约。
+    """
+
     if isinstance(values, Mapping):
         yield from values.items()
         return
@@ -27,6 +40,20 @@ def entries(
 
 
 def token(value: str, label: str) -> str:
+    """校验字段值符合 HTTP token 字符规则。
+
+    Args:
+        value: 待校验的 HTTP 字段名称或方法字符串。
+        label: 校验失败时用于指明字段的说明名称。
+
+    Returns:
+        通过 HTTP token 校验的原始字符串。
+
+    Raises:
+        TypeError: 参数类型或接口实现不符合当前契约。
+        ValueError: 参数值或字段组合不合法。
+    """
+
     if not isinstance(value, str):
         raise TypeError(f"{label} must be a string")
     if not _TOKEN.fullmatch(value):
@@ -35,6 +62,19 @@ def token(value: str, label: str) -> str:
 
 
 def http_url(value: str) -> str:
+    """校验绝对 HTTP 或 HTTPS URL，拒绝空白和控制字符。
+
+    Args:
+        value: 待校验的绝对 HTTP 或 HTTPS URL。
+
+    Returns:
+        通过校验的原始 URL 字符串。
+
+    Raises:
+        TypeError: 参数类型或接口实现不符合当前契约。
+        ValueError: 参数值或字段组合不合法。
+    """
+
     if not isinstance(value, str):
         raise TypeError("url must be a string")
     if any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value):
@@ -49,6 +89,21 @@ def http_url(value: str) -> str:
 def duration(
     value: float | None, label: str, *, allow_zero: bool = False
 ) -> float | None:
+    """校验并规范化秒数，按参数决定是否允许零值。
+
+    Args:
+        value: 待校验的秒数，None 表示未指定时限。
+        label: 校验失败时用于指明字段的说明名称。
+        allow_zero: 是否允许零秒作为合法时长。
+
+    Returns:
+        规范化后的浮点秒数，或表示未设置的 None。
+
+    Raises:
+        TypeError: 参数类型或接口实现不符合当前契约。
+        ValueError: 参数值或字段组合不合法。
+    """
+
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -61,6 +116,19 @@ def duration(
 
 
 def cookies(values: Mapping[str, str] | None) -> Mapping[str, str]:
+    """校验 Cookie 名称和值，并返回独立的只读映射。
+
+    Args:
+        values: Cookie 名称和值的映射，None 表示空集合。
+
+    Returns:
+        独立、只读的 Cookie 名称到值映射。
+
+    Raises:
+        TypeError: 参数类型或接口实现不符合当前契约。
+        ValueError: 参数值或字段组合不合法。
+    """
+
     if values is None:
         return MappingProxyType({})
     if not isinstance(values, Mapping):
@@ -77,6 +145,18 @@ def cookies(values: Mapping[str, str] | None) -> Mapping[str, str]:
 
 
 def request_cookies(values: Mapping[str, str] | None) -> Mapping[str, str]:
+    """校验显式请求 Cookie，拒绝会改变请求头结构的字符。
+
+    Args:
+        values: 显式请求 Cookie 映射，不自动转义字段值。
+
+    Returns:
+        可安全序列化为请求 Cookie 的只读映射。
+
+    Raises:
+        ValueError: 参数值或字段组合不合法。
+    """
+
     result = cookies(values)
     for value in result.values():
         if any(

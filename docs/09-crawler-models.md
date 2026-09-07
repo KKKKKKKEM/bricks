@@ -1,6 +1,7 @@
 # 第九章：爬虫领域模型
 
-`bricks.frameworks.crawler` 当前提供请求、响应与记录模型，还没有下载器、调度器或流式上传实现。
+`bricks.frameworks.crawler` 提供请求、响应与记录模型，以及[下载器和下载节点](10-crawler-download.md)。
+当前还没有爬虫调度器或流式上传实现。
 
 ## Request 的请求体
 
@@ -48,7 +49,7 @@ JSON 和 form 在没有手动指定 Content-Type 时自动添加请求头。切�
 
 Request 可以在请求前 Hook 中原地修改 headers、params、cookies 和 body；独立分支应先 copy。Headers 查询不区分大小写，
 赋值替换所有同名字段，add 追加字段；params 同样支持赋值替换与 add 追加，但键名区分大小写。
-运行时不会自动复制领域对象，也没有提供下载开始后的请求快照机制。
+运行时不会自动复制领域对象；下载节点在选择和调用下载器前复制请求，HTTPX 下载器记录实际发送的请求快照。
 
 headers 和 params 的 `update()` 遵循普通映射语义；传入另一个多值容器时，只读取每个名称的最后一个值。
 需要保留全部重复值时，使用 `source.raw` 逐项调用 `add(name, value)`，或直接赋值整个容器以构造独立副本。

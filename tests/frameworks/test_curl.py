@@ -10,6 +10,8 @@ from bricks.frameworks.crawler import Request, UploadFile
 
 
 def test_browser_curl_and_defaults():
+    """验证浏览器 cURL 导入与默认请求设置。"""
+
     request = Request.from_curl("""curl 'https://example.com?q=one' \\
       -H 'Accept: application/json' \\
       -H 'X-Test: one' -H 'X-Test: two' \\
@@ -27,6 +29,12 @@ def test_browser_curl_and_defaults():
     [None, b"", b"\n", b"\\\n", b"@literal", b"line1\r\nline2", b"'$(no); & < > `x`"],
 )
 def test_round_trip_preserves_encoded_request(body):
+    """验证 cURL 往返转换保留已编码请求。
+
+    Args:
+        body: 待编码的请求体数据。
+    """
+
     original = Request(
         "https://example.com/path?x=1#frag",
         method="PATCH",
@@ -49,6 +57,8 @@ def test_round_trip_preserves_encoded_request(body):
 
 
 def test_short_options_json_get_and_auth():
+    """验证 cURL 短选项、JSON、查询参数与基本认证。"""
+
     request = Request.from_curl(
         "curl -sSL -XPUT -m0 -u user:password --json '{\"x\":1}' https://example.com"
     )
@@ -66,6 +76,8 @@ def test_short_options_json_get_and_auth():
 
 
 def test_file_input_is_explicit_and_binary_export_round_trips():
+    """验证文件内容须显式提供且二进制导出可往返。"""
+
     request = Request("https://example.com", method="POST", body=bytes(range(256)))
     with pytest.raises(ValueError, match="body_file"):
         request.to_curl()
@@ -83,6 +95,8 @@ def test_file_input_is_explicit_and_binary_export_round_trips():
 
 
 def test_multipart_file_import_and_export():
+    """验证 multipart 文件上传的 cURL 导入和导出。"""
+
     request = Request.from_curl(
         "curl -F 'file=@input;filename=report.txt;type=text/plain' https://example.com",
         files={"input": b"hello"},
@@ -124,17 +138,27 @@ def test_multipart_file_import_and_export():
     ],
 )
 def test_unsupported_commands_fail(command):
+    """验证不支持的 cURL 命令明确失败。
+
+    Args:
+        command: 需要解析的单条 POSIX cURL 命令。
+    """
+
     with pytest.raises(ValueError):
         Request.from_curl(command)
 
 
 def test_exported_command_against_real_curl():
+    """用真实 cURL 验证导出命令的请求内容。"""
+
     if shutil.which("curl") is None:
         pytest.skip("curl executable is unavailable")
     received = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
+            """记录本地测试 POST 请求的路径、请求头与内容。"""
+
             received.append(
                 (
                     self.path,
@@ -146,6 +170,13 @@ def test_exported_command_against_real_curl():
             self.end_headers()
 
         def log_message(self, format: str, *args: object) -> None:
+            """屏蔽本地测试 HTTP 服务的常规访问日志。
+
+            Args:
+                format: 当前用例使用的 format 夹具或参数化输入。
+                *args: 调用协议传入的位置参数。
+            """
+
             pass
 
     server = HTTPServer(("127.0.0.1", 0), Handler)

@@ -18,7 +18,17 @@ _VERSION = re.compile(r"^[0-9]+(?:\.[0-9]+){0,2}(?:[-+][A-Za-z0-9.-]+)?$")
 
 @dataclass(frozen=True, slots=True)
 class PluginDescriptor:
-    """插件身份、依赖以及声明提供的能力。"""
+    """插件身份、依赖以及声明提供的能力。
+
+    Attributes:
+        id: 当前对象的唯一标识。
+        version: 插件版本。
+        requires: 必须先装配的插件标识集合。
+        provides: 插件声明提供的单例能力集合。
+        api_version: 插件声明兼容的 SPI 主版本。
+        requires_capabilities: 插件启动前必须存在的能力集合。
+        contributes: 插件声明提供的聚合贡献类别。
+    """
 
     id: str
     version: str
@@ -29,6 +39,13 @@ class PluginDescriptor:
     contributes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        """校验构造字段并固定需要保持不变的数据。
+
+        Raises:
+            TypeError: 参数类型或接口实现不符合当前契约。
+            ValueError: 参数值或字段组合不合法。
+        """
+
         plugin_id = require_non_empty_string(self.id, "plugin id")
         if "/" not in plugin_id:
             raise ValueError("plugin id must be namespaced")
@@ -63,22 +80,47 @@ class PluginDescriptor:
 
 
 class Plugin(Protocol):
-    """一个可以向宿主贡献能力并参与生命周期的插件。"""
+    """一个可以向宿主贡献能力并参与生命周期的插件。
+
+    Attributes:
+        descriptor: 插件身份、依赖和能力声明。
+    """
 
     descriptor: PluginDescriptor
 
     def setup(self, context: PluginContext) -> None:
-        """注册能力；此阶段不能使用尚未启动的外部资源。"""
+        """注册能力；此阶段不能使用尚未启动的外部资源。
+
+        Args:
+            context: 当前调用的执行或插件上下文。
+        """
 
     def start(self, context: PluginContext) -> None:
-        """在全部插件完成 setup 后启动。"""
+        """在全部插件完成 setup 后启动。
+
+        Args:
+            context: 当前调用的执行或插件上下文。
+        """
 
     def stop(self, context: PluginContext) -> None:
-        """释放资源；宿主按照启动顺序的逆序调用。"""
+        """释放资源；宿主按照启动顺序的逆序调用。
+
+        Args:
+            context: 当前调用的执行或插件上下文。
+        """
 
 
 @dataclass(frozen=True, slots=True)
 class Contribution:
+    """一个插件登记的具名聚合能力贡献。
+
+    Attributes:
+        plugin: 贡献所属的插件标识。
+        capability: 当前贡献所属的能力类别。
+        name: 当前注册项或具名策略的名称。
+        value: 当前记录携带的数据值。
+    """
+
     plugin: str
     capability: str
     name: str
@@ -87,7 +129,14 @@ class Contribution:
 
 @dataclass(frozen=True, slots=True)
 class NodeHookContribution:
-    """一个带作用域的动态 Node Hook 贡献。"""
+    """一个带作用域的动态 Node Hook 贡献。
+
+    Attributes:
+        hook: 注册的节点 Hook 实例。
+        phase: 函数 Hook 对应的执行阶段。
+        graph: 关联的 Graph 定义或注册名称。
+        node: 关联的节点实例或 Graph 内节点 ID。
+    """
 
     hook: NodeHook | Callable[..., object] = field(compare=False, repr=False)
     phase: HookPhase | str | None = None
@@ -95,6 +144,13 @@ class NodeHookContribution:
     node: str | None = None
 
     def __post_init__(self) -> None:
+        """校验构造字段并固定需要保持不变的数据。
+
+        Raises:
+            TypeError: 参数类型或接口实现不符合当前契约。
+            ValueError: 参数值或字段组合不合法。
+        """
+
         if not isinstance(self.hook, NodeHook) and not callable(self.hook):
             raise TypeError("hook must be a NodeHook or callable")
         if isinstance(self.hook, NodeHook) and self.phase is not None:
@@ -110,42 +166,95 @@ class NodeHookContribution:
 
 
 class RegistrationHandle:
-    """控制一项尚未冻结的能力注册。"""
+    """控制一项尚未冻结的能力注册。
+
+    Attributes:
+        __slots__: 实例允许保存的字段名称，限制动态增加属性。
+        _detach: 解除注册关系的回调。
+        _detached: 是否已完成卸载，避免重复释放。
+    """
 
     __slots__ = ("_detach", "_detached")
 
     def __init__(self, detach: Callable[[], None]) -> None:
+        """保存可幂等调用的注册卸载回调。
+
+        Args:
+            detach: 执行注册项卸载的回调。
+        """
+
         self._detach = detach
         self._detached = False
 
     def detach(self) -> None:
+        """解除当前句柄对应的注册关系。"""
+
         if not self._detached:
             self._detach()
             self._detached = True
 
     def __enter__(self) -> RegistrationHandle:  # noqa: PYI034
+        """进入资源作用域并返回当前句柄。
+
+        Returns:
+            当前资源管理对象。
+        """
+
         return self
 
     def __exit__(self, *args: object) -> None:
+        """退出资源作用域，执行对应的关闭或卸载操作。
+
+        Args:
+            *args: 调用协议传入的位置参数。
+        """
+
         del args
         self.detach()
 
 
 class PluginContext:
-    """插件可见的最小宿主接口。"""
+    """插件可见的最小宿主接口。
+
+    Attributes:
+        __slots__: 实例允许保存的字段名称，限制动态增加属性。
+        _host: 当前上下文所属的插件宿主。
+        _plugin: 当前上下文绑定的插件声明。
+    """
 
     __slots__ = ("_host", "_plugin")
 
     def __init__(self, host: PluginHost, plugin: str) -> None:
+        """将插件身份绑定到宿主公开的受控装配入口。
+
+        Args:
+            host: 装配插件和管理能力的宿主。
+            plugin: 当前插件实例或其声明身份。
+        """
+
         self._host = host
         self._plugin = plugin
 
     @property
     def plugin(self) -> str:
+        """返回当前插件上下文绑定的插件声明。
+
+        Returns:
+            当前上下文绑定的插件声明。
+        """
+
         return self._plugin
 
     def provide(self, capability: str, value: Any) -> RegistrationHandle:
-        """提供一个排他的单例能力。"""
+        """提供一个排他的单例能力。
+
+        Args:
+            capability: 需要提供、取得或移除的能力名称。
+            value: 插件提供的单例实现或具名贡献对象。
+
+        Returns:
+            用于卸载本次注册的句柄。
+        """
 
         return self._host._provide(self._plugin, capability, value)
 
@@ -155,25 +264,67 @@ class PluginContext:
         name: str,
         value: Any,
     ) -> RegistrationHandle:
-        """向可聚合能力提供一个具名贡献。"""
+        """向可聚合能力提供一个具名贡献。
+
+        Args:
+            capability: 需要提供、取得或移除的能力名称。
+            name: 注册或查找使用的名称。
+            value: 插件提供的单例实现或具名贡献对象。
+
+        Returns:
+            用于卸载本次注册的句柄。
+        """
 
         return self._host._contribute(self._plugin, capability, name, value)
 
     def require(self, capability: str) -> Any:
-        """取得已经完成 setup 的单例能力。"""
+        """取得已经完成 setup 的单例能力。
+
+        Args:
+            capability: 需要提供、取得或移除的能力名称。
+
+        Returns:
+            指定能力的已装配实现。
+        """
 
         return self._host.require(capability)
 
     def contributions(self, capability: str) -> tuple[Contribution, ...]:
+        """取得当前上下文可见的聚合能力贡献。
+
+        Args:
+            capability: 需要提供、取得或移除的能力名称。
+
+        Returns:
+            当前能力或插件上下文可见的贡献快照。
+        """
+
         return self._host.contributions(capability)
 
 
 class PluginHost:
-    """解析插件依赖，并管理统一能力注册和生命周期。"""
+    """解析插件依赖，并管理统一能力注册和生命周期。
+
+    Attributes:
+        API_VERSION: 当前宿主支持的 SPI 主版本。
+        _plugins: 按依赖顺序排列的插件实例。
+        _capabilities: 已经注册的单例能力及其提供者。
+        _contributions: 按能力类别组织的具名贡献。
+        _contexts: 按插件身份保存的受控装配上下文。
+        _started: 已接管生命周期、需要逆序关闭的插件集合。
+        _frozen: 是否已完成冻结，冻结后不再接受定义修改。
+        _closed: 当前组件是否已停止接受新工作。
+    """
 
     API_VERSION = "1"
 
     def __init__(self, plugins: Iterable[Plugin]) -> None:
+        """校验插件依赖并初始化能力、贡献和生命周期记录。
+
+        Args:
+            plugins: 待装配的插件实例集合。
+        """
+
         self._plugins = self._normalize(plugins)
         self._capabilities: dict[str, tuple[str, Any]] = {}
         self._contributions: dict[str, dict[str, Contribution]] = defaultdict(dict)
@@ -187,9 +338,24 @@ class PluginHost:
 
     @property
     def descriptors(self) -> tuple[PluginDescriptor, ...]:
+        """返回按装配顺序排列的插件声明快照。
+
+        Returns:
+            按装配顺序排列的插件声明。
+        """
+
         return tuple(descriptor for descriptor, _ in self._plugins)
 
     def start(self) -> PluginHost:
+        """按依赖顺序装配和启动插件，失败时执行逆序回滚。
+
+        Returns:
+            本次操作得到的 PluginHost 实例。
+
+        Raises:
+            RuntimeError: 当前生命周期状态或操作顺序不允许此操作。
+        """
+
         if self._closed:
             raise RuntimeError("plugin host is closed")
         if self._frozen:
@@ -228,6 +394,18 @@ class PluginHost:
         return self
 
     def require(self, capability: str) -> Any:
+        """按能力名称取得已经装配的单例实现。
+
+        Args:
+            capability: 需要提供、取得或移除的能力名称。
+
+        Returns:
+            指定能力的已装配实现。
+
+        Raises:
+            LookupError: 指定编码不存在或不是文本编码。
+        """
+
         capability = require_non_empty_string(capability, "capability")
         try:
             return self._capabilities[capability][1]
@@ -237,10 +415,21 @@ class PluginHost:
             ) from exc
 
     def contributions(self, capability: str) -> tuple[Contribution, ...]:
+        """返回当前可见的具名能力贡献快照。
+
+        Args:
+            capability: 需要提供、取得或移除的能力名称。
+
+        Returns:
+            当前能力或插件上下文可见的贡献快照。
+        """
+
         capability = require_non_empty_string(capability, "capability")
         return tuple(self._contributions.get(capability, {}).values())
 
     def close(self) -> None:
+        """逆序关闭已接管的插件，单个关闭失败不跳过后续插件。"""
+
         if self._closed:
             return
         self._closed = True
@@ -249,6 +438,20 @@ class PluginHost:
             raise failure
 
     def _provide(self, plugin: str, capability: str, value: Any) -> RegistrationHandle:
+        """登记插件提供的单例能力并检查声明与冲突。
+
+        Args:
+            plugin: 当前插件实例或其声明身份。
+            capability: 需要提供、取得或移除的能力名称。
+            value: 插件提供的单例实现或具名贡献对象。
+
+        Returns:
+            用于卸载本次注册的句柄。
+
+        Raises:
+            ValueError: 参数值或字段组合不合法。
+        """
+
         self._ensure_registering()
         capability = require_non_empty_string(capability, "capability")
         self._ensure_declared(plugin, capability, aggregate=False)
@@ -263,6 +466,21 @@ class PluginHost:
     def _contribute(
         self, plugin: str, capability: str, name: str, value: Any
     ) -> RegistrationHandle:
+        """向宿主登记一项具名的聚合能力贡献。
+
+        Args:
+            plugin: 当前插件实例或其声明身份。
+            capability: 需要提供、取得或移除的能力名称。
+            name: 注册或查找使用的名称。
+            value: 插件提供的单例实现或具名贡献对象。
+
+        Returns:
+            用于卸载本次注册的句柄。
+
+        Raises:
+            ValueError: 参数值或字段组合不合法。
+        """
+
         self._ensure_registering()
         capability = require_non_empty_string(capability, "capability")
         self._ensure_declared(plugin, capability, aggregate=True)
@@ -280,6 +498,17 @@ class PluginHost:
     def _ensure_declared(
         self, plugin: str, capability: str, *, aggregate: bool
     ) -> None:
+        """检查插件是否兑现全部声明的单例和聚合能力。
+
+        Args:
+            plugin: 当前插件实例或其声明身份。
+            capability: 需要提供、取得或移除的能力名称。
+            aggregate: 是否读取同一能力的多个具名贡献。
+
+        Raises:
+            ValueError: 参数值或字段组合不合法。
+        """
+
         descriptor = next(item for item, _ in self._plugins if item.id == plugin)
         declared = descriptor.contributes if aggregate else descriptor.provides
         if capability not in declared:
@@ -288,21 +517,48 @@ class PluginHost:
             )
 
     def _remove_capability(self, plugin: str, capability: str) -> None:
+        """回滚插件登记的单例能力。
+
+        Args:
+            plugin: 当前插件实例或其声明身份。
+            capability: 需要提供、取得或移除的能力名称。
+        """
+
         self._ensure_registering()
         if self._capabilities.get(capability, (None,))[0] == plugin:
             del self._capabilities[capability]
 
     def _remove_contribution(self, plugin: str, capability: str, name: str) -> None:
+        """回滚插件登记的具名贡献。
+
+        Args:
+            plugin: 当前插件实例或其声明身份。
+            capability: 需要提供、取得或移除的能力名称。
+            name: 注册或查找使用的名称。
+        """
+
         self._ensure_registering()
         entry = self._contributions.get(capability, {}).get(name)
         if entry is not None and entry.plugin == plugin:
             del self._contributions[capability][name]
 
     def _ensure_registering(self) -> None:
+        """确保插件宿主仍处于允许注册能力的阶段。
+
+        Raises:
+            RuntimeError: 当前生命周期状态或操作顺序不允许此操作。
+        """
+
         if self._frozen or self._closed:
             raise RuntimeError("plugin registrations are frozen")
 
     def _stop_started(self) -> BaseException | None:
+        """按启动顺序的逆序停止插件，并收集关闭失败。
+
+        Returns:
+            关闭过程中最先出现的异常，全部成功时为 None。
+        """
+
         failure: BaseException | None = None
         for descriptor, plugin in reversed(self._started):
             try:
@@ -317,6 +573,19 @@ class PluginHost:
     def _normalize(
         plugins: Iterable[Plugin],
     ) -> tuple[tuple[PluginDescriptor, Plugin], ...]:
+        """校验插件声明并按依赖关系确定装配顺序。
+
+        Args:
+            plugins: 待装配的插件实例集合。
+
+        Returns:
+            按依赖顺序排列的插件声明与实例对。
+
+        Raises:
+            TypeError: 参数类型或接口实现不符合当前契约。
+            ValueError: 参数值或字段组合不合法。
+        """
+
         candidates: dict[str, tuple[PluginDescriptor, Plugin]] = {}
         try:
             values = tuple(plugins)
@@ -371,6 +640,15 @@ class PluginHost:
         visited: set[str] = set()
 
         def visit(plugin_id: str) -> None:
+            """递归访问插件依赖，并检测循环依赖。
+
+            Args:
+                plugin_id: 带命名空间的插件标识。
+
+            Raises:
+                ValueError: 参数值或字段组合不合法。
+            """
+
             if plugin_id in visiting:
                 raise ValueError(f"cyclic plugin dependency involving {plugin_id!r}")
             if plugin_id in visited:
@@ -405,7 +683,14 @@ CAP_RUNTIME_OBSERVER = "bricks.contribution/runtime-observer"
 
 
 class ContributionPlugin:
-    """把常见 Policy、Hook 和 Observer 组合成一个声明式插件。"""
+    """把常见 Policy、Hook 和 Observer 组合成一个声明式插件。
+
+    Attributes:
+        _selectors: 带命名空间的输入策略实现映射。
+        _hooks: 准备贡献的具名节点 Hook。
+        _observers: 按注册顺序排列的运行时观察者快照。
+        descriptor: 插件身份、依赖和能力声明。
+    """
 
     def __init__(
         self,
@@ -418,6 +703,17 @@ class ContributionPlugin:
         | None = None,
         observers: Mapping[str, RuntimeObserver] | None = None,
     ) -> None:
+        """固定待注册的策略、Hook 和观察者贡献。
+
+        Args:
+            plugin_id: 带命名空间的插件标识。
+            version: 等待开始前观察到的通知版本。
+            requires: 当前插件依赖的插件标识集合。
+            selectors: 待注册的具名输入选择器。
+            hooks: 待装配的节点 Hook 集合。
+            observers: 待装配的运行时观察者集合。
+        """
+
         self._selectors = {} if selectors is None else dict(selectors)
         self._hooks = {} if hooks is None else dict(hooks)
         self._observers = {} if observers is None else dict(observers)
@@ -438,6 +734,12 @@ class ContributionPlugin:
         )
 
     def setup(self, context: PluginContext) -> None:
+        """在插件装配阶段登记声明的能力或贡献。
+
+        Args:
+            context: 当前调用的执行或插件上下文。
+        """
+
         for name, selector in self._selectors.items():
             context.contribute(CAP_INPUT_SELECTOR, name, selector)
         for name, hook in self._hooks.items():
@@ -446,7 +748,19 @@ class ContributionPlugin:
             context.contribute(CAP_RUNTIME_OBSERVER, name, observer)
 
     def start(self, context: PluginContext) -> None:
+        """完成纯贡献插件的启动阶段，无额外外部资源需要启动。
+
+        Args:
+            context: 当前调用的执行或插件上下文。
+        """
+
         del context
 
     def stop(self, context: PluginContext) -> None:
+        """完成纯贡献插件的停止阶段，无额外外部资源需要释放。
+
+        Args:
+            context: 当前调用的执行或插件上下文。
+        """
+
         del context

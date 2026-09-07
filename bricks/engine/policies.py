@@ -18,15 +18,37 @@ class InputSelector(Protocol):
         available: Mapping[str, int],
         config: Mapping[str, Any],
     ) -> tuple[str, ...] | None:
-        """只根据端口和可用数量选择本次各消费一个 token 的端口。"""
+        """只根据端口和可用数量选择本次各消费一个 token 的端口。
+
+        Args:
+            ports: 保持声明顺序的输入端口名称。
+            available: 各端口当前可消费的 token 数量。
+            config: 当前具名策略的参数映射。
+
+        Returns:
+            符合当前可用条件的选择结果，没有可执行输入时不触发。
+        """
 
 
 @dataclass(frozen=True, slots=True)
 class PolicyRef:
+    """带命名空间名称和只读参数的输入策略引用。
+
+    Attributes:
+        name: 当前注册项或具名策略的名称。
+        config: 冻结的策略参数映射。
+    """
+
     name: str
     config: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        """校验构造字段并固定需要保持不变的数据。
+
+        Raises:
+            TypeError: 参数类型或接口实现不符合当前契约。
+        """
+
         require_non_empty_string(self.name, "policy name")
         if not isinstance(self.config, Mapping):
             raise TypeError("policy config must be a mapping")
@@ -35,11 +57,24 @@ class PolicyRef:
 
 @dataclass(frozen=True, slots=True)
 class BoundPolicy:
+    """Graph 冻结时绑定的策略引用与实现快照。
+
+    Attributes:
+        ref: 策略名称及参数的不可变引用。
+        selector: 冻结时绑定的输入选择实现。
+    """
+
     ref: PolicyRef
     selector: InputSelector
 
     @property
     def on_start(self) -> bool:
+        """判断已绑定策略是否为启动时触发策略。
+
+        Returns:
+            绑定的是启动触发策略时返回 True。
+        """
+
         return self.ref.name == "bricks.core/on-start"
 
     def select(
@@ -47,6 +82,19 @@ class BoundPolicy:
         ports: Sequence[str],
         queues: Mapping[str, Sequence[object]],
     ) -> tuple[str, ...] | None:
+        """仅根据端口名称和可用 token 数量选择本次输入组合。
+
+        Args:
+            ports: 保持声明顺序的输入端口名称。
+            queues: 各端口已有的输入 token 队列。
+
+        Returns:
+            符合当前可用条件的选择结果，没有可执行输入时不触发。
+
+        Raises:
+            RuntimeError: 当前生命周期状态或操作顺序不允许此操作。
+        """
+
         available = MappingProxyType(
             {port: len(queues.get(port, ())) for port in ports}
         )
@@ -78,6 +126,17 @@ class _AllSelector:
         available: Mapping[str, int],
         config: Mapping[str, Any],
     ) -> tuple[str, ...] | None:
+        """所有声明端口都有数据时选择全部端口，否则暂不触发。
+
+        Args:
+            ports: 保持声明顺序的输入端口名称。
+            available: 各端口当前可消费的 token 数量。
+            config: 当前具名策略的参数映射。
+
+        Returns:
+            符合当前可用条件的选择结果，没有可执行输入时不触发。
+        """
+
         del config
         selected = tuple(ports)
         return (
@@ -92,6 +151,17 @@ class _AnySelector:
         available: Mapping[str, int],
         config: Mapping[str, Any],
     ) -> tuple[str, ...] | None:
+        """按声明顺序选择第一个非空端口。
+
+        Args:
+            ports: 保持声明顺序的输入端口名称。
+            available: 各端口当前可消费的 token 数量。
+            config: 当前具名策略的参数映射。
+
+        Returns:
+            符合当前可用条件的选择结果，没有可执行输入时不触发。
+        """
+
         del config
         return next(((port,) for port in ports if available[port]), None)
 
@@ -103,13 +173,28 @@ class _OnStartSelector:
         available: Mapping[str, int],
         config: Mapping[str, Any],
     ) -> None:
+        """启动策略不选择端口 token，由执行器控制单次启动触发。
+
+        Args:
+            ports: 保持声明顺序的输入端口名称。
+            available: 各端口当前可消费的 token 数量。
+            config: 当前具名策略的参数映射。
+        """
+
         del ports, available, config
 
 
 class PolicyRegistry:
-    """注册 namespaced selector；Graph freeze 会保存实现快照。"""
+    """注册 namespaced selector；Graph freeze 会保存实现快照。
+
+    Attributes:
+        _selectors: 带命名空间的输入策略实现映射。
+        _lock: 保护当前组件共享状态的进程内互斥锁。
+    """
 
     def __init__(self) -> None:
+        """注册三种内建输入策略并初始化策略注册锁。"""
+
         self._selectors: dict[str, InputSelector] = {
             "bricks.core/all": _AllSelector(),
             "bricks.core/any": _AnySelector(),
@@ -118,6 +203,17 @@ class PolicyRegistry:
         self._lock = RLock()
 
     def register(self, name: str, selector: InputSelector) -> None:
+        """注册具名输入选择器，拒绝重复名称和缺失命名空间。
+
+        Args:
+            name: 注册或查找使用的名称。
+            selector: 仅依据端口和 token 数量选择输入的实现。
+
+        Raises:
+            TypeError: 参数类型或接口实现不符合当前契约。
+            ValueError: 参数值或字段组合不合法。
+        """
+
         name = require_non_empty_string(name, "policy name")
         if "/" not in name:
             raise ValueError("contributed policy names must be namespaced")
@@ -129,6 +225,19 @@ class PolicyRegistry:
             self._selectors[name] = selector
 
     def bind(self, policy: InputPolicy | PolicyRef) -> BoundPolicy:
+        """将输入策略引用绑定为包含实现快照的 BoundPolicy。
+
+        Args:
+            policy: 内建输入策略或具名策略引用。
+
+        Returns:
+            本次操作得到的 BoundPolicy 实例。
+
+        Raises:
+            TypeError: 参数类型或接口实现不符合当前契约。
+            ValueError: 参数值或字段组合不合法。
+        """
+
         if isinstance(policy, InputPolicy):
             names = {
                 InputPolicy.ALL: "bricks.core/all",

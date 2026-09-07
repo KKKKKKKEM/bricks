@@ -30,7 +30,23 @@ from .worker import GraphWorker
 
 
 class LocalRuntimePlugin:
-    """使用标准能力协议组装单进程 Runtime 的内建插件。"""
+    """使用标准能力协议组装单进程 Runtime 的内建插件。
+
+    Attributes:
+        descriptor: 插件身份、依赖和能力声明。
+        _events: 事件传输实现。
+        _tasks: 任务发布与消费后端。
+        _router_observations: 路由角色的生命周期观察中心。
+        _worker_observations: 执行角色的生命周期观察中心。
+        _policies: 当前角色使用的输入策略注册能力。
+        _executor: 执行 Graph 的实现。
+        _execution_factory: 创建可替换 Execution 句柄的工厂。
+        _provided: 当前默认插件负责提供的能力集合。
+        _owned: 由当前插件接管并负责关闭的组件。
+        _close_injected: 是否负责关闭调用方注入的底层组件。
+        router: 负责事件发布和工作路由的角色。
+        worker: 负责消费工作和执行 Graph 的角色。
+    """
 
     descriptor = PluginDescriptor(
         "bricks.core/local-runtime",
@@ -55,6 +71,21 @@ class LocalRuntimePlugin:
         close_injected: bool = False,
         _provide_capabilities: frozenset[str] | None = None,
     ) -> None:
+        """保存默认装配需要的底层组件与资源所有权设置。
+
+        Args:
+            events: 注入的事件传输实现。
+            tasks: 注入的任务传输实现。
+            executor: 实际执行任务或 Graph 的实现。
+            execution_factory: 创建独立 Execution 句柄的工厂能力。
+            close_injected: 是否由当前组件关闭注入的底层资源。
+            _provide_capabilities: 默认插件需要自行提供的底层能力集合。
+
+        Raises:
+            TypeError: 参数类型或接口实现不符合当前契约。
+            ValueError: 参数值或字段组合不合法。
+        """
+
         if type(close_injected) is not bool:
             raise TypeError("close_injected must be a boolean")
         if tasks is not None and not (
@@ -127,6 +158,15 @@ class LocalRuntimePlugin:
         self.worker: GraphWorker | None = None
 
     def setup(self, context: PluginContext) -> None:
+        """在插件装配阶段登记声明的能力或贡献。
+
+        Args:
+            context: 当前调用的执行或插件上下文。
+
+        Raises:
+            TypeError: 参数类型或接口实现不符合当前契约。
+        """
+
         if CAP_EVENT_BUS in self._provided and self._events is None:
             self._events = memory.EventBus()
         if CAP_TASK_BACKEND in self._provided and self._tasks is None:
@@ -189,6 +229,12 @@ class LocalRuntimePlugin:
         context.provide(CAP_GRAPH_WORKER, self.worker)
 
     def start(self, context: PluginContext) -> None:
+        """完成本地默认插件启动，底层组件已在装配阶段创建。
+
+        Args:
+            context: 当前调用的执行或插件上下文。
+        """
+
         assert self.worker is not None
         for contribution in context.contributions(CAP_INPUT_SELECTOR):
             self.worker.register_policy(contribution.name, contribution.value)
@@ -208,6 +254,12 @@ class LocalRuntimePlugin:
             self._worker_observations.attach(contribution.value)
 
     def stop(self, context: PluginContext) -> None:
+        """停止插件并释放其拥有的资源。
+
+        Args:
+            context: 当前调用的执行或插件上下文。
+        """
+
         del context
         failure: BaseException | None = None
         if self.worker is not None:

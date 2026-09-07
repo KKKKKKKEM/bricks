@@ -1,4 +1,4 @@
-"""Context execution-local state and quiescence contracts."""
+"""Context 执行局部状态与静止阶段回调契约测试。"""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ from bricks import Context
 
 
 def test_context_state_is_shared_by_scope_and_namespace() -> None:
+    """验证相同作用域和命名空间共享执行局部状态。"""
+
     local: dict[tuple[str, str], MutableMapping[str, Any]] = {}
     first = Context(lambda event: None, local=local, scope="first")
     same = Context(lambda event: None, local=local, scope="first")
@@ -21,6 +23,8 @@ def test_context_state_is_shared_by_scope_and_namespace() -> None:
 
 
 def test_context_state_does_not_cross_execution_storage() -> None:
+    """验证局部状态不会跨越独立执行存储。"""
+
     first = Context(lambda event: None, local={}, scope="node")
     second = Context(lambda event: None, local={}, scope="node")
 
@@ -30,6 +34,8 @@ def test_context_state_does_not_cross_execution_storage() -> None:
 
 
 def test_context_scope_and_namespace_cannot_collide_on_separators() -> None:
+    """验证作用域名称中的分隔符不会造成状态键碰撞。"""
+
     local: dict[tuple[str, str], MutableMapping[str, Any]] = {}
     first = Context(lambda event: None, local=local, scope="a:b")
     other = Context(lambda event: None, local=local, scope="a")
@@ -42,6 +48,8 @@ def test_context_scope_and_namespace_cannot_collide_on_separators() -> None:
 
 
 def test_context_registers_quiescence_callbacks_in_order() -> None:
+    """验证静止阶段回调按注册顺序保存。"""
+
     callbacks = []
     finalizers: list[Callable[[], None]] = []
     context = Context(lambda event: None, finalizers=finalizers)

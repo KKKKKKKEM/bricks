@@ -1,4 +1,4 @@
-"""Public Slot resource capabilities for adapter authors."""
+"""面向适配器作者的公共 Slot 资源能力契约测试。"""
 
 import pickle
 from typing import Any, cast
@@ -12,6 +12,8 @@ from bricks.spi import Delivery, SlotLease, Work
 
 
 def test_slot_lease_is_an_extension_protocol_only() -> None:
+    """验证 Slot lease 仅作为扩展协议暴露。"""
+
     assert not hasattr(bricks, "SlotLease")
     pool = SlotPool(1)
     lease = pool.acquire(0)
@@ -24,6 +26,8 @@ def test_slot_lease_is_an_extension_protocol_only() -> None:
 
 
 def test_pool_acquisition_reference_ownership_and_exhaustion() -> None:
+    """验证资源池申请、引用归属与耗尽行为。"""
+
     pool = SlotPool(1)
     lease = pool.try_acquire()
     assert lease is not None
@@ -49,6 +53,8 @@ def test_pool_acquisition_reference_ownership_and_exhaustion() -> None:
 
 
 def test_slot_resources_cannot_cross_serialization_boundary() -> None:
+    """验证本地 Slot 资源不可跨序列化边界。"""
+
     pool = SlotPool(1)
     lease = pool.acquire()
     try:
@@ -68,6 +74,12 @@ def test_slot_resources_cannot_cross_serialization_boundary() -> None:
 
 
 def test_execution_keeps_slot_alive_until_exception_unwinds() -> None:
+    """验证异常展开完成前执行仍持有 Slot。
+
+    Raises:
+        ValueError: 参数值或字段组合不合法。
+    """
+
     pool = SlotPool(1)
     lease = pool.acquire()
     slot = lease.slot
@@ -82,11 +94,15 @@ def test_execution_keeps_slot_alive_until_exception_unwinds() -> None:
 
 
 def test_lease_serializes_executions_across_threads() -> None:
+    """验证 lease 保证跨线程的同槽执行串行化。"""
+
     pool = SlotPool(1)
     lease = pool.acquire()
     attempted, entered = ThreadEvent(), ThreadEvent()
 
     def branch():
+        """在独立分支持有 lease，并验证同槽执行串行化。"""
+
         attempted.set()
         with lease.execution():
             entered.set()
@@ -107,10 +123,22 @@ def test_lease_serializes_executions_across_threads() -> None:
 def test_release_notifies_all_subscribers_despite_failure_and_allows_detach(
     caplog,
 ) -> None:
+    """验证资源归还通知不被单个订阅者失败中断且支持卸载。
+
+    Args:
+        caplog: 当前用例使用的 caplog 夹具或参数化输入。
+    """
+
     pool = SlotPool(1)
     notifications = []
 
     def broken():
+        """抛出测试指定的异常以验证失败传播与清理。
+
+        Raises:
+            ValueError: 参数值或字段组合不合法。
+        """
+
         raise ValueError("listener failed")
 
     detach_broken = pool.subscribe_available(broken)
@@ -127,11 +155,15 @@ def test_release_notifies_all_subscribers_despite_failure_and_allows_detach(
 
 
 def test_pool_close_wakes_waiters_and_allows_outstanding_references_to_return() -> None:
+    """验证池关闭唤醒等待方并允许在途引用归还。"""
+
     pool = SlotPool(1)
     lease = pool.acquire()
     waiting, rejected = ThreadEvent(), ThreadEvent()
 
     def waiter():
+        """在独立等待方申请资源并记录唤醒结果。"""
+
         waiting.set()
         try:
             pool.acquire()

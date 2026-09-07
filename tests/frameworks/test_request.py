@@ -8,6 +8,8 @@ from bricks.frameworks.crawler import Request, Response, UploadFile
 
 
 def test_before_request_hook_can_edit_request():
+    """验证请求前 Hook 可以编辑请求数据。"""
+
     request = Request("https://example.com/path?existing=1#section")
     request.headers["Authorization"] = "token"
     request.headers["authorization"] = "new-token"
@@ -29,6 +31,8 @@ def test_before_request_hook_can_edit_request():
 
 
 def test_copy_isolates_mutable_containers_and_preserves_repeated_fields():
+    """验证复制隔离可变容器且保留重复字段。"""
+
     request = Request(
         "https://example.com",
         params=[("tag", "a"), ("tag", "b")],
@@ -48,6 +52,8 @@ def test_copy_isolates_mutable_containers_and_preserves_repeated_fields():
 
 
 def test_container_editing_and_whole_field_assignment():
+    """验证容器原地编辑与整体字段赋值。"""
+
     request = Request("https://example.com")
     setattr(request, "params", {"tag": ["a", "b"]})
     setattr(request, "headers", {"X-Test": "one"})
@@ -77,6 +83,13 @@ def test_container_editing_and_whole_field_assignment():
     ],
 )
 def test_invalid_assignment_preserves_previous_value(field, value):
+    """验证非法字段赋值保留原值。
+
+    Args:
+        field: 当前用例使用的 field 夹具或参数化输入。
+        value: 当前操作处理的输入值。
+    """
+
     request = Request("https://example.com")
     previous = getattr(request, field)
     with pytest.raises((TypeError, ValueError)):
@@ -85,6 +98,8 @@ def test_invalid_assignment_preserves_previous_value(field, value):
 
 
 def test_invalid_container_edits_are_atomic():
+    """验证非法容器修改不会部分生效。"""
+
     request = Request(
         "https://example.com", headers={"X-Test": "valid"}, params={"p": 1}
     )
@@ -97,6 +112,8 @@ def test_invalid_container_edits_are_atomic():
 
 
 def test_body_copy_overrides_replace_content_headers():
+    """验证覆盖请求体时更新关联请求头。"""
+
     request = Request("https://example.com", headers={"Content-Length": "100"})
     encoded = request.copy(body={"value": 1}, body_type="json")
     form = request.copy(body=[("tag", "a"), ("tag", "b")], body_type="form")
@@ -110,6 +127,12 @@ def test_body_copy_overrides_replace_content_headers():
 
 @pytest.mark.parametrize("changes", [{"body": b"abcdef"}, {"body_type": "json"}])
 def test_copy_clears_length_from_explicit_headers(changes):
+    """验证同时覆盖请求头和请求体时清理旧长度。
+
+    Args:
+        changes: 复制对象时需要覆盖的字段。
+    """
+
     request = Request(
         "https://example.com", body="abc", headers={"Content-Length": "3"}
     )
@@ -119,6 +142,8 @@ def test_copy_clears_length_from_explicit_headers(changes):
 
 
 def test_copy_tracks_new_generated_content_type():
+    """验证复制后继续跟踪新生成的内容类型。"""
+
     request = Request(
         "https://example.com",
         body={"a": 1},
@@ -132,6 +157,8 @@ def test_copy_tracks_new_generated_content_type():
 
 
 def test_copy_keeps_explicit_content_type_ownership():
+    """验证复制不会将显式内容类型误当成自动生成值。"""
+
     request = Request("https://example.com", body={"a": 1})
     copied = request.copy(headers={"Content-Type": "application/json"})
     copied.body = b"raw"
@@ -154,6 +181,12 @@ def test_copy_keeps_explicit_content_type_ownership():
     ],
 )
 def test_request_cookie_values_reject_unsafe_serialization(value):
+    """验证请求 Cookie 拒绝会改变序列化结构的字符。
+
+    Args:
+        value: 当前操作处理的输入值。
+    """
+
     with pytest.raises(ValueError):
         Request("https://example.com", cookies={"session": value})
     request = Request("https://example.com", cookies={"session": "valid"})
@@ -163,6 +196,8 @@ def test_request_cookie_values_reject_unsafe_serialization(value):
 
 
 def test_request_cookie_mutations_are_validated():
+    """验证请求 Cookie 的可变操作执行校验。"""
+
     request = Request("https://example.com", cookies={"session": "abc=="})
     with pytest.raises(ValueError):
         request.cookies["bad name"] = "value"
@@ -179,6 +214,8 @@ def test_request_cookie_mutations_are_validated():
 
 
 def test_response_headers_remain_read_only_and_detached():
+    """验证响应头只读且与来源容器隔离。"""
+
     request = Request("https://example.com", headers={"X-Test": "original"})
     response = Response(headers=request.headers)
     request.headers["X-Test"] = "changed"
@@ -198,6 +235,13 @@ def test_response_headers_remain_read_only_and_detached():
     ],
 )
 def test_body_constructor_and_assignment(body, expected):
+    """验证构造与后续赋值使用一致的请求体编码。
+
+    Args:
+        body: 待编码的请求体数据。
+        expected: 当前用例使用的 expected 夹具或参数化输入。
+    """
+
     request = Request("https://example.com", body=body)
     assert request.body == expected
     assert request.copy().body == expected
@@ -208,6 +252,8 @@ def test_body_constructor_and_assignment(body, expected):
 
 
 def test_json_body_is_encoded_independently_and_preserves_explicit_content_type():
+    """验证 JSON 编码隔离输入且保留显式内容类型。"""
+
     data = {"nested": [1]}
     request = Request(
         "https://example.com",
@@ -224,6 +270,12 @@ def test_json_body_is_encoded_independently_and_preserves_explicit_content_type(
 
 @pytest.mark.parametrize("body", [{"bad": object()}, {"bad": float("nan")}])
 def test_invalid_json_assignment_preserves_body_and_headers(body):
+    """验证非法 JSON 赋值保留原请求体和请求头。
+
+    Args:
+        body: 待编码的请求体数据。
+    """
+
     request = Request(
         "https://example.com", body=b"old", headers={"Content-Length": "3"}
     )
@@ -234,6 +286,8 @@ def test_invalid_json_assignment_preserves_body_and_headers(body):
 
 
 def test_form_body_constructor_and_subsequent_assignment():
+    """验证表单构造与后续赋值的一致性。"""
+
     request = Request(
         "https://example.com",
         method="POST",
@@ -248,6 +302,8 @@ def test_form_body_constructor_and_subsequent_assignment():
 
 
 def test_body_type_change_reencodes_snapshot_and_copy():
+    """验证切换请求体类型重新编码独立数据快照。"""
+
     source = {"page": 1}
     request = Request("https://example.com", body=source)
     source["page"] = 99
@@ -271,6 +327,12 @@ def test_body_type_change_reencodes_snapshot_and_copy():
 
 @pytest.mark.parametrize("body_type", ["", "xml", None, 1])
 def test_invalid_body_type_is_rejected_atomically(body_type):
+    """验证非法编码模式不会改变已有请求。
+
+    Args:
+        body_type: 请求体编码模式。
+    """
+
     with pytest.raises(ValueError):
         Request("https://example.com", body_type=body_type)
     request = Request("https://example.com", body={"p": 1})
@@ -281,6 +343,8 @@ def test_invalid_body_type_is_rejected_atomically(body_type):
 
 
 def test_invalid_form_conversion_preserves_request():
+    """验证非法表单转换保留原请求。"""
+
     request = Request("https://example.com", body={"nested": {"p": 1}})
     before = request.body, request.headers.raw, request.body_type
     with pytest.raises(TypeError):
@@ -290,12 +354,20 @@ def test_invalid_form_conversion_preserves_request():
 
 @pytest.mark.parametrize("body", ["p=1", b"p=1"])
 def test_encoded_form_body_is_not_encoded_again(body):
+    """验证已编码表单不会再次编码。
+
+    Args:
+        body: 待编码的请求体数据。
+    """
+
     request = Request("https://example.com", body_type="form", body=body)
     assert request.body == b"p=1"
     assert request.copy().body == b"p=1"
 
 
 def test_explicit_content_type_survives_mode_change():
+    """验证显式内容类型在编码模式切换后保留。"""
+
     request = Request(
         "https://example.com",
         body={"p": 1},
@@ -317,6 +389,13 @@ def test_explicit_content_type_survives_mode_change():
     ],
 )
 def test_explicit_json_serializes_values(value, expected):
+    """验证显式 JSON 模式序列化支持的值。
+
+    Args:
+        value: 当前操作处理的输入值。
+        expected: 当前用例使用的 expected 夹具或参数化输入。
+    """
+
     request = Request("https://example.com", body=value, body_type="json")
     assert request.body == expected
     assert request.copy().body == expected
@@ -324,6 +403,8 @@ def test_explicit_json_serializes_values(value, expected):
 
 
 def test_auto_json_array_and_raw_text():
+    """验证自动 JSON 数组编码与原始文本行为。"""
+
     assert Request("https://example.com", body=[1, 2]).body == b"[1,2]"
     request = Request(
         "https://example.com",
@@ -339,6 +420,15 @@ def test_auto_json_array_and_raw_text():
 
 
 def multipart_parts(request):
+    """解析请求体中的 multipart 字段供测试断言。
+
+    Args:
+        request: 当前 HTTP 请求或 pytest 提供的参数化夹具对象。
+
+    Returns:
+        按请求体顺序解析出的 multipart 字段列表。
+    """
+
     message = BytesParser(policy=policy.default).parsebytes(
         ("Content-Type: " + request.headers["Content-Type"] + "\r\n\r\n").encode()
         + request.body
@@ -349,6 +439,8 @@ def multipart_parts(request):
 
 
 def test_multipart_round_trip_binary_repeated_fields_and_files():
+    """验证 multipart 保留二进制、重复字段和多文件。"""
+
     binary = bytes(range(256)) + b"\r\n\x00\xff"
     upload = UploadFile("sample.bin", binary)
     request = Request(
@@ -386,6 +478,8 @@ def test_multipart_round_trip_binary_repeated_fields_and_files():
 
 
 def test_multipart_unicode_names_and_filename_quoting():
+    """验证 multipart 中文内容与文件名引号处理。"""
+
     request = Request(
         "https://example.com",
         body_type="multipart",
@@ -403,6 +497,12 @@ def test_multipart_unicode_names_and_filename_quoting():
 
 @pytest.mark.parametrize("body_type", ["auto", "json", "form", "multipart", "raw"])
 def test_none_means_no_body(body_type):
+    """验证各编码模式中的 None 均表示无请求体。
+
+    Args:
+        body_type: 请求体编码模式。
+    """
+
     request = Request("https://example.com", body_type=body_type)
     assert request.body is None
     assert "content-type" not in request.headers
@@ -410,6 +510,12 @@ def test_none_means_no_body(body_type):
 
 @pytest.mark.parametrize("value", [b"raw", "text", {"nested": {"a": 1}}])
 def test_invalid_multipart_assignment_is_atomic(value):
+    """验证非法 multipart 赋值不改变原请求。
+
+    Args:
+        value: 当前操作处理的输入值。
+    """
+
     request = Request("https://example.com", body_type="multipart", body={"a": "b"})
     before = request.body, request.headers.raw
     with pytest.raises(TypeError):
@@ -418,6 +524,8 @@ def test_invalid_multipart_assignment_is_atomic(value):
 
 
 def test_upload_file_validation():
+    """验证内存上传文件的名称、内容和媒体类型约束。"""
+
     with pytest.raises(ValueError):
         UploadFile("bad\r\nname", b"data")
     with pytest.raises(ValueError):

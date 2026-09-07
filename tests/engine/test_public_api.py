@@ -82,6 +82,8 @@ def test_event_is_minimal_domain_message() -> None:
 
 
 def test_work_contains_only_transportable_execution_data() -> None:
+    """验证 Work 只携带可传输的执行数据。"""
+
     Work("crawl.graph", {"url": "https://example.com"})
 
     assert tuple(field.name for field in fields(Work)) == (

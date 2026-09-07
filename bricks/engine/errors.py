@@ -28,7 +28,13 @@ class UnknownGraphError(BricksRuntimeError):
 
 
 class ExecutionError(BricksRuntimeError):
-    """一次 Graph 或 Node 执行失败。"""
+    """一次 Graph 或 Node 执行失败。
+
+    Attributes:
+        graph: 关联的 Graph 定义或注册名称。
+        node: 关联的节点实例或 Graph 内节点 ID。
+        event: 与当前异常或执行相关的事件。
+    """
 
     def __init__(
         self,
@@ -40,7 +46,7 @@ class ExecutionError(BricksRuntimeError):
     ) -> None:
         """保存失败位置和可选触发事件。
 
-        参数：
+        Args:
             message: 面向调用方的错误说明。
             graph: 失败的 Graph 注册名或定义名。
             node: 失败的 Node ID。
@@ -90,12 +96,17 @@ class PortValueTypeError(ExecutionError, TypeError):
 
 
 class EventDispatchError(BricksRuntimeError):
-    """事件订阅者或目标 Graph 执行失败。"""
+    """事件订阅者或目标 Graph 执行失败。
+
+    Attributes:
+        event: 与当前异常或执行相关的事件。
+        cause: 保留的原始异常实例。
+    """
 
     def __init__(self, event: object, cause: BaseException) -> None:
         """保存投递失败的事件与原始异常。
 
-        参数：
+        Args:
             event: 投递失败的领域事件。
             cause: handler 或目标 Graph 抛出的原始异常。
         """

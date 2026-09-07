@@ -1,1 +1,1 @@
-"""Domain frameworks built on the Bricks engine and runtime."""
+"""基于 Bricks 引擎与运行时构建的领域框架。"""

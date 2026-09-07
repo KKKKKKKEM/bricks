@@ -31,6 +31,17 @@ from .graph import Graph
 
 
 def _validate_duration(value: float | None, label: str) -> None:
+    """校验正数秒数或表示不限时的 None。
+
+    Args:
+        value: 待校验的超时秒数，None 表示不限制。
+        label: 校验失败时用于指明字段的说明名称。
+
+    Raises:
+        TypeError: 参数类型或接口实现不符合当前契约。
+        ValueError: 参数值或字段组合不合法。
+    """
+
     if value is None:
         return
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -41,12 +52,24 @@ def _validate_duration(value: float | None, label: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class ExecutionLimits:
-    """控制一次 Graph execution；零步数和空 timeout 表示无限制。"""
+    """控制一次 Graph execution；零步数和空 timeout 表示无限制。
+
+    Attributes:
+        max_steps: 节点触发次数上限，0 表示不限制。
+        timeout: 超时秒数，None 表示不限制。
+    """
 
     max_steps: int = 0
     timeout: float | None = None
 
     def __post_init__(self) -> None:
+        """校验构造字段并固定需要保持不变的数据。
+
+        Raises:
+            TypeError: 参数类型或接口实现不符合当前契约。
+            ValueError: 参数值或字段组合不合法。
+        """
+
         if type(self.max_steps) is not int:
             raise TypeError("max_steps must be an integer")
         if self.max_steps < 0:
@@ -55,7 +78,17 @@ class ExecutionLimits:
 
 
 class ExecutionStatus(str, enum.Enum):
-    """一项 Execution 对调用方可见的生命周期状态。"""
+    """一项 Execution 对调用方可见的生命周期状态。
+
+    Attributes:
+        PENDING: 执行已创建但尚未开始。
+        RUNNING: Graph 正在执行。
+        SUCCEEDED: 执行成功完成。
+        FAILED: 执行因业务或基础设施异常失败。
+        CANCELLED: 执行已取消。
+        TIMED_OUT: 执行或节点超时。
+        STEP_LIMITED: 执行达到步数限制。
+    """
 
     PENDING = "pending"
     RUNNING = "running"
@@ -67,16 +100,43 @@ class ExecutionStatus(str, enum.Enum):
 
     @property
     def terminal(self) -> bool:
+        """判断执行状态是否属于不再继续运行的终态。
+
+        Returns:
+            当前状态为终态时返回 True。
+        """
+
         return self not in (ExecutionStatus.PENDING, ExecutionStatus.RUNNING)
 
 
 class _OutputIterator(Iterator[Output]):
+    """同步输出订阅，独立维护读取位置与关闭状态。
+
+    Attributes:
+        _execution: 输出迭代器关联的 Execution 句柄。
+        _stream_id: 当前输出订阅的独立游标标识。
+        _closed: 当前组件是否已停止接受新工作。
+    """
+
     def __init__(self, execution: Execution, stream_id: int) -> None:
+        """绑定执行句柄与同步输出流游标，初始状态为未关闭。
+
+        Args:
+            execution: 记录当前执行状态、控制限制及输出的句柄。
+            stream_id: 当前输出流的独立游标标识。
+        """
+
         self._execution = execution
         self._stream_id = stream_id
         self._closed = False
 
     def __next__(self) -> Output:
+        """读取下一项输出，流结束或失败时解除当前订阅。
+
+        Returns:
+            当前游标处的下一项 Output。
+        """
+
         if self._closed:
             raise StopIteration
         try:
@@ -90,24 +150,55 @@ class _OutputIterator(Iterator[Output]):
         return output
 
     def close(self) -> None:
+        """结束当前组件的生命周期并释放其拥有的资源。"""
+
         if not self._closed:
             self._closed = True
             self._execution._detach_stream(self._stream_id)
 
     def __del__(self) -> None:
+        """回收对象时解除仍然存在的输出流订阅。"""
+
         self.close()
 
 
 class _AsyncOutputIterator(AsyncIterator[Output]):
+    """异步输出订阅，独立维护读取位置与关闭状态。
+
+    Attributes:
+        _execution: 输出迭代器关联的 Execution 句柄。
+        _stream_id: 当前输出订阅的独立游标标识。
+        _closed: 当前组件是否已停止接受新工作。
+    """
+
     def __init__(self, execution: Execution, stream_id: int) -> None:
+        """绑定执行句柄与异步输出流游标，初始状态为未关闭。
+
+        Args:
+            execution: 记录当前执行状态、控制限制及输出的句柄。
+            stream_id: 当前输出流的独立游标标识。
+        """
+
         self._execution = execution
         self._stream_id = stream_id
         self._closed = False
 
     def __aiter__(self) -> _AsyncOutputIterator:
+        """返回当前对象的异步输出迭代入口。
+
+        Returns:
+            异步读取当前执行输出的迭代入口。
+        """
+
         return self
 
     async def __anext__(self) -> Output:
+        """异步读取下一项输出，结束或失败时解除当前订阅。
+
+        Returns:
+            当前游标处的下一项 Output。
+        """
+
         if self._closed:
             raise StopAsyncIteration
         try:
@@ -121,19 +212,49 @@ class _AsyncOutputIterator(AsyncIterator[Output]):
             raise
 
     def close(self) -> None:
+        """结束当前组件的生命周期并释放其拥有的资源。"""
+
         if not self._closed:
             self._closed = True
             self._execution._detach_stream(self._stream_id)
 
     async def aclose(self) -> None:
+        """异步关闭输出迭代器并解除背压订阅。"""
+
         self.close()
 
     def __del__(self) -> None:
+        """回收对象时解除仍然存在的输出流订阅。"""
+
         self.close()
 
 
 class Execution:
-    """保存单次执行的身份、进度、结果，并提供协作式取消。"""
+    """保存单次执行的身份、进度、结果，并提供协作式取消。
+
+    Attributes:
+        id: 当前对象的唯一标识。
+        graph: 关联的 Graph 定义或注册名称。
+        limits: 单次执行的步数与超时限制。
+        output_buffer: 每个活跃输出流允许积压的最大条数。
+        created_at: 执行句柄创建的 UTC 时间。
+        _condition: 协调共享状态访问及同步等待的锁或条件变量。
+        _store: 按追加顺序保存全部输出的可替换存储。
+        _notifier: 唤醒同步与异步等待方的可替换通知器。
+        _status: 当前执行的生命周期状态。
+        _started_at: 执行开始的 UTC 时间，未开始时为 None。
+        _finished_at: 执行结束的 UTC 时间，未结束时为 None。
+        _started_monotonic: 执行开始的单调时钟读数，单位秒。
+        _node_started_monotonic: 当前节点开始执行的单调时钟读数，单位秒。
+        _step_timeout: 当前节点的超时秒数，None 表示不限制。
+        _node_timeouts: 冻结 Graph 绑定的各节点超时秒数。
+        _current_node: 当前执行中的节点 ID，空闲时为 None。
+        _steps: 已经开始的节点触发次数。
+        _error: 执行终止时保留的原始异常。
+        _cancel_requested: 是否已收到协作式取消请求。
+        _stream_counter: 分配独立输出订阅 ID 的计数器。
+        _stream_cursors: 每个活跃输出流下次读取的位置，参与背压计算。
+    """
 
     def __init__(
         self,
@@ -145,6 +266,21 @@ class Execution:
         output_store: OutputStore | None = None,
         notifier: ExecutionNotifier | None = None,
     ) -> None:
+        """创建独立执行句柄并装配输出存储、通知器和控制限制。
+
+        Args:
+            graph: 目标 Graph 定义或其注册名称，以类型声明为准。
+            limits: 本次执行独立使用的步数和时长限制。
+            id: 对象标识，允许缺省时由实现生成。
+            output_buffer: 每个活跃输出流允许积压的输出条数。
+            output_store: 可替换的输出存储，构造执行时必须为空。
+            notifier: 通知同步和异步等待方的可替换实现。
+
+        Raises:
+            TypeError: 参数类型或接口实现不符合当前契约。
+            ValueError: 参数值或字段组合不合法。
+        """
+
         self.id = require_non_empty_string(
             str(uuid4()) if id is None else id,
             "execution id",
@@ -183,31 +319,67 @@ class Execution:
 
     @property
     def status(self) -> ExecutionStatus:
+        """在线程安全边界内读取当前执行状态。
+
+        Returns:
+            当前执行的生命周期状态。
+        """
+
         with self._condition:
             return self._status
 
     @property
     def started_at(self) -> datetime | None:
+        """返回执行开始的 UTC 时间，尚未开始时为 None。
+
+        Returns:
+            执行开始的 UTC 时间，未开始时为 None。
+        """
+
         with self._condition:
             return self._started_at
 
     @property
     def finished_at(self) -> datetime | None:
+        """返回执行结束的 UTC 时间，未结束时为 None。
+
+        Returns:
+            执行结束的 UTC 时间，未结束时为 None。
+        """
+
         with self._condition:
             return self._finished_at
 
     @property
     def current_node(self) -> str | None:
+        """返回当前正在执行的节点 ID，空闲时为 None。
+
+        Returns:
+            当前执行中的节点 ID，空闲时为 None。
+        """
+
         with self._condition:
             return self._current_node
 
     @property
     def steps(self) -> int:
+        """返回已经开始的节点触发次数。
+
+        Returns:
+            已经开始的节点触发次数。
+        """
+
         with self._condition:
             return self._steps
 
     @property
     def outputs(self) -> tuple[Output, ...] | None:
+        """返回成功执行的完整输出，尚未成功时为 None。
+
+        Returns:
+            成功执行的全部输出；未成功时为 None。
+        """
+
         with self._condition:
             if self._status is not ExecutionStatus.SUCCEEDED:
                 return None
@@ -215,20 +387,42 @@ class Execution:
 
     @property
     def error(self) -> BaseException | None:
+        """在错误阶段执行回调，未恢复的异常继续传播。
+
+        Returns:
+            执行终止时保留的原始异常。
+        """
+
         with self._condition:
             return self._error
 
     @property
     def cancel_requested(self) -> bool:
+        """返回当前执行是否已收到取消请求。
+
+        Returns:
+            当前执行已收到取消请求时返回 True。
+        """
+
         with self._condition:
             return self._cancel_requested
 
     @property
     def done(self) -> bool:
+        """判断当前执行是否已经到达终态。
+
+        Returns:
+            当前执行已进入终态时返回 True。
+        """
+
         return self.status.terminal
 
     def cancel(self) -> bool:
-        """请求取消；尚未开始时立即取消，运行中在最近检查点生效。"""
+        """请求取消；尚未开始时立即取消，运行中在最近检查点生效。
+
+        Returns:
+            本次取消请求被接受时返回 True，执行已经结束时返回 False。
+        """
 
         with self._condition:
             if self._status.terminal:
@@ -244,7 +438,14 @@ class Execution:
             return True
 
     def wait(self, timeout: float | None = None) -> bool:
-        """等待终态；超时返回 False，不改变 Execution。"""
+        """等待终态；超时返回 False，不改变 Execution。
+
+        Args:
+            timeout: 等待或执行时限，单位秒；None 表示不设置时限。
+
+        Returns:
+            满足当前操作的判断条件时返回 True，否则返回 False。
+        """
 
         _validate_timeout(timeout)
         deadline = None if timeout is None else time.monotonic() + timeout
@@ -259,7 +460,17 @@ class Execution:
             self._notifier.wait(version, remaining)
 
     def result(self, timeout: float | None = None) -> tuple[Output, ...]:
-        """等待并返回终端 Output，失败时重新抛出原始执行异常。"""
+        """等待并返回终端 Output，失败时重新抛出原始执行异常。
+
+        Args:
+            timeout: 等待或执行时限，单位秒；None 表示不设置时限。
+
+        Returns:
+            按产生顺序排列的全部终端 Output。
+
+        Raises:
+            TimeoutError: 等待未在指定时限内完成。
+        """
 
         if not self.wait(timeout):
             raise TimeoutError(f"execution {self.id!r} did not finish in time")
@@ -271,12 +482,20 @@ class Execution:
             return outputs
 
     def __await__(self):
-        """异步等待最终结果；取消等待方会协作式取消 execution。"""
+        """异步等待最终结果；取消等待方会协作式取消 execution。
+
+        Returns:
+            等待最终执行结果的协程迭代器。
+        """
 
         return self._await_result().__await__()
 
     def __iter__(self) -> Iterator[Output]:
-        """按产生顺序迭代 terminal Output；结束时传播执行异常。"""
+        """按产生顺序迭代 terminal Output；结束时传播执行异常。
+
+        Returns:
+            遍历当前对象内容的独立迭代入口。
+        """
 
         stream_id = next(self._stream_counter)
         with self._condition:
@@ -285,7 +504,11 @@ class Execution:
         return _OutputIterator(self, stream_id)
 
     def __aiter__(self) -> AsyncIterator[Output]:
-        """异步迭代 terminal Output，语义与同步迭代一致。"""
+        """异步迭代 terminal Output，语义与同步迭代一致。
+
+        Returns:
+            异步读取当前执行输出的迭代入口。
+        """
 
         stream_id = next(self._stream_counter)
         with self._condition:
@@ -300,7 +523,17 @@ class Execution:
 
     @contextmanager
     def step(self, node_id: str) -> Iterator[None]:
-        """记录一次 Node firing，并在其完整生命周期内应用控制限制。"""
+        """记录一次 Node firing，并在其完整生命周期内应用控制限制。
+
+        Args:
+            node_id: Graph 内绑定的节点 ID。
+
+        Yields:
+            None；上下文内部的一次节点触发计入步数并受执行时限约束。
+
+        Raises:
+            ValueError: 参数值或字段组合不合法。
+        """
 
         node_id = require_non_empty_string(node_id, "execution node")
         with self._condition:
@@ -321,7 +554,18 @@ class Execution:
             self._end_step()
 
     def start(self, graph: Graph) -> bool:
-        """执行宿主绑定冻结 Graph 并开始计时；已取消时返回 False。"""
+        """执行宿主绑定冻结 Graph 并开始计时；已取消时返回 False。
+
+        Args:
+            graph: 目标 Graph 定义或其注册名称，以类型声明为准。
+
+        Returns:
+            满足当前操作的判断条件时返回 True，否则返回 False。
+
+        Raises:
+            RuntimeError: 当前生命周期状态或操作顺序不允许此操作。
+            TypeError: 参数类型或接口实现不符合当前契约。
+        """
 
         if not isinstance(graph, Graph) or not graph.frozen:
             raise TypeError("execution requires a frozen Graph")
@@ -342,7 +586,14 @@ class Execution:
         self,
         timeouts: Mapping[str, float | None],
     ) -> None:
-        """在开始执行前绑定冻结 Graph 的 Node timeout 快照。"""
+        """在开始执行前绑定冻结 Graph 的 Node timeout 快照。
+
+        Args:
+            timeouts: Graph 冻结时保存的节点超时映射，单位秒。
+
+        Raises:
+            RuntimeError: 当前生命周期状态或操作顺序不允许此操作。
+        """
 
         normalized: dict[str, float | None] = {}
         for node_id, timeout in timeouts.items():
@@ -358,6 +609,17 @@ class Execution:
                 raise RuntimeError("execution is bound to a different Graph definition")
 
     def _begin_step(self, node_id: str, timeout: float | None) -> None:
+        """开始一次节点触发，检查执行状态与步数并记录节点计时。
+
+        Args:
+            node_id: Graph 内绑定的节点 ID。
+            timeout: 等待或执行时限，单位秒；None 表示不设置时限。
+
+        Raises:
+            RuntimeError: 当前生命周期状态或操作顺序不允许此操作。
+            StepLimitExceededError: 节点触发次数达到执行上限。
+        """
+
         self._checkpoint()
         with self._condition:
             if self._status is not ExecutionStatus.RUNNING:
@@ -374,6 +636,8 @@ class Execution:
             self._step_timeout = timeout
 
     def _end_step(self) -> None:
+        """结束节点计时并检查控制条件，始终清理当前节点状态。"""
+
         try:
             self._checkpoint()
         finally:
@@ -383,6 +647,12 @@ class Execution:
                 self._step_timeout = None
 
     def _checkpoint(self) -> None:
+        """检查取消和执行时限，抛出最先到期的控制异常。
+
+        Raises:
+            ExecutionCancelledError: 当前执行已请求取消。
+        """
+
         with self._condition:
             if self._cancel_requested:
                 raise ExecutionCancelledError(
@@ -426,7 +696,11 @@ class Execution:
                 raise min(expired, key=lambda item: item[0])[1]
 
     def wait_timeout(self) -> float | None:
-        """返回当前异步等待预算；调用前也会解释取消和过期原因。"""
+        """返回当前异步等待预算；调用前也会解释取消和过期原因。
+
+        Returns:
+            剩余等待秒数；没有有效时限时返回 None。
+        """
 
         self._checkpoint()
         with self._condition:
@@ -444,7 +718,11 @@ class Execution:
             return None if not remaining else max(0.0, min(remaining))
 
     def succeed(self) -> None:
-        """执行宿主在执行器完成后结束执行；结果来自已交付输出。"""
+        """执行宿主在执行器完成后结束执行；结果来自已交付输出。
+
+        Raises:
+            RuntimeError: 当前生命周期状态或操作顺序不允许此操作。
+        """
 
         with self._condition:
             if self._status.terminal:
@@ -455,7 +733,14 @@ class Execution:
             self._finish_locked(ExecutionStatus.SUCCEEDED)
 
     def fail(self, error: BaseException) -> None:
-        """执行宿主记录失败；已发布输出仍可由流消费者读取。"""
+        """执行宿主记录失败；已发布输出仍可由流消费者读取。
+
+        Args:
+            error: 需要传播、记录或用于恢复的异常。
+
+        Raises:
+            TypeError: 参数类型或接口实现不符合当前契约。
+        """
         if not isinstance(error, BaseException):
             raise TypeError("execution failure must be a BaseException")
         with self._condition:
@@ -477,6 +762,13 @@ class Execution:
         *,
         error: BaseException | None = None,
     ) -> None:
+        """在已持有执行锁的条件下写入终态并通知等待方。
+
+        Args:
+            status: 需要记录或验证的状态值。
+            error: 需要传播、记录或用于恢复的异常。
+        """
+
         self._status = status
         self._error = error
         self._current_node = None
@@ -486,6 +778,19 @@ class Execution:
         self._notifier.notify()
 
     def _try_publish(self, output: Output) -> bool:
+        """尝试追加输出；存在背压时返回未提交状态。
+
+        Args:
+            output: 需要校验、保存或交付的一项 Output。
+
+        Returns:
+            输出已被存储接受时返回 True，受背压阻塞时返回 False。
+
+        Raises:
+            RuntimeError: 当前生命周期状态或操作顺序不允许此操作。
+            TypeError: 参数类型或接口实现不符合当前契约。
+        """
+
         if not isinstance(output, Output):
             raise TypeError("execution can publish only Output")
         with self._condition:
@@ -502,7 +807,11 @@ class Execution:
             return True
 
     def publish_output(self, output: Output) -> None:
-        """同步交付 terminal Output；应用取消、超时和流消费者背压。"""
+        """同步交付 terminal Output；应用取消、超时和流消费者背压。
+
+        Args:
+            output: 需要校验、保存或交付的一项 Output。
+        """
 
         while True:
             with self._condition:
@@ -513,7 +822,11 @@ class Execution:
             self._notifier.wait(version, timeout)
 
     async def apublish_output(self, output: Output) -> None:
-        """异步交付 terminal Output，等待背压时不阻塞事件循环。"""
+        """异步交付 terminal Output，等待背压时不阻塞事件循环。
+
+        Args:
+            output: 需要校验、保存或交付的一项 Output。
+        """
 
         while True:
             with self._condition:
@@ -527,6 +840,12 @@ class Execution:
                 self.checkpoint()
 
     async def _await_result(self) -> tuple[Output, ...]:
+        """异步等待最终结果，取消等待方时同步请求取消底层执行。
+
+        Returns:
+            按产生顺序排列的全部终端 Output。
+        """
+
         try:
             while True:
                 with self._condition:
@@ -539,6 +858,15 @@ class Execution:
             raise
 
     def _next_output(self, stream_id: int) -> Output | None:
+        """同步等待当前流的下一项输出或终态。
+
+        Args:
+            stream_id: 当前输出流的独立游标标识。
+
+        Returns:
+            符合声明端口契约的 Output。
+        """
+
         while True:
             with self._condition:
                 version = self._notifier.version
@@ -548,6 +876,15 @@ class Execution:
             self._notifier.wait(version)
 
     async def _next_output_async(self, stream_id: int) -> Output | None:
+        """异步等待当前流的下一项输出或终态。
+
+        Args:
+            stream_id: 当前输出流的独立游标标识。
+
+        Returns:
+            符合声明端口契约的 Output。
+        """
+
         while True:
             with self._condition:
                 version = self._notifier.version
@@ -557,6 +894,15 @@ class Execution:
             await self._notifier.wait_async(version)
 
     def _poll_output(self, stream_id: int) -> tuple[Output | None, bool]:
+        """读取当前流游标处的输出，或报告需要继续等待。
+
+        Args:
+            stream_id: 当前输出流的独立游标标识。
+
+        Returns:
+            符合声明端口契约的 Output 集合。
+        """
+
         with self._condition:
             cursor = self._stream_cursors[stream_id]
             if cursor < len(self._store):
@@ -571,6 +917,12 @@ class Execution:
             return None, True
 
     def _detach_stream(self, stream_id: int) -> None:
+        """移除输出流游标并唤醒因背压等待的生产者。
+
+        Args:
+            stream_id: 当前输出流的独立游标标识。
+        """
+
         with self._condition:
             self._stream_cursors.pop(stream_id, None)
             self._notifier.notify()

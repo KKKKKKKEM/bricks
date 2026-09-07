@@ -26,9 +26,20 @@ from ..spi import (
 
 
 class EventBus:
-    """同步、进程内的 EventBus 默认实现。"""
+    """同步、进程内的 EventBus 默认实现。
+
+    Attributes:
+        _handlers: 按事件类型和订阅组组织的处理函数。
+        _anonymous: 生成独立匿名订阅名称的计数器。
+        _next_handler: 各订阅组下一次轮询使用的处理器游标。
+        _condition: 协调共享状态访问及同步等待的锁或条件变量。
+        _active_dispatches: 尚未结束的事件分发数量。
+        _closed: 当前组件是否已停止接受新工作。
+    """
 
     def __init__(self) -> None:
+        """创建独立订阅表、轮询游标和事件分发计数。"""
+
         self._handlers: dict[str, dict[str, list[EventHandler]]] = defaultdict(
             lambda: defaultdict(list)
         )
@@ -40,6 +51,12 @@ class EventBus:
 
     @property
     def idle(self) -> bool:
+        """判断当前组件是否没有尚未完成的工作。
+
+        Returns:
+            没有未完成工作时为 True，否则为 False。
+        """
+
         with self._condition:
             return self._active_dispatches == 0
 
@@ -50,6 +67,18 @@ class EventBus:
         *,
         subscription: str | None = None,
     ) -> None:
+        """注册事件订阅，同名订阅组中的处理器竞争消费。
+
+        Args:
+            event_type: 用于订阅或路由匹配的事件类型。
+            handler: 接收事件或投递的处理函数。
+            subscription: 竞争消费组名称，None 创建独立订阅。
+
+        Raises:
+            RuntimeError: 当前生命周期状态或操作顺序不允许此操作。
+            TypeError: 参数类型或接口实现不符合当前契约。
+        """
+
         event_type = require_non_empty_string(
             event_type,
             "subscription event type",
@@ -69,6 +98,16 @@ class EventBus:
             self._handlers[event_type][subscription].append(handler)
 
     def publish(self, event: Event) -> None:
+        """发布事件并推进对应的投递或观察流程。
+
+        Args:
+            event: 需要发布、观察或处理的事件。
+
+        Raises:
+            RuntimeError: 当前生命周期状态或操作顺序不允许此操作。
+            TypeError: 参数类型或接口实现不符合当前契约。
+        """
+
         if not isinstance(event, Event):
             raise TypeError("event bus accepts only Event")
         with self._condition:
@@ -95,6 +134,15 @@ class EventBus:
                 self._condition.notify_all()
 
     def wait_idle(self, timeout: float | None = None) -> None:
+        """等待已接受的工作完成，并传播已记录的失败。
+
+        Args:
+            timeout: 等待或执行时限，单位秒；None 表示不设置时限。
+
+        Raises:
+            TimeoutError: 等待未在指定时限内完成。
+        """
+
         _validate_timeout(timeout)
         deadline = None if timeout is None else time.monotonic() + timeout
         with self._condition:
@@ -105,10 +153,21 @@ class EventBus:
                 self._condition.wait(remaining)
 
     def close(self) -> None:
+        """停止接受新的事件订阅和发布。"""
+
         with self._condition:
             self._closed = True
 
     def _select_handlers(self, event_type: str) -> tuple[EventHandler, ...]:
+        """为每个订阅组轮询选择一个事件处理器。
+
+        Args:
+            event_type: 用于订阅或路由匹配的事件类型。
+
+        Returns:
+            用于卸载本次注册的句柄。
+        """
+
         selected: list[EventHandler] = []
         for subscription, handlers in self._handlers.get(event_type, {}).items():
             key = (event_type, subscription)
@@ -120,6 +179,16 @@ class EventBus:
 
 @dataclass(slots=True)
 class _Consumer:
+    """单个内存消费者的线程池、资源池与并发计数。
+
+    Attributes:
+        handler: 当前消费者处理投递的函数。
+        concurrency: 当前消费者的完整 Graph 执行并发上限。
+        executor: 当前消费者拥有的线程池执行器。
+        slots: 消费者申请根执行链资源所用的 SlotProvider。
+        active: 当前消费者正在执行的 Graph 数量。
+    """
+
     handler: WorkHandler
     concurrency: int
     executor: ThreadPoolExecutor
@@ -129,15 +198,44 @@ class _Consumer:
 
 @dataclass(slots=True)
 class _Channel:
+    """命名消费通道的排队投递与轮询状态。
+
+    Attributes:
+        consumers: 通道内按注册顺序排列的消费者。
+        queued: 等待执行的投递队列。
+        next_consumer: 下一次消费者轮询的起始游标。
+    """
+
     consumers: list[_Consumer]
     queued: deque[Delivery]
     next_consumer: int = 0
 
 
 class TaskBackend:
-    """使用内存队列和线程池执行 Work 的默认实现。"""
+    """使用内存队列和线程池执行 Work 的默认实现。
+
+    Attributes:
+        _max_delivery_attempts: 最大投递次数，包含首次尝试。
+        _channels: 按名称组织的内存消费通道。
+        _pending: 已经提交、尚未完成的消费任务。
+        _failures: 等待向调用方传播的失败记录。
+        _condition: 协调共享状态访问及同步等待的锁或条件变量。
+        _slot_subscriptions: 资源池身份对应的可用通知取消函数。
+        _owned_slot_pools: 由当前组件创建并负责关闭的 Slot 池。
+        _next_channel: 下一次通道轮询的起始游标。
+        _closed: 当前组件是否已停止接受新工作。
+    """
 
     def __init__(self, *, max_delivery_attempts: int = 3) -> None:
+        """创建内存消费通道容器，并校验最大交付次数。
+
+        Args:
+            max_delivery_attempts: 内存任务后端允许的最大交付次数，包含首次交付。
+
+        Raises:
+            ValueError: 参数值或字段组合不合法。
+        """
+
         if type(max_delivery_attempts) is not int or max_delivery_attempts < 1:
             raise ValueError(
                 "max_delivery_attempts must be an integer greater than zero"
@@ -156,6 +254,12 @@ class TaskBackend:
 
     @property
     def idle(self) -> bool:
+        """判断当前组件是否没有尚未完成的工作。
+
+        Returns:
+            没有未完成工作时为 True，否则为 False。
+        """
+
         with self._condition:
             return not self._pending and not any(
                 channel.queued for channel in self._channels.values()
@@ -169,6 +273,20 @@ class TaskBackend:
         concurrency: int,
         slots: SlotProvider | None = None,
     ) -> None:
+        """绑定消费通道及其处理器和本地并发配置。
+
+        Args:
+            queue: 命名消费通道。
+            handler: 接收事件或投递的处理函数。
+            concurrency: 当前消费者允许并行执行的完整 Graph 数量。
+            slots: 提供本地执行槽的资源池能力。
+
+        Raises:
+            RuntimeError: 当前生命周期状态或操作顺序不允许此操作。
+            TypeError: 参数类型或接口实现不符合当前契约。
+            ValueError: 参数值或字段组合不合法。
+        """
+
         queue = require_non_empty_string(queue, "task queue")
         if not callable(handler):
             raise TypeError("work handler must be callable")
@@ -196,6 +314,17 @@ class TaskBackend:
             self._condition.notify_all()
 
     def submit(self, queue: str, work: Work) -> None:
+        """向命名执行通道提交工作。
+
+        Args:
+            queue: 命名消费通道。
+            work: 需要投递或执行的工作请求。
+
+        Raises:
+            RuntimeError: 当前生命周期状态或操作顺序不允许此操作。
+            TypeError: 参数类型或接口实现不符合当前契约。
+        """
+
         queue = require_non_empty_string(queue, "task queue")
         if not isinstance(work, Work):
             raise TypeError("task backend accepts only Work")
@@ -207,7 +336,17 @@ class TaskBackend:
             self._drain_channel(channel)
 
     def submit_local(self, queue: str, work: Work, lease: SlotLease) -> None:
-        """提交延续当前进程 Slot 链的 Work。"""
+        """提交延续当前进程 Slot 链的 Work。
+
+        Args:
+            queue: 命名消费通道。
+            work: 需要投递或执行的工作请求。
+            lease: 当前进程内执行槽的引用与串行执行能力。
+
+        Raises:
+            RuntimeError: 当前生命周期状态或操作顺序不允许此操作。
+            TypeError: 参数类型或接口实现不符合当前契约。
+        """
 
         queue = require_non_empty_string(queue, "task queue")
         if not isinstance(work, Work):
@@ -220,6 +359,15 @@ class TaskBackend:
             self._drain_channel(channel)
 
     def wait_idle(self, timeout: float | None = None) -> None:
+        """等待已接受的工作完成，并传播已记录的失败。
+
+        Args:
+            timeout: 等待或执行时限，单位秒；None 表示不设置时限。
+
+        Raises:
+            TimeoutError: 等待未在指定时限内完成。
+        """
+
         _validate_timeout(timeout)
         deadline = None if timeout is None else time.monotonic() + timeout
         with self._condition:
@@ -234,6 +382,8 @@ class TaskBackend:
                 raise failures[0]
 
     def close(self) -> None:
+        """结束当前组件的生命周期并释放其拥有的资源。"""
+
         with self._condition:
             if self._closed:
                 return
@@ -264,6 +414,14 @@ class TaskBackend:
         delivery: Delivery,
         future: Future[DeliveryResult],
     ) -> None:
+        """处理消费结果、重投递和失败记录，并归还投递持有的引用。
+
+        Args:
+            consumer: 本次消费对应的消费者记录或消费能力。
+            delivery: 携带尝试次数和可选 Slot lease 的本次投递。
+            future: 线程池或事件循环提交返回的结果句柄。
+        """
+
         failure = future.exception()
         result = None if failure is not None else future.result()
         with self._condition:
@@ -307,6 +465,13 @@ class TaskBackend:
             self._condition.notify_all()
 
     def _dispatch(self, consumer: _Consumer, delivery: Delivery) -> None:
+        """将已取得执行资源的投递交给消费者线程池。
+
+        Args:
+            consumer: 本次消费对应的消费者记录或消费能力。
+            delivery: 携带尝试次数和可选 Slot lease 的本次投递。
+        """
+
         consumer.active += 1
         try:
             future = consumer.executor.submit(consumer.handler, delivery)
@@ -321,6 +486,8 @@ class TaskBackend:
         future.add_done_callback(partial(self._done, consumer, delivery))
 
     def _drain_all(self) -> None:
+        """轮询各通道，尝试推进已经具备资源的投递。"""
+
         channels = tuple(self._channels.values())
         if not channels:
             return
@@ -330,6 +497,12 @@ class TaskBackend:
         self._next_channel = (start + 1) % len(channels)
 
     def _drain_channel(self, channel: _Channel) -> None:
+        """优先推进携带 Slot 的延续任务，再为根任务申请空闲 Slot。
+
+        Args:
+            channel: 当前处理的内存消费通道记录。
+        """
+
         while channel.queued and channel.consumers:
             available = self._available_consumers(channel)
             if not available:
@@ -372,11 +545,27 @@ class TaskBackend:
 
     @staticmethod
     def _advance_consumer(channel: _Channel, consumer: _Consumer) -> None:
+        """推进通道的轮询游标，让后续投递从下一个消费者开始。
+
+        Args:
+            channel: 当前处理的内存消费通道记录。
+            consumer: 本次消费对应的消费者记录或消费能力。
+        """
+
         index = channel.consumers.index(consumer)
         channel.next_consumer = index + 1
 
     @staticmethod
     def _available_consumers(channel: _Channel) -> list[_Consumer]:
+        """按轮询顺序取得尚未达到本地并发上限的消费者。
+
+        Args:
+            channel: 当前处理的内存消费通道记录。
+
+        Returns:
+            符合当前可用条件的选择结果，没有可执行输入时不触发。
+        """
+
         count = len(channel.consumers)
         start = channel.next_consumer % count
         ordered = channel.consumers[start:] + channel.consumers[:start]
@@ -385,11 +574,19 @@ class TaskBackend:
         ]
 
     def _subscribe_slots(self, slots: SlotProvider) -> None:
+        """订阅 Slot 可用通知，避免重复订阅同一个池。
+
+        Args:
+            slots: 提供本地执行槽的资源池能力。
+        """
+
         key = id(slots)
         if key in self._slot_subscriptions:
             return
 
         def available() -> None:
+            """资源可用时重新推进等待通道，并唤醒空闲等待方。"""
+
             with self._condition:
                 if not self._closed:
                     self._drain_all()

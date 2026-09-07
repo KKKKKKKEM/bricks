@@ -1,4 +1,4 @@
-"""Crawler request, response and record models."""
+"""爬虫请求、响应和记录模型。"""
 
 from .body import UploadFile
 from .cookies import Cookies

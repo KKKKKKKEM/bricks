@@ -1,4 +1,4 @@
-"""Buffered request body encodings; no file ownership or transport behavior."""
+"""内存请求体编码，不接管文件资源或承担网络传输。"""
 
 from __future__ import annotations
 
@@ -26,7 +26,13 @@ BodyInput = (
 
 
 class UploadFile:
-    """An in-memory multipart file. Text content is encoded as UTF-8."""
+    """内存中的 multipart 上传文件，文本内容按 UTF-8 编码。
+
+    Attributes:
+        filename: 上传时使用的文件名称。
+        content: 当前保存的内容字节。
+        content_type: 上传文件的媒体类型。
+    """
 
     def __init__(
         self,
@@ -62,6 +68,18 @@ class UploadFile:
 
 
 def encode_multipart(value: BodyInput) -> tuple[bytes, str]:
+    """编码内存表单和上传文件，并生成匹配的 multipart 类型头。
+
+    Args:
+        value: 有序表单字段或映射，字段值可以包含 UploadFile。
+
+    Returns:
+        请求体字节和包含实际 boundary 的 Content-Type。
+
+    Raises:
+        TypeError: 参数类型或接口实现不符合当前契约。
+    """
+
     if not isinstance(value, (Mapping, list, tuple)):
         raise TypeError("multipart body must be a mapping or a sequence of field pairs")
     fields: list[RequestField] = []
@@ -73,7 +91,7 @@ def encode_multipart(value: BodyInput) -> tuple[bytes, str]:
             if item is None:
                 continue
             if isinstance(item, UploadFile):
-                # Revalidate mutable file descriptors before encoding.
+                # 编码前重新校验可变的上传文件描述。
                 file = UploadFile(item.filename, item.content, item.content_type)
                 field = RequestField(name, file.content, filename=file.filename)
                 field.make_multipart(content_type=file.content_type)
@@ -90,6 +108,15 @@ def encode_multipart(value: BodyInput) -> tuple[bytes, str]:
 
 
 def encode_json(value: BodyInput) -> bytes:
+    """编码紧凑 UTF-8 JSON，拒绝非有限数值。
+
+    Args:
+        value: 需要按严格 JSON 规则序列化的值。
+
+    Returns:
+        紧凑 JSON 的 UTF-8 编码字节。
+    """
+
     return json.dumps(
         value, ensure_ascii=False, allow_nan=False, separators=(",", ":")
     ).encode("utf-8")

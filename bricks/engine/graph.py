@@ -23,7 +23,14 @@ from .policies import BoundPolicy, PolicyRef, PolicyRegistry
 
 @dataclass(frozen=True, slots=True)
 class Edge:
-    """连接源 Node output port 和目标 Node input port。"""
+    """连接源 Node output port 和目标 Node input port。
+
+    Attributes:
+        source: 有向边连接的源节点 ID。
+        target: 有向边连接的目标节点 ID。
+        source_port: 有向边连接的源输出端口。
+        target_port: 有向边连接的目标输入端口。
+    """
 
     source: str
     target: str
@@ -41,7 +48,14 @@ class Edge:
 
 @dataclass(frozen=True, slots=True)
 class NodeSpec:
-    """Graph 冻结时保存的单个 Node 执行元数据。"""
+    """Graph 冻结时保存的单个 Node 执行元数据。
+
+    Attributes:
+        input_ports: 节点声明的输入端口及其类型。
+        output_ports: 节点声明的输出端口及其类型。
+        input_policy: 仅依据端口和 token 数量生效的输入策略。
+        timeout: 超时秒数，None 表示不限制。
+    """
 
     input_ports: Ports
     output_ports: Ports
@@ -51,7 +65,15 @@ class NodeSpec:
 
 @dataclass(frozen=True, slots=True)
 class ExecutionPlan:
-    """一张冻结 Graph 的单次执行子图。"""
+    """一张冻结 Graph 的单次执行子图。
+
+    Attributes:
+        graph: 关联的 Graph 定义或注册名称。
+        entrypoint: 接收外部输入的入口节点 ID。
+        nodes: 按绑定 ID 组织的节点实例。
+        edges: 当前定义或计划包含的有向边。
+        _outgoing: 按源节点组织的下游边索引。
+    """
 
     graph: Graph
     entrypoint: str
@@ -60,18 +82,36 @@ class ExecutionPlan:
     _outgoing: Mapping[tuple[str, str], tuple[Edge, ...]]
 
     def outgoing_for(self, node_id: str, port: str) -> tuple[Edge, ...]:
-        """返回计划内指定 output port 的有序下游连接。"""
+        """返回计划内指定 output port 的有序下游连接。
+
+        Args:
+            node_id: Graph 内绑定的节点 ID。
+            port: 需要读取或输出的端口名称。
+
+        Returns:
+            从指定节点出发的有向边元组。
+        """
 
         return self._outgoing.get((node_id, port), ())
 
 
 class Graph:
-    """描述 Node 通过 typed Edge 传递数据的静态有向图。"""
+    """描述 Node 通过 typed Edge 传递数据的静态有向图。
+
+    Attributes:
+        _entrypoint: Graph 入口节点 ID。
+        _nodes: Graph 内节点 ID 到节点实例的绑定。
+        _edges: 保持声明顺序的有向边集合。
+        _edge_set: 用于拒绝重复边的集合。
+        _outgoing: 按源节点组织的下游边索引。
+        _node_specs: 冻结时保存的节点端口、策略和超时快照。
+        _frozen: 是否已完成冻结，冻结后不再接受定义修改。
+    """
 
     def __init__(self, *, entrypoint: str | None = None) -> None:
         """创建处于构建状态的空 Graph。
 
-        参数：
+        Args:
             entrypoint: 可选的入口 Node ID，也可稍后用 entry() 设置。
         """
 
@@ -91,7 +131,10 @@ class Graph:
     def entrypoint(self) -> str:
         """返回入口 Node ID。
 
-        异常：
+        Returns:
+            Graph 入口节点 ID。
+
+        Raises:
             GraphError: Graph 尚未设置入口。
         """
 
@@ -101,29 +144,41 @@ class Graph:
 
     @property
     def frozen(self) -> bool:
-        """返回 Graph 是否已经冻结。"""
+        """返回 Graph 是否已经冻结。
+
+        Returns:
+            是否已完成冻结，冻结后不再接受定义修改。
+        """
 
         return self._frozen
 
     @property
     def nodes(self) -> Mapping[str, Node]:
-        """返回只读的 Node binding。"""
+        """返回只读的 Node binding。
+
+        Returns:
+            节点绑定 ID 到节点实例的只读映射。
+        """
 
         return MappingProxyType(self._nodes)
 
     @property
     def edges(self) -> tuple[Edge, ...]:
-        """返回按定义顺序排列的 Edge。"""
+        """返回按定义顺序排列的 Edge。
+
+        Returns:
+            保持声明顺序的有向边元组。
+        """
 
         return tuple(self._edges)
 
     def entry(self, node_id: str) -> Graph:
         """设置当前 Graph 的唯一入口。
 
-        参数：
+        Args:
             node_id: 作为入口的 Node ID。
 
-        返回：
+        Returns:
             当前 Graph，便于链式构建。
         """
 
@@ -132,20 +187,42 @@ class Graph:
         return self
 
     @overload
-    def add(self, node_id: str, node: Node, /) -> Graph: ...
+    def add(self, node_id: str, node: Node, /) -> Graph:
+        """将节点绑定加入当前 Graph，节点 ID 属于此次绑定。
+
+        Args:
+            node_id: Graph 内绑定的节点 ID。
+            node: 节点实例或作用域中的节点 ID，以接口类型为准。
+
+        Returns:
+            本次操作得到的 Graph 实例。
+        """
+        ...
 
     @overload
-    def add(self, **nodes: Node) -> Graph: ...
+    def add(self, **nodes: Node) -> Graph:
+        """将节点绑定加入当前 Graph，节点 ID 属于此次绑定。
+
+        Args:
+            **nodes: 待绑定的节点 ID 与节点实例。
+
+        Returns:
+            本次操作得到的 Graph 实例。
+        """
+        ...
 
     def add(self, *args: object, **nodes: Node) -> Graph:
         """把一个或多个 Node 行为绑定到 Graph 中的位置。
 
-        参数：
+        Args:
             args: 单个 Node 的 ID 和可复用 Node 行为。
             nodes: 以关键字名称作为 Node ID 的一组 Node 行为。
 
-        返回：
+        Returns:
             当前 Graph，便于链式构建。
+
+        Raises:
+            TypeError: 参数类型或接口实现不符合当前契约。
         """
 
         self._ensure_mutable()
@@ -182,13 +259,13 @@ class Graph:
     ) -> Graph:
         """增加一条端口到端口的有向连接。
 
-        参数：
+        Args:
             source: 源 Node ID。
             target: 目标 Node ID。
             source_port: 源 output port。
             target_port: 目标 input port。
 
-        返回：
+        Returns:
             当前 Graph，便于链式构建。
         """
 
@@ -210,6 +287,17 @@ class Graph:
 
         未选节点不会执行，也不会自动连接其前后节点。首次创建计划时会
         冻结 Graph，保证计划所引用的定义之后不再变化。
+
+        Args:
+            include: 执行计划中需要保留的节点 ID 集合。
+            policies: 注册并绑定输入选择策略的容器。
+
+        Returns:
+            本次操作得到的 ExecutionPlan 实例。
+
+        Raises:
+            GraphValidationError: Graph 定义不符合冻结或执行约束。
+            TypeError: 参数类型或接口实现不符合当前契约。
         """
 
         if isinstance(include, (str, bytes)):
@@ -280,10 +368,13 @@ class Graph:
     def freeze(self, policies: PolicyRegistry | None = None) -> Graph:
         """校验并冻结 Graph。
 
-        返回：
+        Args:
+            policies: 注册并绑定输入选择策略的容器。
+
+        Returns:
             已冻结的当前 Graph。
 
-        异常：
+        Raises:
             GraphValidationError: 节点、端口、策略、连接或可达性不合法。
         """
 
@@ -302,13 +393,24 @@ class Graph:
         return self
 
     def spec_for(self, node_id: str) -> NodeSpec:
-        """返回冻结后的 Node 执行元数据。"""
+        """返回冻结后的 Node 执行元数据。
+
+        Args:
+            node_id: Graph 内绑定的节点 ID。
+
+        Returns:
+            指定节点在冻结时保存的执行元数据。
+        """
 
         self._ensure_frozen()
         return self._node_specs[node_id]
 
     def _execution_timeouts(self) -> Mapping[str, float | None]:
-        """返回冻结后的 Node timeout 快照。"""
+        """返回冻结后的 Node timeout 快照。
+
+        Returns:
+            各冻结节点的超时映射，单位秒。
+        """
 
         self._ensure_frozen()
         return MappingProxyType(
@@ -318,11 +420,11 @@ class Graph:
     def outgoing_for(self, node_id: str, port: str) -> tuple[Edge, ...]:
         """返回指定 output port 的有序下游连接。
 
-        参数：
+        Args:
             node_id: 源 Node ID。
             port: 源 output port。
 
-        返回：
+        Returns:
             按定义顺序排列的 Edge。
         """
 
@@ -330,7 +432,14 @@ class Graph:
         return self._outgoing.get((node_id, port), ())
 
     def _validate_structure(self, policies: PolicyRegistry) -> None:
-        """执行冻结前的完整静态校验。"""
+        """执行冻结前的完整静态校验。
+
+        Args:
+            policies: 注册并绑定输入选择策略的容器。
+
+        Raises:
+            GraphValidationError: Graph 定义不符合冻结或执行约束。
+        """
 
         if not self._nodes:
             raise GraphValidationError("graph must contain at least one node")
@@ -417,9 +526,12 @@ class Graph:
     def _validate_execute_style(node_id: str, node: Node) -> None:
         """保证 Node 类型与 execute 的同步风格一致。
 
-        参数：
+        Args:
             node_id: 用于错误定位的 Node ID。
             node: 等待校验的 Node。
+
+        Raises:
+            GraphValidationError: Graph 定义不符合冻结或执行约束。
         """
 
         execute = type(node).execute
@@ -438,10 +550,13 @@ class Graph:
     ) -> None:
         """校验策略和声明端口是否匹配。
 
-        参数：
+        Args:
             node_id: 用于错误定位的 Node ID。
             ports: Node 的 input ports。
             policy: Node 的输入策略。
+
+        Raises:
+            GraphValidationError: Graph 定义不符合冻结或执行约束。
         """
 
         declared = tuple(ports)
@@ -459,10 +574,10 @@ class Graph:
     def _reachable(self, adjacency: Mapping[str, set[str]]) -> set[str]:
         """计算从入口可达的 Node。
 
-        参数：
+        Args:
             adjacency: Node ID 到直接下游的邻接表。
 
-        返回：
+        Returns:
             包含入口的可达 Node ID 集合。
         """
 
@@ -477,7 +592,11 @@ class Graph:
         return reached
 
     def _ensure_mutable(self) -> None:
-        """拒绝冻结后的修改。"""
+        """拒绝冻结后的修改。
+
+        Raises:
+            GraphFrozenError: 尝试修改已经冻结的 Graph。
+        """
 
         if self._frozen:
             raise GraphFrozenError("graph is frozen")

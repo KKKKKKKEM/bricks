@@ -17,34 +17,96 @@ from .headers import Headers
 
 
 class RequestCookies(MutableMapping[str, str]):
-    """Editable request cookies with validation on every write."""
+    """每次写入均执行校验的可变请求 Cookie 映射。
+
+    Attributes:
+        _values: 当前容器拥有的数据映射。
+    """
 
     def __init__(self, values: Mapping[str, str] | None = None) -> None:
+        """复制并校验显式请求 Cookie，后续写入继续执行相同校验。
+
+        Args:
+            values: 需要复制的请求 Cookie 映射，None 表示空集合。
+        """
+
         self._values = dict(request_cookies(values))
 
     def __getitem__(self, name: str) -> str:
+        """按区分大小写的名称读取当前请求 Cookie。
+
+        Args:
+            name: 区分大小写的 Cookie 名称。
+
+        Returns:
+            指定 Cookie 名称对应的字符串值。
+        """
+
         return self._values[name]
 
     def __setitem__(self, name: str, value: str) -> None:
+        """校验并替换请求 Cookie，校验失败保留原值。
+
+        Args:
+            name: 区分大小写的 Cookie 名称。
+            value: 未加引号的请求 Cookie 值，须符合 cookie-octet 字符规则。
+        """
+
         self._values.update(request_cookies({name: value}))
 
     def __delitem__(self, name: str) -> None:
+        """移除指定索引或名称对应的值。
+
+        Args:
+            name: 区分大小写的 Cookie 名称。
+        """
+
         del self._values[name]
 
     def __iter__(self) -> Iterator[str]:
+        """返回当前容器的迭代入口。
+
+        Returns:
+            遍历当前对象内容的独立迭代入口。
+        """
+
         return iter(self._values)
 
     def __len__(self) -> int:
+        """返回当前容器中保存的条目数量。
+
+        Returns:
+            当前容器条目数量。
+        """
+
         return len(self._values)
 
 
 class _CookieResponse:
+    """适配标准库 CookieJar 所需的响应头接口。
+
+    Attributes:
+        _headers: 提供给标准库 CookieJar 的响应头对象。
+    """
+
     def __init__(self, headers: Headers) -> None:
+        """将重复响应头转换为 CookieJar 所需的消息接口。
+
+        Args:
+            headers: 保留重复字段的 HTTP 请求头或响应头输入。
+        """
+
         self._headers = Message()
         for name, value in headers.raw:
             self._headers[name] = value
 
     def info(self) -> Message:
+        """提供标准库 CookieJar 所需的响应头接口。
+
+        Returns:
+            提供给标准库 CookieJar 的响应头对象。
+        """
+
         return self._headers
 
 
@@ -53,6 +115,9 @@ class Cookies:
 
     保留同名但域或路径不同的记录；对外返回副本，避免意外修改响应数据。
     to_string() 与 str() 可以直接提取 Cookie 字符串。
+
+    Attributes:
+        _records: 当前容器拥有的独立记录集合。
     """
 
     def __init__(
@@ -137,12 +202,20 @@ class Cookies:
         return cls(jar)
 
     def __iter__(self) -> Iterator[Cookie]:
-        """迭代包含域、路径、有效期等属性的 Cookie 副本。"""
+        """迭代包含域、路径、有效期等属性的 Cookie 副本。
+
+        Returns:
+            遍历当前对象内容的独立迭代入口。
+        """
 
         return (deepcopy(cookie) for cookie in self._records)
 
     def __len__(self) -> int:
-        """返回 Cookie 记录数量，同名但域或路径不同的记录分别计数。"""
+        """返回 Cookie 记录数量，同名但域或路径不同的记录分别计数。
+
+        Returns:
+            当前容器条目数量。
+        """
 
         return len(self._records)
 
@@ -213,6 +286,10 @@ class Cookies:
         return request.get_header("Cookie", "")
 
     def __str__(self) -> str:
-        """返回全部 Cookie 的字符串，与不传参数的 to_string() 一致。"""
+        """返回全部 Cookie 的字符串，与不传参数的 to_string() 一致。
+
+        Returns:
+            当前 Cookie 记录的 name=value 字符串，不附加请求头名称。
+        """
 
         return self.to_string()

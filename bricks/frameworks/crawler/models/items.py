@@ -10,7 +10,17 @@ Record = Mapping[str, Any]
 
 
 def _record(value: object) -> dict[str, Any]:
-    """校验记录结构并复制嵌套数据，拒绝非映射与非字符串字段名。"""
+    """校验记录结构并复制嵌套数据，拒绝非映射与非字符串字段名。
+
+    Args:
+        value: 待加入或替换的记录；切片赋值时为记录迭代器。
+
+    Returns:
+        字段名已校验且嵌套值独立的字典记录。
+
+    Raises:
+        TypeError: 参数类型或接口实现不符合当前契约。
+    """
     if not isinstance(value, Mapping):
         raise TypeError("each item must be a mapping")
     if any(not isinstance(key, str) for key in value):
@@ -23,6 +33,9 @@ class Items(MutableSequence[dict[str, Any]]):
 
     支持普通列表的索引、切片和修改，以及字段投影、重命名、去重和列取值。
     转换结果与原集合隔离，不承担数据校验规则、数据库保存或文件导出。
+
+    Attributes:
+        _records: 当前容器拥有的独立记录集合。
     """
 
     def __init__(self, records: Record | Iterable[Record] = ()) -> None:
@@ -39,26 +52,73 @@ class Items(MutableSequence[dict[str, Any]]):
         self._records = [_record(record) for record in source]
 
     @overload
-    def __getitem__(self, index: int) -> dict[str, Any]: ...
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        """按索引或名称读取当前容器中的值。
+
+        Args:
+            index: 条目的索引或切片。
+
+        Returns:
+            整数索引返回原记录；切片返回嵌套内容独立的新 Items。
+        """
+        ...
 
     @overload
-    def __getitem__(self, index: slice) -> Items: ...
+    def __getitem__(self, index: slice) -> Items:
+        """按索引或名称读取当前容器中的值。
+
+        Args:
+            index: 条目的索引或切片。
+
+        Returns:
+            整数索引返回原记录；切片返回嵌套内容独立的新 Items。
+        """
+        ...
 
     def __getitem__(self, index: int | slice) -> dict[str, Any] | Items:
-        """按 index 读取原记录，切片返回嵌套数据独立的新 Items。"""
+        """按 index 读取原记录，切片返回嵌套数据独立的新 Items。
+
+        Args:
+            index: 条目的索引或切片。
+
+        Returns:
+            整数索引返回原记录；切片返回嵌套内容独立的新 Items。
+        """
 
         if isinstance(index, slice):
             return Items(self._records[index])
         return self._records[index]
 
     @overload
-    def __setitem__(self, index: int, value: Record) -> None: ...
+    def __setitem__(self, index: int, value: Record) -> None:
+        """校验并替换指定索引或名称对应的值。
+
+        Args:
+            index: 条目的索引或切片。
+            value: 待加入或替换的记录；切片赋值时为记录迭代器。
+        """
+        ...
 
     @overload
-    def __setitem__(self, index: slice, value: Iterable[Record]) -> None: ...
+    def __setitem__(self, index: slice, value: Iterable[Record]) -> None:
+        """校验并替换指定索引或名称对应的值。
+
+        Args:
+            index: 条目的索引或切片。
+            value: 待加入或替换的记录；切片赋值时为记录迭代器。
+        """
+        ...
 
     def __setitem__(self, index: int | slice, value: Record | Iterable[Record]) -> None:
-        """将 index 指定的记录或切片替换为 value 的独立副本。"""
+        """将 index 指定的记录或切片替换为 value 的独立副本。
+
+        Args:
+            index: 条目的索引或切片。
+            value: 待加入或替换的记录；切片赋值时为记录迭代器。
+
+        Raises:
+            TypeError: 参数类型或接口实现不符合当前契约。
+        """
 
         if isinstance(index, slice):
             if isinstance(value, Mapping):
@@ -70,29 +130,50 @@ class Items(MutableSequence[dict[str, Any]]):
             self._records[index] = _record(value)
 
     def __delitem__(self, index: int | slice) -> None:
-        """删除 index 指定的记录或切片。"""
+        """删除 index 指定的记录或切片。
+
+        Args:
+            index: 条目的索引或切片。
+        """
 
         del self._records[index]
 
     def __len__(self) -> int:
-        """返回记录数量。"""
+        """返回记录数量。
+
+        Returns:
+            当前容器条目数量。
+        """
 
         return len(self._records)
 
     def insert(self, index: int, value: Record) -> None:
-        """在 index 位置插入 value 的独立副本。"""
+        """在 index 位置插入 value 的独立副本。
+
+        Args:
+            index: 条目的索引或切片。
+            value: 待加入或替换的记录；切片赋值时为记录迭代器。
+        """
 
         self._records.insert(index, _record(value))
 
     def extend(self, values: Iterable[Record]) -> None:
-        """追加 values 中的记录副本，全部准备成功后再修改集合。"""
+        """追加 values 中的记录副本，全部准备成功后再修改集合。
+
+        Args:
+            values: 待批量追加的记录迭代器，全部校验成功后才修改原集合。
+        """
 
         prepared = [_record(record) for record in values]
         self._records.extend(prepared)
 
     @property
     def columns(self) -> tuple[str, ...]:
-        """返回所有字段名，按首次出现顺序排列。"""
+        """返回所有字段名，按首次出现顺序排列。
+
+        Returns:
+            所有记录中按首次出现顺序排列的字段名称。
+        """
 
         return tuple(dict.fromkeys(key for record in self._records for key in record))
 
@@ -144,12 +225,20 @@ class Items(MutableSequence[dict[str, Any]]):
             record.update(update)
 
     def copy(self) -> Items:
-        """返回记录及嵌套数据均独立的新 Items。"""
+        """返回记录及嵌套数据均独立的新 Items。
+
+        Returns:
+            与当前对象可变内容隔离的新实例。
+        """
 
         return Items(self._records)
 
     def to_list(self) -> list[dict[str, Any]]:
-        """返回记录及嵌套数据均独立的普通列表。"""
+        """返回记录及嵌套数据均独立的普通列表。
+
+        Returns:
+            记录及其嵌套数据均独立的普通列表。
+        """
 
         return [_record(record) for record in self._records]
 
@@ -175,6 +264,9 @@ class Items(MutableSequence[dict[str, Any]]):
 
         Returns:
             保持原顺序的新 Items；回调对副本的修改不进入结果。
+
+        Raises:
+            TypeError: 参数类型或接口实现不符合当前契约。
         """
 
         if not callable(predicate):
@@ -258,13 +350,37 @@ class Items(MutableSequence[dict[str, Any]]):
 
     @staticmethod
     def _validate_columns(columns: tuple[str, ...]) -> None:
+        """校验字段列表中的名称均为字符串。
+
+        Args:
+            columns: 需要选择、删除或校验的字段名称。
+
+        Raises:
+            TypeError: 参数类型或接口实现不符合当前契约。
+        """
+
         if any(not isinstance(name, str) for name in columns):
             raise TypeError("column names must be strings")
 
     def __repr__(self) -> str:
+        """返回包含当前内容的调试表示。
+
+        Returns:
+            包含当前对象内容的调试字符串。
+        """
+
         return f"Items({self._records!r})"
 
     def __eq__(self, other: object) -> bool:
+        """比较当前对象与另一对象的内容是否相等。
+
+        Args:
+            other: 参与内容比较的另一对象。
+
+        Returns:
+            内容相等时为 True；不支持的比较类型返回 NotImplemented。
+        """
+
         if isinstance(other, Items):
             return self._records == other._records
         if isinstance(other, list):
