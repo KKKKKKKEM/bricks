@@ -46,5 +46,7 @@ jobs:
         run: uv run --with ruff ruff check bricks tests examples
       - name: Run mypy
         run: uv run --with mypy mypy bricks
+      - name: Check formatting
+        run: uv run --with ruff ruff format --check bricks
       - name: Build distributions
         run: uv build

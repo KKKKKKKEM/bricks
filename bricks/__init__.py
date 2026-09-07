@@ -1,39 +1,17 @@
-"""Bricks 顶层公共 API。"""
+"""基于公共 Graph API 组合的爬虫领域模型与下载节点。"""
 
-from .engine import (
-    AsyncNode,
-    Context,
-    Edge,
-    Event,
-    Execution,
-    ExecutionLimits,
-    ExecutionPlan,
-    ExecutionStatus,
-    Graph,
-    InputPolicy,
-    Node,
-    Output,
-    Ports,
-    Slot,
-    SlotPool,
-)
-from .runtime import Runtime
+from .downloaders import AsyncDownloader, Downloader
+from .models import Cookies, Items, Request, Response, UploadFile
+from .nodes import AsyncDownloadNode, DownloadNode
 
 __all__ = [
-    "AsyncNode",
-    "Context",
-    "Edge",
-    "Event",
-    "Execution",
-    "ExecutionLimits",
-    "ExecutionPlan",
-    "ExecutionStatus",
-    "Graph",
-    "InputPolicy",
-    "Node",
-    "Output",
-    "Ports",
-    "Runtime",
-    "Slot",
-    "SlotPool",
+    "AsyncDownloader",
+    "AsyncDownloadNode",
+    "Cookies",
+    "Downloader",
+    "DownloadNode",
+    "Items",
+    "Request",
+    "Response",
+    "UploadFile",
 ]

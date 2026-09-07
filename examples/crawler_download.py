@@ -5,9 +5,9 @@ from __future__ import annotations
 import argparse
 from urllib.parse import urlsplit
 
-from bricks import Graph, Runtime
-from bricks.frameworks.crawler import DownloadNode, Request, Response
-from bricks.frameworks.crawler.downloaders.httpx import HttpxDownloader
+from interlace import Graph, Runtime
+from bricks import DownloadNode, Request, Response
+from bricks.downloaders.httpx import HttpxDownloader
 
 
 def select_download(request: Request) -> str | None:

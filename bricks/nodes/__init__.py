@@ -1,5 +1,5 @@
-"""由内核公共 API 实现的官方可复用 Node。"""
+"""按领域行为组织的爬虫节点包。"""
 
-from .keyed_join import KeyedJoin, KeyedPair, KeyedValue
+from .download import AsyncDownloadNode, DownloadNode
 
-__all__ = ["KeyedJoin", "KeyedPair", "KeyedValue"]
+__all__ = ["AsyncDownloadNode", "DownloadNode"]

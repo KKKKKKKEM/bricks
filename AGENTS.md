@@ -2,176 +2,74 @@
 
 ## 执行要求
 
-本文件是仓库级 AI 编码代理指令。修改代码、公共 API、运行语义、架构或相关文档前，必须完整阅读并遵守下面的
-架构宪法。
-
-- 实现、测试和文档必须与当前架构宪法一致。
-- 以最新架构为准。除非用户明确要求，不保留旧别名、隐式转换、弃用路径、兼容分支或历史架构描述。
-- 有意进行的设计调整若与宪法冲突，必须同步修改本文件、实现、测试和相关手册章节，不得绕过冲突。
-- 架构宪法保持规范、简洁；原理解释和使用教程写入 `docs/` 中的编号章节。
+本文件是仓库级 AI 编码代理指令。修改代码、公共 API、运行语义、架构或文档前，必须完整阅读并遵守本文件。
+实现、测试和文档以当前架构为准，不保留旧别名、隐式转换、弃用路径或兼容分支。
+设计调整必须同步修改本文件、实现、测试和相关手册。规范保持简洁，教程写入 `docs/` 编号章节。
 
 ## 架构宪法
 
 状态：Normative
-适用范围：核心 Runtime、扩展适配器与领域框架
+适用范围：Bricks 爬虫领域框架
 
-## 第一条：Less is more
+### 第一条：领域与微内核分离
 
-1. 顶层公共模型只保留 Graph 基础类型、Event、Context、Execution、Slot 和 Runtime。
-2. 内部责任划分不自动升级为用户概念。
-3. 删除错误抽象优先于维护错误抽象的兼容层。
-4. 新能力能由 Graph、Event、Runtime 和领域组件组合时，不进入核心。
-5. 新用户概念必须证明不能由现有概念承担，且至少服务两个不同领域。
+1. Bricks 负责爬虫领域模型、下载器和领域节点；通用编排由独立的 Interlace 包提供。
+2. 依赖方向固定为用户应用 -> Bricks -> Interlace；不得复制或内置 Interlace 核心实现。
+3. Bricks 只依赖 Interlace 公开 API 与 SPI，不读取运行时私有状态，不改写核心契约。
+4. Graph、Event、Execution、Slot、Runtime 和插件的规范由
+   [Interlace 架构宪法](https://github.com/KKKKKKKEM/interlace/blob/main/AGENTS.md)维护。
+   涉及核心契约的修改须同时阅读对应依赖版本的宪法并在 Interlace 实施。
 
-顶层 API 固定为：
+### 第二条：公共 API 保持简洁
 
-```text
-Ports、Node、AsyncNode、InputPolicy、Output、Edge、Graph、ExecutionPlan、
-Event、Context、Execution、ExecutionLimits、ExecutionStatus、Slot、SlotPool、Runtime
-```
+1. 顶层 `bricks` 只导出 Request、Response、Cookies、Items、UploadFile、Downloader、AsyncDownloader、
+   DownloadNode 和 AsyncDownloadNode。
+2. 模型位于 `bricks.models`，下载协议与实现位于 `bricks.downloaders`，领域节点位于 `bricks.nodes`。
+3. Graph、Node、Event、Context、Execution、Slot 和 Runtime 从 `interlace` 导入，不在 Bricks 转导出。
+4. 新能力优先组合现有模型、普通函数、领域节点与窄协议，避免不必要的包装和全局注册表。
 
-## 第二条：局部数据流与跨图事件分离
+### 第三条：下载职责与资源所有权
 
-1. Output 只在当前 Graph 内沿 Edge 传播。
-2. Event 只通过 `Context.emit()` 或 `Runtime.emit()` 进入跨图流程。
-3. Node 返回值不得隐式转换为 Event，Event 不得隐式转换为 Edge 数据。
-4. 目标 Graph 不在源 Node 的 emit 调用栈内执行。
-5. 跨图事件使用 imperative `emit()`，不得依靠 `yield` 的多义语义。
+1. 下载器通过 `fetch(Request) -> Response` 或异步同义接口结构化替换，不要求继承具体实现。
+2. 下载节点复制输入 Request 后选择和调用下载器，通过 Output 沿当前 Graph 传播 Response。
+3. Request 不保存下载器实例或注册名称；选择函数由节点构造器注入，不改变核心 token 选择语义。
+4. Node 和下载器默认可重入，不在共享实例中隐式保存当前执行状态；注入实例默认由调用方管理。
+5. 跨逻辑执行链的资源使用 Interlace Slot，execution-local 状态遵循 Context 的命名空间边界。
+6. Event 只能显式 emit，Node 返回值不得隐式变为跨图事件。目标 Graph 不在 emit 调用栈内执行。
 
-## 第三条：Graph 是静态有向定义
+### 第四条：错误与可靠性必须如实表达
 
-1. Node 声明 typed input/output Ports。
-2. InputPolicy 和受控 selector contribution 只根据端口与可用 token 数量选择组合，不读取领域值。
-3. Graph 进入 Runtime 前必须冻结并校验可达性和类型兼容；普通 Edge 可以组成环。
-4. Node ID 属于 Graph binding，Node 不保存某次 execution 状态。
-5. Graph 内循环由 Output 沿回边继续传值，并在不再产生可执行数据时自然结束。
-6. 无下游 Edge 的 Output 由 `Runtime.run()` 返回。
+1. 网络传输失败可转换为 `Response(status_code=-1, error=...)`；HTTP 4xx/5xx 保留正常响应。
+2. 程序错误、配置错误、取消和引擎控制异常继续传播，不得作为普通业务失败恢复。
+3. 取消和同步 Node timeout 是协作式语义，不宣称能够安全强杀任意 Python 函数。
+4. URL 去重、重试、幂等、代理、会话和持久化属于领域策略，不增加 Runtime 或 Context 职责。
+5. 已接受 Event 和已交付 Output 不因后续失败撤回；不得夸大默认内存实现的消息可靠性。
+6. 文档只描述已实现能力，明确 HTTP 传输、Cookie、上传和缓冲行为的限制。
 
-## 第四条：Event 是最小事实
+### 第五条：依赖与验证
 
-1. Event 核心只携带 `type` 和 `payload`。
-2. 关联 ID、时间、来源、幂等键和 tracing 数据属于领域 payload 或外部观察者。
-3. `emit()` 成功返回表示事件传输已接受 Event。
-4. 已接受 Event 不因源 Graph 后续失败而撤回。
-5. Runtime 接受每一个 Event，不比较 payload，不做领域去重。
+1. Interlace 使用显式、可复现的版本来源；Git 依赖固定完整提交 ID 并维护 `uv.lock`。
+2. 正式依赖不得指向本地目录，不得通过隐式路径使测试通过。
+3. 核心变更先在 Interlace 验证和推送，再升级 Bricks 依赖并执行领域与跨包契约测试。
+4. 领域模型校验、下载器替换、同步异步下载、取消、错误传播和请求复制必须有测试。
 
-## 第五条：Runtime 是门面，PluginHost 是装配根
+### 第六条：Pythonic 实现与中文注释
 
-1. Runtime 注册 Graph，用 `on(event, graph, queue, concurrency)` 组合路由与本地消费，并用 `observe()` 独立注册
-   观察者；高级组合可以分别调用 `route()` 与 `consume()`。
-2. Runtime 的默认构造必须通过 PluginHost 安装 LocalRuntimePlugin，再取得 RouterRole 与 WorkerRole；不得另设
-   只供内建实现使用的装配路径。
-3. Router 组装事件发布和任务投递，Worker 组装任务消费和 Graph 执行。显式传入 Runtime 的 Router/Worker 由
-   Runtime 管理；注入角色或插件的底层组件默认仍由调用方管理。
-4. Runtime 不得直接实现消息持久化、队列算法、Node 执行、插件发现或领域策略。
-5. Trigger、Task、Queue、Scheduler、execution record 可以作为内部职责存在，但不要求用户逐项组装。
-
-## 第六条：可替换性通过窄协议获得
-
-1. EventBus 只负责 Event 发布、订阅和投递生命周期。
-2. TaskPublisher 负责工作投递，TaskConsumer 负责命名执行通道、本地并发和消费；TaskBackend 是两者的组合。
-3. GraphExecutor 只负责执行冻结 Graph，通过 Execution 的公开输出接口交付结果；同步返回 None，异步返回
-   Awaitable[None]。执行宿主管理 start/succeed/fail，不依靠整批返回值补发输出。
-4. EventBus、任务传输和 GraphExecutor 必须可以独立替换和组合，不得合并为万能 Backend。
-5. SPI 位于高级扩展层，不进入顶层 `bricks` API。
-6. Runtime 和插件装配层只依赖公开角色或能力协议，不得使用默认内存实现的私有状态。
-7. RouterRole、WorkerRole 和 SlotProvider 按结构化协议替换，不要求继承默认实现。ExecutionFactory 可注入
-   OutputStore 与 ExecutionNotifier，默认实现与第三方实现均经同一装配路径。
-
-## 第七条：可靠性不得夸大
-
-1. 当前内存实现不得宣称持久 broker、消息 ack、跨进程租约、恢复或 exactly-once。
-2. 核心不自动重试；emit 后的失败不会撤回已发布 Event。
-3. Redis/MQ 适配器必须明确自身 delivery、ack、retry 和 failure 语义。
-4. URL、tool_call_id、batch_id 和外部副作用幂等属于领域 Graph/Store。
-
-## 第八条：Context 保持狭窄
-
-1. Context 提供 `emit()`、当前逻辑执行链的 `slot`、协作式 `checkpoint()`，以及按 Node/插件命名空间隔离的
-   execution-local `state()` 与静止阶段 `on_quiescence()`。
-2. 数据库、HTTP client、LLM provider、领域 Store 和 tracing 通过 Node 构造器或观察者注入。
-3. Node 不得获得 Runtime 内部工作请求、TaskBackend 或 executor。
-
-## 第九条：同步与异步共享语义
-
-1. 同步行为继承 Node，需要 await 的行为继承 AsyncNode。
-2. Graph.freeze() 校验 Node 类目与 execute 风格一致。
-3. queue concurrency 限制完整 Graph execution，而不是单个 Node。
-4. 同步和异步 Node 共享同一 InputPolicy、Output、Edge 和 Event 语义。
-5. Node 默认必须无状态且可重入；跨 Work execution 状态放入 Slot，不得隐式存放在共享 Node 实例中。
-
-## 第十条：Slot 跟随逻辑执行链
-
-1. Slot 是进程内执行资源，不绑定线程、Worker 或 Consumer；同一进程内的 Work 跨 Consumer 流转时必须携带同一个
-   Slot。
-2. 根 Work 从 Consumer 配置的 SlotPool 获取 Slot，整个逻辑链结束后自动归还。
-3. 分支 Work 可以共享 Slot，但同一个 Slot 的 Graph execution 不得并发执行。
-4. `concurrency` 限制 Consumer 的本地 Graph execution；`slots.size` 限制池中的逻辑执行链，两者相互独立。
-5. 等待 Slot 的根 Work 不得占用 Consumer 的执行线程，也不得阻塞已携带 Slot 的延续 Work。
-6. Slot、SlotPool 和进程内 lease 不跨进程序列化；Work 穿过进程或消息边界后开始新的本地 Slot 链，远程适配器不得
-   宣称保留原进程的 Slot 连续性。
-7. 适配器通过 `bricks.spi.SlotProvider` 的公开申请和可用通知接口取得 `SlotLease`，通过 `Delivery.slot_lease` 传递；
-   lease 提供引用管理和串行 execution 能力，不暴露内部锁。每个接管的引用必须释放，执行期间的引用由 lease 保护。
-
-## 第十一条：Execution 控制必须默认开放
-
-1. 一次 Node firing 计为一步；`max_steps=0` 表示不限制步数。
-2. Graph execution 的 `timeout=None` 和 Node 的 `timeout=None` 表示各自不限制时长，正数统一使用秒。
-3. 取消和同步 Node timeout 是协作式语义；核心不得宣称能够安全强杀任意 Python 函数。
-4. 控制异常不得被 Node Hook 当作普通业务异常恢复。
-5. 跨 Graph 的每个 Work 是独立 execution，独立计步和计时。
-6. Execution 是同步等待、异步等待和 terminal Output 流的统一句柄；便利接口不得维护不同执行语义。
-7. 已交给流消费者的 terminal Output 不因后续 Graph 失败而撤回。
-8. 输出存储与等待通知实现可替换；存储必须维持追加顺序和可重放性。完整结果按需读取，流式消费不得强制物化
-   全量结果；同步与异步交付共享背压、取消和超时约束。
-
-## 第十二条：扩展点保持受控
-
-1. Runtime 生命周期通过只读事件观察；观察者失败不得改变业务执行结果。
-2. selector contribution 必须使用命名空间 ID，只能选择当前非空端口，每个 firing 对每个端口最多消费一个 token。
-3. Graph 冻结时绑定 selector 实现快照；缺失 contribution 必须在冻结阶段失败。
-4. TaskConsumer 以 DeliveryResult 明确表达 ACK、RETRY 或 REJECT；broker lease、重投递和死信实现留给 backend。
-5. keyed join、窗口和领域状态属于扩展 Node，不进入 Engine 的固定调度语义。
-
-## 第十三条：公共行为必须可验证
-
-1. Graph 冻结与执行约束必须有失败测试。
-2. Event 提交、跨图连接、并发和错误传播必须有契约测试。
-3. 三个替换协议必须有非默认实现组合测试。
-4. 插件依赖、冲突、API 兼容、失败回滚、逆序关闭和默认装配路径必须有契约测试。
-5. 示例必须只通过相同顶层 API 组合，并覆盖核心编排方式。
-6. 文档不得把计划能力写成已实现能力。
-
-## 第十四条：核心实现可替换，公共契约保持稳定
-
-1. Graph、Node、Ports、Edge、Output、Event、Execution 的基本语义、冻结校验规则和错误契约属于微内核，插件不得
-   改写这些契约；满足相同契约的核心实现可以通过公开协议替换。
-2. 部署能力和非本质策略通过具名 capability 扩展；默认实现必须与第三方实现经过同一 PluginHost 装配路径。
-3. 插件必须声明 namespaced ID、插件版本、SPI 主版本、依赖与提供的 capability；宿主按依赖顺序 setup/start，
-   并按逆序 stop。
-4. 单例 capability 冲突、缺失依赖、循环依赖、SPI 不兼容和未兑现的 capability 声明必须在 Runtime 可用前失败。
-5. 输入策略、Node Hook 和 Runtime Observer 使用统一贡献通道，但仍保留各自的强类型和权限边界。
-6. 插件不得访问 Runtime 私有状态；新增扩展类型优先成为 capability，不得继续增加互不相干的全局注册表。
-
-## 第十五条：Pythonic 实现与中文注释
-
-1. 代码实现应符合 Python 惯用方式，接口设计简洁、清晰、优美；优先使用标准语言特性和窄协议，避免不必要的
-   包装、重复抽象和隐式行为。
-2. 模块、类、函数、方法及行内说明使用中文；代码标识符、标准格式标题和工具指令保留其原有语法。
-3. 每个函数和方法必须提供 Google 风格文档字符串：以中文概述职责，按实际契约填写 Args、Returns、Yields、
-   Raises，说明参数、返回值或产出及需要调用方处理的异常；无对应内容时省略该节，不机械填充空段落。
-4. 成员字段（含类属性和私有实例字段）必须有中文说明，可使用字段旁注释或类文档字符串的 Attributes 节，明确
-   含义及必要的单位、默认值、所有权或可变性边界。实现、测试和示例均遵守本条。
+1. 使用 Python 惯用方式和窄协议，保持接口简洁，避免重复抽象和隐式行为。
+2. 模块、类、函数、方法及行内说明使用中文；标识符、标准格式标题和工具指令保留原有语法。
+3. 每个函数和方法必须提供 Google 风格文档字符串，以中文概述职责，按实际契约填写 Args、Returns、
+   Yields、Raises；无对应内容时省略该节，不机械填充空段落。
+4. 成员字段（含类属性和私有字段）必须使用中文旁注或 Attributes 节说明含义、单位、默认值、所有权和可变边界。
+5. 实现、测试和示例均遵守本条。
 
 ## 验证要求
-
-行为变更应先运行相关测试，并在可行时运行完整检查：
 
 ```bash
 uv run --with pytest pytest -q
 uv run --with mypy mypy bricks
 uv run --with ruff ruff check bricks tests examples
 uv run --with ruff ruff format --check bricks
+uv build
 ```
 
 文档变更还应检查本地链接、Markdown 围栏和发生变化的 Mermaid 图。

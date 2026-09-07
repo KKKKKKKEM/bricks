@@ -22,12 +22,14 @@ version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
+    { name = "interlace" },
     { name = "urllib3" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28,<1" },
+    { name = "interlace", git = "https://github.com/KKKKKKKEM/interlace.git?rev=a980688df232f41694de5a7684abb2bd9920a1ca" },
     { name = "urllib3", specifier = ">=2,<3" },
 ]
 
@@ -97,6 +99,11 @@ sdist = { url = "https://files.pythonhosted.org/packages/5f/f7/abb373e5757eaec4b
 wheels = [
     { url = "https://files.pythonhosted.org/packages/57/b0/0e52c878c53f245edd3a11020f20979b3f490f245af532c7cae3027754b5/idna-3.19-py3-none-any.whl", hash = "sha256:815e7be7a7806d54abb586dc943addc79e8b2ee16915059658cbeff4b1b43bf4", size = 68550, upload-time = "2026-08-18T05:14:22.343Z" },
 ]
+
+[[package]]
+name = "interlace"
+version = "0.1.0"
+source = { git = "https://github.com/KKKKKKKEM/interlace.git?rev=a980688df232f41694de5a7684abb2bd9920a1ca#a980688df232f41694de5a7684abb2bd9920a1ca" }
 
 [[package]]
 name = "typing-extensions"

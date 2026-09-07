@@ -1,71 +1,57 @@
 # Bricks
 
-Bricks 是一个 Python typed graph runtime：Graph 内以 `Output` 和 `Edge` 传递局部数据，Graph 间以
-`Event` 和 `Runtime` 连接领域工作流。
+Bricks 是基于 [Interlace](https://github.com/KKKKKKKEM/interlace) 编排微内核构建的 Python 爬虫框架。
+Bricks 负责请求、响应、数据记录、下载器和下载节点；Interlace 负责 Graph、Event、Runtime、执行控制与插件装配。
 
-```text
-Node -- Output / Edge --> Node
-Graph -- Event / Runtime --> Graph
+## 安装与开发
+
+```bash
+uv sync --locked
+uv run python -m examples.crawler_download https://example.com
 ```
 
-顶层 API 还提供进程内的 `Slot` 与 `SlotPool`：队列 Work 可以在同一进程中跨 Consumer 传递并复用代理、Cookie、
-连接等执行状态，而不依赖具体线程。Slot 不跨进程或消息边界传输。
+当前源码通过 Git 依赖固定到经过验证的 Interlace 提交，不要求本地存在另一个源码目录。
+此分支的拆分版本尚未发布到 PyPI。
 
-执行默认不限步数和时长；`run()`、`start()` 和事件 route 可按需设置 `max_steps` 与 Graph `timeout`，单次
-Node firing 的时限由该 Node 的 `timeout` 属性声明。`start()` 返回可查询和协作式取消的 `Execution`。
-`Execution` 可调用 `result()`、直接 `await`，也可同步或异步迭代 terminal Output；`Runtime.iter()` 和
-`Runtime.aiter()` 提供对应便利入口。
-
-## 最小示例
+## 下载一张页面
 
 ```python
-from bricks import Graph, Node, Output, Ports, Runtime
+from interlace import Graph, Runtime
 
+from bricks import DownloadNode, Request
+from bricks.downloaders.httpx import HttpxDownloader
 
-class Upper(Node):
-    input_ports = Ports(text=str)
-    output_ports = Ports(result=str)
-    timeout = 5
-
-    def execute(self, inputs, context):
-        del context
-        return Output(inputs["text"].upper(), "result")
-
-
-graph = Graph(entrypoint="upper").add(upper=Upper())
-
+graph = Graph(entrypoint="download").add(
+    download=DownloadNode({"default": HttpxDownloader()})
+)
 with Runtime() as runtime:
-    runtime.register("upper.graph", graph)
-    print(runtime.run("upper.graph", "bricks"))
+    runtime.register("crawl", graph)
+    response = runtime.run("crawl", Request("https://example.com"))[0].value
+    print(response.status_code, response.text)
 ```
 
-完整内容按一本手册组织，从[文档目录](docs/README.md)开始：
-
-1. [设计哲学与心智模型](docs/01-design-philosophy.md)
-2. [第一张 Graph](docs/02-first-graph.md)
-3. [Graph 数据流](docs/03-graph-dataflow.md)
-4. [Event 与跨图工作流](docs/04-events-and-workflows.md)
-5. [Execution、并发与失败](docs/05-execution.md)
-6. [Runtime 内部架构](docs/06-runtime-architecture.md)
-7. [插件、SPI 与适配器开发](docs/07-plugins.md)
-8. [编排模式](docs/08-patterns.md)
+下载节点输出 `Response`，可以通过 Interlace 的 Edge 连接后续解析与存储节点。
+异步下载使用 `AsyncDownloadNode` 和 `AsyncHttpxDownloader`，保持相同的数据流语义。
 
 ## 当前范围
 
-默认实现通过内建 `LocalRuntimePlugin` 提供内存事件分发、线程池队列并发和 Graph 执行；它与第三方扩展一样由
-统一 `PluginHost` 装配。EventBus、任务传输、GraphExecutor、输入策略、Node Hook 和 Runtime Observer 均可受控
-扩展，但 Graph 的类型、冻结和 Execution 语义保持固定。默认实现不提供持久化、broker ack、进程恢复、定时器、
-死信队列或 exactly-once 语义。
+- `bricks`：Request、Response、Cookies、Items、UploadFile、下载器协议与下载节点。
+- `bricks.models`：请求体、请求头、Cookie 和记录等领域模型。
+- `bricks.downloaders`：同步与异步下载协议；`httpx` 模块提供具体传输实现。
+- `bricks.nodes`：可组合到 Interlace Graph 的爬虫节点。
 
-源码按 `engine`、`runtime`、`plugins`、`spi`、`adapters` 和可复用 `nodes` 分层；各包职责、目录树和允许的
-依赖方向见[Runtime 内部架构](docs/06-runtime-architecture.md#源码目录与包职责)。
+当前提供缓冲响应、内存上传和请求级下载器选择；没有爬虫调度器、自动重试、URL 去重、跨请求会话或流式上传。
+HTTP 网络失败通过 `Response(status_code=-1)` 表达，执行取消和超时控制异常继续传播。
+
+详细说明见[爬虫手册](docs/README.md)，通用编排语义见
+[Interlace 手册](https://github.com/KKKKKKKEM/interlace/blob/main/docs/README.md)。
+
+## 验证
 
 ```bash
-uv run python examples/linear.py
-uv run python examples/fan_in.py
-uv run python examples/cycle.py
-uv run python examples/event_routing.py
-uv run python examples/async_node.py
-uv run python examples/output_stream.py
 uv run --with pytest pytest -q
+uv run --with mypy mypy bricks
+uv run --with ruff ruff check bricks tests examples
+uv run --with ruff ruff format --check bricks
+uv build
 ```
