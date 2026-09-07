@@ -8,6 +8,31 @@ from bricks.engine.errors import ExecutionCancelledError, NodeTimeoutError
 from bricks.frameworks.crawler import Cookies, Request, Response
 
 
+@pytest.mark.parametrize(
+    "content,size",
+    [
+        (b"", 0),
+        (b"abc", 3),
+        ("\u4e2d\u6587".encode("utf-8"), 6),
+        ("\U0001f600".encode("utf-8"), 4),
+        (codecs.BOM_UTF16_LE + "hello".encode("utf-16-le"), 12),
+        (b"\xff", 1),
+    ],
+)
+def test_response_body_size(content, size):
+    response = Response(content, headers={"Content-Length": "999"})
+    assert response.size() == size
+
+
+def test_response_body_size_follows_content_changes():
+    response = Response("\u4e2d\u6587".encode("utf-8"))
+    assert response.size() == 6
+    response.encoding = "latin-1"
+    assert response.size() == 6
+    response.content = b"x" * 2048
+    assert response.size() == 2048
+
+
 def test_internal_failure_retains_exception_and_cause():
     cause = OSError("connection refused")
     error = ConnectionError("proxy unavailable")
@@ -114,10 +139,10 @@ def test_cookie_strings_preserve_duplicate_names_and_attributes():
     assert cookies.get("missing", "fallback") == "fallback"
     assert cookies.to_string(url="https://other.com/") == ""
     assert cookies.to_string(url="https://sub.example.com/account") == "shared=yes"
-    assert (
-        cookies.to_string(url="http://example.com/account")
-        == "session=root; shared=yes"
-    )
+    # CookieJar does not guarantee ordering between equal-length paths.
+    assert sorted(
+        cookies.to_string(url="http://example.com/account").split("; ")
+    ) == ["session=root", "shared=yes"]
     assert "session=private" not in cookies.to_string(
         url="https://example.com/accounting"
     )

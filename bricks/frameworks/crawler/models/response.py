@@ -195,6 +195,11 @@ class Response:
             raise AttributeError(f"{name} is read-only; use copy()")
         object.__setattr__(self, name, value)
 
+    def size(self) -> int:
+        """返回当前 content 的字节数，不读取 Content-Length，不包含响应头。"""
+
+        return len(self.content)
+
     @property
     def resolved_encoding(self) -> str:
         """返回当前内容的有效编码：显式设置、BOM、响应头，最后回退 UTF-8。"""

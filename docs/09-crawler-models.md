@@ -109,6 +109,10 @@ Response 以读取为主，允许直接修改 content 和 encoding；其他字�
 校验。text 和 json() 每次读取当前内容，不缓存旧结果。`ok` 表示状态码在 200–399，不能代表业务成功。
 关联 Request 与 history 在构造和复制时保存独立副本。未提供响应 URL 时取关联 Request 的实际地址。
 
+`response.size()` 返回当前 content 的字节数，结果为整数。例如 UTF-8 的“中文”，size() 为 6。
+修改编码不改变字节数；修改 content 后立即更新。不读取 Content-Length，也不包含响应头、重定向历史或对象内存
+开销。字节数统计当前存储的响应体，不代表压缩前后的网络传输流量。需要文本字符数时使用 `len(response.text)`。
+
 Cookies 保存标准库 Cookie 记录，保留域、路径、Secure、有效期及扩展属性。省略 cookies 参数时，从响应头的
 Set-Cookie 自动提取，需要来源 URL；显式提供 Cookies、CookieJar、Cookie 序列或简写字典时使用提供的数据。
 解析时使用标准库 CookieJar 的来源和有效期策略；原始 Set-Cookie 始终保留在 headers 中。
