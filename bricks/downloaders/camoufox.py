@@ -4,9 +4,9 @@ from contextlib import AsyncExitStack, ExitStack
 from copy import deepcopy
 from dataclasses import dataclass
 
+from camoufox.addons import DefaultAddons  # type: ignore[import-untyped]
 from camoufox.async_api import AsyncCamoufox  # type: ignore[import-untyped]
 from camoufox.sync_api import Camoufox  # type: ignore[import-untyped]
-from camoufox.addons import DefaultAddons  # type: ignore[import-untyped]
 from playwright.async_api import Browser as AsyncBrowser
 from playwright.sync_api import Browser
 
