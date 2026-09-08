@@ -13,7 +13,7 @@
 
 ### 第一条：领域与微内核分离
 
-1. Bricks 负责爬虫领域模型、下载器和领域节点；通用编排由独立的 Interlace 包提供。
+1. Bricks 负责爬虫领域模型、下载器、独立解析器和领域节点；通用编排由独立的 Interlace 包提供。
 2. 依赖方向固定为用户应用 -> Bricks -> Interlace；不得复制或内置 Interlace 核心实现。
 3. Bricks 只依赖 Interlace 公开 API 与 SPI，不读取运行时私有状态，不改写核心契约。
 4. Graph、Event、Execution、Slot、Runtime 和插件的规范由
@@ -25,6 +25,7 @@
 1. 顶层 `bricks` 只导出 Request、Response、Cookies、Items、UploadFile、Downloader、AsyncDownloader、
    DownloadNode 和 AsyncDownloadNode。
 2. 模型位于 `bricks.models`，下载协议与实现位于 `bricks.downloaders`，领域节点位于 `bricks.nodes`。
+   独立内容解析和批量规则位于 `bricks.parsers`，不在顶层转导出。
 3. Graph、Node、Event、Context、Execution、Slot 和 Runtime 从 `interlace` 导入，不在 Bricks 转导出。
 4. 新能力优先组合现有模型、普通函数、领域节点与窄协议，避免不必要的包装和全局注册表。
 5. curl_cffi 是默认传输和正式依赖；HTTPX、requests、wreq、primp、requests-go、playwright、camoufox
@@ -36,6 +37,8 @@
 
 1. 下载器通过 `fetch(Request) -> Response` 或异步同义接口结构化替换，不要求继承具体实现。
 2. 下载节点复制输入 Request 后选择和调用下载器，通过 Output 沿当前 Graph 传播 Response。
+   DownloadNode 与 AsyncDownloadNode 均继承 Interlace Node，分别使用 def 与 async def execute；
+   同步和异步下载协议仍独立，由执行器等待异步结果，不接受异步生成器作为节点返回值。
 3. Request 不保存下载器实例或注册名称；选择函数由节点构造器注入，不改变核心 token 选择语义。
 4. Node 和下载器默认可重入，不在共享实例中隐式保存当前执行状态；注入实例默认由调用方管理。
 5. 跨逻辑执行链的资源使用 Interlace Slot，execution-local 状态遵循 Context 的命名空间边界。
@@ -80,7 +83,43 @@
     page 只支持无请求体 GET 和浏览器重定向；api 支持普通 HTTP 方法和已编码请求体，CONNECT 明确拒绝。
     Camoufox 包和浏览器版本分别固定，不将其浏览器配置伪装成请求级 TLS impersonate；默认不下载或启用附加扩展。
 
-### 第四条：错误与可靠性必须如实表达
+### 第四条：独立解析与批量规则
+
+1. Parser 是 prepare(source) 与 extract(source, expression, **options) 的窄协议；
+   prepare 接受自身准备结果，实例不保存当前文档。自定义实现无需继承 BaseParser 即可使用公共 match。
+2. 解析器不依赖 Response、Items、Context 或 Runtime；输入、文档及其可变查询结果由调用方管理。
+   BaseParser 仅提供可选的 extract_first 和 match 便捷方法，不建立注册表或动态字符串加载路径。
+3. CSS、XPath 使用 lxml/cssselect；HTML/XML 格式显式配置，XML 禁用 DTD 加载和实体展开。
+   XML 在返回文档或查询前拒绝 DOCTYPE，现成元素按所属文档检查；标准实体与数字字符引用仍支持。
+   CSS 输出节点、文本或属性必须明确选择，不自定义 ::text/::attr 语法；文本不自动去空白。
+4. JMESPath 和 JSONPath 接收已解码 JSON 值，字符串始终是值；JSON 文本由调用方显式解码。
+   JMESPath 保留原生 null/缺失语义；JSONPath 使用 python-jsonpath 严格模式，结果始终为命中值列表。
+   JSONPath 校验根值为 dict、list、str、int、float、bool 或 None，拒绝文件读取接口及字节输入，不消费输入流。
+   正则仅接收文本，默认返回完整匹配，捕获组由 group 显式选择，不按组数改变输出形状。
+5. match 接受字段映射、Rows、Product 或递归规则序列，返回 list[dict]；规则序列始终按顺序拼接。
+   Rows 只展开明确选中的列表，其 fields 可递归使用各类记录规则；字段位置的 Rows/Product 保留为列表。
+   Product 各分支在同一当前源上提取并做笛卡尔积；Rows 内组合父字段映射和子 Rows 实现关联展开与父字段继承。
+   普通字段数组、嵌套映射仍保留原结构，不隐式广播、展开或合并。
+6. Rule 明确描述数量、条件、前后转换、缺失判定和默认值；Group 按序选择非缺失候选。
+   MISSING 与 None、空列表和假值不同；first 只接受列表，空列表转为 MISSING。
+   规则不绑定调用时引擎；结构配置固定，默认值和常量逐次复制，回调及原生解析异常原样传播。
+   值规则为 Rule、Constant、Group、Pipeline 和 Collect，可递归组合并用于字段和 Rows.select；
+   Group 候选与 Collect 成员只接受显式值规则，不接受裸表达式、函数或记录规则。
+7. Product 默认任一空分支产生零条记录；keep_empty=True 将空分支视为一条空记录，不补 None。
+   零分支乘积为 [{}]；on_conflict 默认 raise，first/last 按分支顺序保留同名字段，不递归合并字段值。
+   各分支每次组装只执行一次，已执行的表达式及回调错误不得被空分支吞掉；合并后的每条记录深复制。
+8. lxml、cssselect、jmespath 和 python-jsonpath[strict] 是正式依赖，维护 uv.lock；
+   单表达式、批量与嵌套规则、笛卡尔积、父子关联、空分支与字段冲突、第三方协议替换、
+   缺失语义、规则复用、连续提取、多规则收集及异常传播必须有测试。
+9. Pipeline 接受非空的值规则或单参数同步转换函数序列，前一步结果直接传入下一步，
+   不隐式解码、复制、逐项映射或改变默认解析器。任一步返回 MISSING 即停止；
+   单步默认值仍可继续，整链默认值与必填约束用外层 Group 表达，错误和取消原样传播。
+10. Collect 各成员在同一当前源上按声明顺序执行一次，仅跳过整个成员返回的 MISSING。
+    values 默认保留各结果结构；concat 要求有效结果为 list 并只拼接一层，非列表明确报错。
+    不去重、不删除内部缺失位置、不隐式过滤 None 或假值；零成员或全部缺失返回 []。
+    新建外层结果列表，内部值沿用来源规则的所有权；成员失败立即传播，不返回部分收集结果。
+
+### 第五条：错误与可靠性必须如实表达
 
 1. 网络传输失败可转换为 `Response(status_code=-1, error=...)`；HTTP 4xx/5xx 保留正常响应。
 2. 程序错误、配置错误、取消和引擎控制异常继续传播，不得作为普通业务失败恢复。
@@ -89,14 +128,14 @@
 5. 已接受 Event 和已交付 Output 不因后续失败撤回；不得夸大默认内存实现的消息可靠性。
 6. 文档只描述已实现能力，明确 HTTP 传输、Cookie、上传和缓冲行为的限制。
 
-### 第五条：依赖与验证
+### 第六条：依赖与验证
 
 1. Interlace 使用显式、可复现的版本来源；Git 依赖固定完整提交 ID 并维护 `uv.lock`。
 2. 正式依赖不得指向本地目录，不得通过隐式路径使测试通过。
 3. 核心变更先在 Interlace 验证和推送，再升级 Bricks 依赖并执行领域与跨包契约测试。
 4. 领域模型校验、下载器替换、同步异步下载、取消、错误传播和请求复制必须有测试。
 
-### 第六条：Pythonic 实现与中文注释
+### 第七条：Pythonic 实现与中文注释
 
 1. 使用 Python 惯用方式和窄协议，保持接口简洁，避免重复抽象和隐式行为。
 2. 模块、类、函数、方法及行内说明使用中文；标识符、标准格式标题和工具指令保留原有语法。

@@ -3,7 +3,7 @@
 from importlib.util import find_spec
 
 import bricks
-from interlace import AsyncNode, Node
+from interlace import Node
 
 
 def test_crawler_api_uses_interlace_node_types() -> None:
@@ -21,7 +21,7 @@ def test_crawler_api_uses_interlace_node_types() -> None:
         "UploadFile",
     ]
     assert issubclass(bricks.DownloadNode, Node)
-    assert issubclass(bricks.AsyncDownloadNode, AsyncNode)
+    assert issubclass(bricks.AsyncDownloadNode, Node)
     assert not hasattr(bricks, "Runtime")
     assert not hasattr(bricks, "Graph")
 

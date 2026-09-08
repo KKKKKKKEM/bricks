@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Any, TypeVar
 
-from interlace import AsyncNode, Context, Node, Output, Ports, Slot
+from interlace import Context, Node, Output, Ports, Slot
 
 from ..downloaders import (
     AsyncDownloader,
@@ -306,7 +306,7 @@ class DownloadNode(Node):
         return _output(response)
 
 
-class AsyncDownloadNode(AsyncNode):
+class AsyncDownloadNode(Node):
     """每次触发按请求选择异步下载器，通过 await 执行网络下载。
 
     Attributes:

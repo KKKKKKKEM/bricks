@@ -5,8 +5,8 @@ Bricks 是爬虫领域框架，Interlace 是独立发布的编排微内核。
 | 所属项目 | 职责 |
 | --- | --- |
 | Interlace | 静态 typed Graph、Event、Execution、Slot、Runtime、插件与基础设施协议 |
-| Bricks | HTTP 请求与响应、下载器、下载节点、爬虫数据记录 |
-| 用户应用 | 页面解析、业务幂等、数据存储和业务流程 |
+| Bricks | HTTP 请求与响应、下载器、下载节点、爬虫数据记录、独立解析器与批量提取规则 |
+| 用户应用 | 站点解析规则、业务幂等、数据存储和业务流程 |
 
 Bricks 单向依赖 Interlace 的公开 API。领域模型不持有 Runtime；下载节点通过构造器接受下载器，
 通过 Context 执行协作式检查，通过 Output 交付 Response。底层 Runtime 不读取 URL 或其他爬虫领域值。
@@ -21,6 +21,9 @@ from bricks.downloaders.curl_cffi import CurlCffiDownloader
 
 Bricks 顶层只导出爬虫领域类型，不转导出 Interlace 的引擎 API。下载器通过结构化协议替换；
 EventBus、任务传输和 GraphExecutor 的替换遵循 Interlace 的 SPI。
+
+`bricks.parsers` 通过独立 Parser 协议提供内容查询，公共 match 负责字段规则和记录展开。
+解析器不绑定 Response 或执行上下文，使用方式见[独立解析与批量规则](06-parsers.md)。
 
 ## 安装和版本
 

@@ -6,7 +6,7 @@ from threading import Barrier
 
 import httpx
 import pytest
-from interlace import AsyncNode, Context, Graph, Node, Ports, Runtime, Slot, SlotPool
+from interlace import Context, Graph, Node, Ports, Runtime, Slot, SlotPool
 from interlace.engine.errors import ExecutionCancelledError, NodeTimeoutError
 
 from bricks import (
@@ -548,7 +548,7 @@ def test_async_runtime_session_lifecycle(server):
 
     results = SimpleQueue()
 
-    class Prepare(AsyncNode):
+    class Prepare(Node):
         """在执行器事件循环准备会话。"""
 
         async def execute(self, inputs, context):
@@ -563,7 +563,7 @@ def test_async_runtime_session_lifecycle(server):
             sessions.append(session)
             slot["downloaders"] = {"default": session}
 
-    class Close(AsyncNode):
+    class Close(Node):
         """在执行器停止前关闭其循环中的会话。"""
 
         async def execute(self, inputs, context):

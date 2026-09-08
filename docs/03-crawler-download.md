@@ -27,6 +27,10 @@ class AsyncDownloader(Protocol):
 
 ## 节点和动态选择
 
+`DownloadNode` 与 `AsyncDownloadNode` 均继承 `interlace.Node`，分别使用 `def execute` 与
+`async def execute`，对应同步和异步下载器。Interlace 执行器统一等待 Awaitable 并校验最终 Output；
+自定义异步节点同样继承 Node，不使用异步生成器返回输出。
+
 ```python
 from urllib.parse import urlsplit
 
@@ -355,7 +359,7 @@ Slot 归还池后，资源和 Cookie 仍然保留，后续根执行链可能复�
 不同账号须由领域装配分配到各自的会话资源或独立池，不能把混合账号的根请求随机交给同一个会话池。
 
 异步 Client 必须在使用它的同一事件循环内执行 aclose。默认 Interlace 执行器使用后台事件循环，
-不能在外层另起 asyncio.run 来关闭已在后台使用的会话；应在执行器仍运行时通过该执行器上的清理 AsyncNode
+不能在外层另起 asyncio.run 来关闭已在后台使用的会话；应在执行器仍运行时通过该执行器上的清理 Node（使用 async def execute）
 关闭所有会话，或由提供该循环的装配层负责清理。也不能把一个 AsyncClient 跨不同执行器的事件循环复用。
 上述 HTTP 客户端取消和程序错误继续传播，取消单次 fetch 不会替调用方关闭整个会话。
 浏览器会话的失败关闭策略不同，见[浏览器下载](04-browser-download.md)。

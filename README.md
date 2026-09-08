@@ -1,7 +1,7 @@
 # Bricks
 
 Bricks 是基于 [Interlace](https://github.com/KKKKKKKEM/interlace) 编排微内核构建的 Python 爬虫框架。
-Bricks 负责请求、响应、数据记录、下载器和下载节点；Interlace 负责 Graph、Event、Runtime、执行控制与插件装配。
+Bricks 负责请求、响应、数据记录、下载器、独立解析器和下载节点；Interlace 负责 Graph、Event、Runtime、执行控制与插件装配。
 
 ## 安装与开发
 
@@ -57,6 +57,11 @@ requests-go 可通过 `uv sync --extra requests-go` 安装，模块 `bricks.down
 - `bricks.downloaders`：同步与异步下载协议；curl_cffi 默认实现，以及可选 HTTPX、requests、wreq、primp、requests-go 实现。
 - 浏览器适配器：Playwright、Camoufox，共用页面操作、API 请求和会话生命周期。
 - `bricks.nodes`：可组合到 Interlace Graph 的爬虫节点。
+- `bricks.parsers`：CSS、XPath、JMESPath、JSONPath、正则及独立的 `match` 批量规则，支持笛卡尔组合与父子展开；不与 Response 绑定。
+
+解析器可单独使用，`uv run python -m examples.crawler_parse` 演示 CSS/JSON 批量提取、商品规格组合、父字段继承、
+Pipeline 跨格式连续提取与 Collect 多规则收集，
+接口、第三方扩展和规则语义见[独立解析与批量规则](docs/06-parsers.md)。
 
 当前提供缓冲响应、内存上传、请求级下载器选择、Slot 会话复用与 Context 执行配置；没有爬虫调度器、自动重试、URL 去重或流式上传。
 HTTP 网络失败通过 `Response(status_code=-1)` 表达，执行取消和超时控制异常继续传播。

@@ -47,4 +47,4 @@ uv run python -m examples.crawler_pipeline http://127.0.0.1:8000/catalog --outpu
 
 这是应用层组合示例，没有增加 Bricks 公共 API 或 Interlace 核心职责。
 
-[上一章：浏览器下载](04-browser-download.md) · [文档目录](README.md)
+[上一章：浏览器下载](04-browser-download.md) · [下一章：独立解析与批量规则](06-parsers.md) · [文档目录](README.md)

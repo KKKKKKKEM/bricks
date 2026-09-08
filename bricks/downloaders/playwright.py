@@ -5,7 +5,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Literal
 
-from playwright.async_api import Browser as AsyncBrowser, async_playwright
+from playwright.async_api import Browser as AsyncBrowser
+from playwright.async_api import async_playwright
 from playwright.sync_api import Browser, sync_playwright
 
 from ._browser import AsyncBrowserDownloader, SyncBrowserDownloader
