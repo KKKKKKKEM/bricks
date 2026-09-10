@@ -451,22 +451,35 @@ class Request:
             for name in Request.__slots__
             if not name.startswith("_")
         }
+        body_changed = bool({"body", "body_type"}.intersection(changes))
+        headers_changed = "headers" in changes
         headers = MutableHeaders(self.headers)
-        if self._body_content_type is not None and headers.get_all("Content-Type") == (
-            self._body_content_type,
+        if (
+            body_changed
+            and self._body_content_type is not None
+            and headers.get_all("Content-Type") == (self._body_content_type,)
         ):
             del headers["Content-Type"]
         values.update(body=self._body_source, body_type=self.body_type, headers=headers)
         values.update(changes)
-        if "body" in changes or "body_type" in changes:
+        if body_changed:
             headers = MutableHeaders(values["headers"])
             headers.pop("Content-Length", None)
             values["headers"] = headers
         copied = type(self)(**values)
-        if not {"body", "body_type"}.intersection(changes):
+        if not body_changed:
             # 不改变请求体时，复制必须保留原始字节及对应的 multipart boundary。
             copied._body = self._body
-            if self._body_content_type is not None and self.body_type == "multipart":
+            if not headers_changed:
+                copied.headers = self.headers
+                copied._body_content_type = (
+                    self._body_content_type
+                    if self._body_content_type is not None
+                    and self.headers.get_all("Content-Type")
+                    == (self._body_content_type,)
+                    else None
+                )
+            elif self._body_content_type is not None and self.body_type == "multipart":
                 copied.headers["Content-Type"] = self._body_content_type
                 copied._body_content_type = self._body_content_type
         return copied

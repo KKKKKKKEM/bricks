@@ -165,6 +165,23 @@ def test_copy_keeps_explicit_content_type_ownership():
     assert copied.headers["Content-Type"] == "application/json"
 
 
+@pytest.mark.parametrize("body_type", ["json", "form", "multipart"])
+def test_copy_preserves_removed_automatic_content_type(body_type):
+    """普通复制不得恢复调用方明确删除的自动 Content-Type。
+
+    Args:
+        body_type: 当前请求体的编码方式。
+    """
+
+    body = {"a": 1} if body_type != "form" else {"a": "1"}
+    request = Request("https://example.com", body=body, body_type=body_type)
+    del request.headers["Content-Type"]
+    copied = request.copy()
+    assert copied.body == request.body
+    assert copied.headers.raw == request.headers.raw == ()
+    assert copied.copy().headers.raw == ()
+
+
 @pytest.mark.parametrize(
     "value",
     [

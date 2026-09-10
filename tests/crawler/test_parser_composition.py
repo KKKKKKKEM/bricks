@@ -480,3 +480,90 @@ def test_composition_empty_pipeline_modes_and_public_boundary() -> None:
         Collect((str.strip,))  # type: ignore[arg-type]
     assert not hasattr(bricks, "Pipeline")
     assert not hasattr(bricks, "Collect")
+
+
+def test_composition_rejects_async_functions_at_assembly() -> None:
+    """同步规则和解析器在执行前拒绝明确的异步扩展点。"""
+
+    async def callback(value: Any) -> Any:
+        """提供不符合同步规则契约的回调。
+
+        Args:
+            value: 当前输入。
+
+        Returns:
+            原输入。
+        """
+        return value
+
+    class AsyncParser:
+        """提供不符合同步 Parser 契约的方法。"""
+
+        async def prepare(self, source: Any) -> Any:
+            """异步返回输入。
+
+            Args:
+                source: 当前输入。
+
+            Returns:
+                原输入。
+            """
+            return source
+
+        async def extract(self, source: Any, expression: str, **options: Any) -> Any:
+            """异步返回输入。
+
+            Args:
+                source: 当前输入。
+                expression: 当前表达式。
+                **options: 查询选项。
+
+            Returns:
+                原输入。
+            """
+            return source
+
+    with pytest.raises(TypeError, match="callbacks must be synchronous"):
+        Rule("x", when=callback)
+    with pytest.raises(TypeError, match="callables must be synchronous"):
+        Pipeline((callback,))
+    with pytest.raises(TypeError, match="must be synchronous"):
+        match({}, {}, parser=AsyncParser())
+
+
+@pytest.mark.parametrize(
+    "target", ["when", "before", "missing", "transform", "pipeline"]
+)
+def test_composition_rejects_awaitables_returned_by_sync_callables(target: str) -> None:
+    """同步包装函数返回协程时不得将其当作条件或字段值。
+
+    Args:
+        target: 当前验证的规则扩展点。
+    """
+
+    async def result() -> bool:
+        """返回用于触发 Awaitable 检查的值。
+
+        Returns:
+            固定布尔值。
+        """
+        return False
+
+    def callback(value: Any) -> Any:
+        """从同步函数返回协程，模拟装饰器或可调用对象。
+
+        Args:
+            value: 当前输入。
+
+        Returns:
+            尚未等待的协程。
+        """
+        return result()
+
+    rule = (
+        Pipeline((callback,))
+        if target == "pipeline"
+        else Rule("x", **{target: callback})
+    )
+    with pytest.raises(TypeError, match="synchronous value"):
+        JmesPathParser().match({"x": 1}, {"value": rule})

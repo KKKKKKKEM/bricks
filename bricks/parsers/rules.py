@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -35,12 +36,34 @@ def _check_parser(parser: Parser | None) -> None:
     Raises:
         TypeError: 注入对象不是解析器实例。
     """
-    if parser is not None and (
-        isinstance(parser, type)
-        or not callable(getattr(parser, "prepare", None))
-        or not callable(getattr(parser, "extract", None))
-    ):
+    if parser is None:
+        return
+    prepare = getattr(parser, "prepare", None)
+    extract = getattr(parser, "extract", None)
+    if isinstance(parser, type) or not callable(prepare) or not callable(extract):
         raise TypeError("parser must provide prepare() and extract()")
+    if inspect.iscoroutinefunction(prepare) or inspect.iscoroutinefunction(extract):
+        raise TypeError("parser prepare() and extract() must be synchronous")
+
+
+def _sync_result(value: Any, label: str) -> Any:
+    """拒绝同步扩展点意外返回的 Awaitable。
+
+    Args:
+        value: 同步解析器或回调的返回值。
+        label: 产生返回值的扩展点名称。
+
+    Returns:
+        已确认不是 Awaitable 的原值。
+
+    Raises:
+        TypeError: 返回值需要异步等待。
+    """
+    if inspect.isawaitable(value):
+        if inspect.iscoroutine(value):
+            value.close()
+        raise TypeError(f"{label} must return a synchronous value")
+    return value
 
 
 @dataclass(frozen=True)
@@ -89,6 +112,8 @@ class Rule:
         for callback in (self.when, self.before, self.transform, self.missing):
             if callback is not None and not callable(callback):
                 raise TypeError("rule callbacks must be callable")
+            if callback is not None and inspect.iscoroutinefunction(callback):
+                raise TypeError("rule callbacks must be synchronous")
         if not isinstance(self.options, Mapping) or any(
             not isinstance(key, str) for key in self.options
         ):
@@ -177,6 +202,8 @@ class Pipeline:
             for step in steps
         ):
             raise TypeError("Pipeline accepts only value rules or callables")
+        if any(callable(step) and inspect.iscoroutinefunction(step) for step in steps):
+            raise TypeError("Pipeline callables must be synchronous")
         object.__setattr__(self, "steps", steps)
 
 
@@ -393,22 +420,32 @@ def _apply(source: Any, rule: Rule, parser: Parser) -> Any:
         TypeError: first 模式收到非列表结果。
         MissingValueError: 必填字段缺失。
     """
-    if rule.when is not None and not rule.when(source):
-        return MISSING
+    if rule.when is not None:
+        condition = _sync_result(rule.when(source), "Rule.when")
+        if not condition:
+            return MISSING
     engine = rule.parser if rule.parser is not None else parser
-    prepared = rule.before(source) if rule.before is not None else source
-    value = engine.extract(
-        engine.prepare(prepared), rule.expression, **deepcopy(dict(rule.options))
+    prepared = (
+        _sync_result(rule.before(source), "Rule.before")
+        if rule.before is not None
+        else source
+    )
+    document = _sync_result(engine.prepare(prepared), "Parser.prepare")
+    value = _sync_result(
+        engine.extract(document, rule.expression, **deepcopy(dict(rule.options))),
+        "Parser.extract",
     )
     if rule.mode == "first" and value is not MISSING:
         if not isinstance(value, list):
             raise TypeError(f"first mode requires a list: {rule.expression}")
         value = value[0] if value else MISSING
-    if value is not MISSING and rule.missing is not None and rule.missing(value):
-        value = MISSING
+    if value is not MISSING and rule.missing is not None:
+        missing = _sync_result(rule.missing(value), "Rule.missing")
+        if missing:
+            value = MISSING
     value = _fallback(value, rule.default, rule.required, rule.expression)
     if value is not MISSING and rule.transform is not None:
-        value = rule.transform(value)
+        value = _sync_result(rule.transform(value), "Rule.transform")
     return value
 
 
@@ -510,7 +547,7 @@ def _value(source: Any, rule: ValueRule, parser: Parser, label: str) -> Any:
             value = (
                 _value(value, step, parser, label)
                 if isinstance(step, _VALUE_RULE_TYPES)
-                else step(value)
+                else _sync_result(step(value), "Pipeline callable")
             )
         return value
     result = []
@@ -598,5 +635,5 @@ def match(source: Any, rules: RuleSet, *, parser: Parser) -> list[dict[str, Any]
     schema = _freeze_rules(rules)
     if isinstance(schema, tuple) and not schema:
         return []
-    prepared = parser.prepare(source)
+    prepared = _sync_result(parser.prepare(source), "Parser.prepare")
     return _evaluate(prepared, schema, parser)

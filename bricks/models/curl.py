@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 
 
 class _Parser(argparse.ArgumentParser):
+    """将 argparse 的退出行为转换为可由调用方处理的 ValueError。"""
+
     def error(self, message: str) -> NoReturn:
         """将命令行解析错误转换为 ValueError，避免终止进程。
 
@@ -320,7 +322,7 @@ def render_curl(request: Request, body_file: str | None = None) -> str:
     """生成 POSIX cURL 命令，请求体文件仅作为引用，不写入文件。
 
     Args:
-        request: 当前 HTTP 请求或 pytest 提供的参数化夹具对象。
+        request: 当前 HTTP 请求。
         body_file: cURL 命令引用的请求体文件路径，本操作不写文件。
 
     Returns:

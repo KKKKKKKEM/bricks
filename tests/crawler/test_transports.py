@@ -6,12 +6,19 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
+import httpx
 import pytest
 from curl_cffi.requests.exceptions import ImpersonateError, SessionClosed
 from interlace import Context, Graph, Runtime, Slot
 
 from bricks import AsyncDownloadNode, DownloadNode, Request, UploadFile
 from bricks.downloaders.curl_cffi import AsyncCurlCffiDownloader, CurlCffiDownloader
+from bricks.downloaders.httpx import (
+    AsyncHttpxDownloader,
+    AsyncHttpxSessionDownloader,
+    HttpxDownloader,
+    HttpxSessionDownloader,
+)
 from bricks.downloaders.requests import RequestsDownloader
 
 
@@ -310,6 +317,56 @@ def test_requests_rejects_duplicate_headers(server):
         RequestsDownloader().fetch(
             Request(server[0], headers=[("X-Test", "a"), ("x-test", "b")])
         )
+
+
+def test_httpx_local_protocol_errors_propagate(monkeypatch):
+    """四种 HTTPX 执行路径均不得把本地请求错误伪装成网络失败。"""
+
+    def fail(self, request, **kwargs):
+        """模拟 HTTPX 在发送本地请求时拒绝协议数据。
+
+        Args:
+            self: 当前同步客户端。
+            request: 已构造的 HTTPX 请求。
+            **kwargs: send 调用选项。
+
+        Raises:
+            httpx.LocalProtocolError: 固定的本地协议错误。
+        """
+        raise httpx.LocalProtocolError("invalid local request", request=request)
+
+    async def fail_async(self, request, **kwargs):
+        """模拟异步客户端拒绝本地协议数据。
+
+        Args:
+            self: 当前异步客户端。
+            request: 已构造的 HTTPX 请求。
+            **kwargs: send 调用选项。
+
+        Raises:
+            httpx.LocalProtocolError: 固定的本地协议错误。
+        """
+        raise httpx.LocalProtocolError("invalid local request", request=request)
+
+    monkeypatch.setattr(httpx.Client, "send", fail)
+    request = Request("https://example.com")
+    with pytest.raises(httpx.LocalProtocolError):
+        HttpxDownloader().fetch(request)
+    with httpx.Client() as client:
+        with pytest.raises(httpx.LocalProtocolError):
+            HttpxSessionDownloader(client).fetch(request)
+
+    async def run():
+        """验证临时与会话异步 HTTPX 路径。"""
+
+        monkeypatch.setattr(httpx.AsyncClient, "send", fail_async)
+        with pytest.raises(httpx.LocalProtocolError):
+            await AsyncHttpxDownloader().fetch(request)
+        async with httpx.AsyncClient() as client:
+            with pytest.raises(httpx.LocalProtocolError):
+                await AsyncHttpxSessionDownloader(client).fetch(request)
+
+    asyncio.run(run())
 
 
 def test_async_curl_cancellation_closes_temporary_session(server, monkeypatch):

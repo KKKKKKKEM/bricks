@@ -41,8 +41,9 @@ JSON 和 form 在没有手动指定 Content-Type 时自动添加请求头。切�
 手动指定的类型保留，由调用方保证与编码一致。multipart 始终设置带有实际 boundary 的 Content-Type，覆盖旧值。
 完成编码后仍可以直接修改 headers，调用方应保证 multipart boundary 与 body 一致。
 
-替换 body 或切换类型会清除旧 Content-Length。`copy()` 隔离可变数据；没有覆盖 body 或类型时，保留实际请求体字节，
-包括 multipart boundary。UploadFile 接受内存中的字节或文本，不打开文件、不接管文件句柄，也不支持流式上传。
+替换 body 或切换类型会清除旧 Content-Length。`copy()` 隔离可变数据；没有覆盖 body、类型或 headers 时，
+保留当前请求头和实际请求体字节，包括调用方已删除的自动 Content-Type。显式覆盖 headers 时重新应用构造规则，
+multipart 仍保留与原请求体匹配的 boundary。UploadFile 接受内存中的字节或文本，不打开文件、不接管文件句柄，也不支持流式上传。
 同时覆盖 body 和 headers 时，也会清除传入 headers 中的 Content-Length。
 
 ## 编辑与共享

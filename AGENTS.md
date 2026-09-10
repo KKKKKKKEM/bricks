@@ -147,10 +147,10 @@
 ## 验证要求
 
 ```bash
-uv run --with pytest pytest -q
-uv run --with mypy mypy bricks
-uv run --with ruff ruff check bricks tests examples
-uv run --with ruff ruff format --check bricks
+uv run --locked pytest -q
+uv run --locked mypy bricks
+uv run --locked ruff check bricks tests examples
+uv run --locked ruff format --check bricks
 uv build
 ```
 

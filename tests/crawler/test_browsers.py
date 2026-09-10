@@ -3,6 +3,7 @@
 import asyncio
 import json
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import AsyncExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
@@ -11,6 +12,7 @@ from playwright.sync_api import Error as SyncError
 from interlace import Context, Graph, Runtime, Slot
 
 from bricks import AsyncDownloadNode, DownloadNode, Request, UploadFile
+from bricks.downloaders._browser import AsyncBrowserSessionDownloader, BrowserOptions
 from bricks.downloaders.playwright import (
     AsyncPlaywrightDownloader,
     PlaywrightDownloader,
@@ -19,6 +21,40 @@ from bricks.downloaders.camoufox import AsyncCamoufoxDownloader, CamoufoxDownloa
 
 _SYNC = [PlaywrightDownloader, CamoufoxDownloader]  # 两个真实同步浏览器后端。
 _ASYNC = [AsyncPlaywrightDownloader, AsyncCamoufoxDownloader]  # 同样的原生异步后端。
+
+
+def test_async_close_finishes_cleanup_before_propagating_cancellation():
+    """关闭任务被取消时仍完成资源栈，并保留重复关闭语义。"""
+
+    async def run():
+        """在清理回调阻塞期间取消外层关闭任务。"""
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+        released = False
+
+        async def cleanup() -> None:
+            """等待测试放行后记录资源已经释放。"""
+
+            nonlocal released
+            started.set()
+            await release.wait()
+            released = True
+
+        resources = AsyncExitStack()
+        resources.push_async_callback(cleanup)
+        session = AsyncBrowserSessionDownloader(object(), BrowserOptions(), resources)
+        task = asyncio.create_task(session.close())
+        await started.wait()
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert released
+        assert session._closed
+        await session.close()
+
+    asyncio.run(run())
 
 
 @pytest.fixture

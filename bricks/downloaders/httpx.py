@@ -10,6 +10,15 @@ import httpx
 from ..models import Request, Response
 from ._options import TransportOptions
 
+_NETWORK_ERRORS = (
+    httpx.TimeoutException,
+    httpx.NetworkError,
+    httpx.ProxyError,
+    httpx.RemoteProtocolError,
+    httpx.TooManyRedirects,
+    httpx.DecodingError,
+)  # 可恢复传输失败；本地协议和不支持的协议配置继续传播。
+
 
 def _sent_request(source: Request, sent: httpx.Request) -> Request:
     """将 HTTPX 请求转换为实际发送内容的独立快照。
@@ -158,7 +167,7 @@ class HttpxDownloader(TransportOptions):
             )
             try:
                 received = client.send(prepared)
-            except httpx.RequestError as error:
+            except _NETWORK_ERRORS as error:
                 return _failure(source, error, started)
             return _response(source, received, started)
 
@@ -237,7 +246,7 @@ class AsyncHttpxDownloader(TransportOptions):
             )
             try:
                 received = await client.send(prepared)
-            except httpx.RequestError as error:
+            except _NETWORK_ERRORS as error:
                 return _failure(source, error, started)
             return _response(source, received, started)
 
@@ -303,7 +312,7 @@ class HttpxSessionDownloader:
             received = self.client.send(
                 prepared, follow_redirects=source.allow_redirects
             )
-        except httpx.RequestError as error:
+        except _NETWORK_ERRORS as error:
             return _failure(source, error, started)
         return _response(source, received, started)
 
@@ -341,6 +350,6 @@ class AsyncHttpxSessionDownloader:
             received = await self.client.send(
                 prepared, follow_redirects=source.allow_redirects
             )
-        except httpx.RequestError as error:
+        except _NETWORK_ERRORS as error:
             return _failure(source, error, started)
         return _response(source, received, started)

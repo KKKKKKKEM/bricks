@@ -185,6 +185,8 @@ assert records == [{"name": "笔记本"}]
 ```
 
 步骤可以是 Rule、Constant、Group、Pipeline、Collect，或接收一个值的同步转换函数。
+Parser 方法、Rule 回调和 Pipeline 转换函数均必须同步返回；异步函数或运行时返回 Awaitable 会明确报 TypeError，
+不会把协程作为字段值或条件真值继续处理。
 空链报错，不接受裸表达式、字段映射、Rows 或 Product 作为步骤。JSON 解码、文本清理、类型转换
 均由函数显式表达，不按内容猜测格式，也不会自动对列表逐项执行下一步。
 

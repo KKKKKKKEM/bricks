@@ -32,7 +32,7 @@ jobs:
           uv run python -m playwright install --with-deps chromium firefox
           uv run python -m camoufox fetch official/stable/152.0.4-beta.30
       - name: Run tests
-        run: uv run --python "${{ matrix.python-version }}" --with pytest pytest -q
+        run: uv run --locked --python "${{ matrix.python-version }}" pytest -q
 
   static:
     name: Static checks and build
@@ -48,10 +48,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run Ruff
-        run: uv run --with ruff ruff check bricks tests examples
+        run: uv run --locked ruff check bricks tests examples
       - name: Run mypy
-        run: uv run --with mypy mypy bricks
+        run: uv run --locked mypy bricks
       - name: Check formatting
-        run: uv run --with ruff ruff format --check bricks
+        run: uv run --locked ruff format --check bricks
       - name: Build distributions
         run: uv build

@@ -36,7 +36,7 @@ Interlace 尚未发布到 PyPI，`pyproject.toml` 使用完整 Git 提交 ID 声
 ```bash
 uv sync --locked
 uv pip install --editable ../interlace
-uv run --no-sync --with pytest pytest -q
+uv run --no-sync pytest -q
 ```
 
 正式验证与 CI 必须使用锁定的远端版本。修改核心契约时，先在 Interlace 完成契约测试并提交推送，

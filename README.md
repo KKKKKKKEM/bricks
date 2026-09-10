@@ -76,9 +76,9 @@ HTTPS 契约测试需要本机提供 `openssl` 命令，用于生成临时测试
 `uv run python -m camoufox fetch official/stable/152.0.4-beta.30`；Linux 还需安装浏览器运行所需的系统库。
 
 ```bash
-uv run --with pytest pytest -q
-uv run --with mypy mypy bricks
-uv run --with ruff ruff check bricks tests examples
-uv run --with ruff ruff format --check bricks
+uv run --locked pytest -q
+uv run --locked mypy bricks
+uv run --locked ruff check bricks tests examples
+uv run --locked ruff format --check bricks
 uv build
 ```

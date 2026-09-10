@@ -500,9 +500,15 @@ class AsyncBrowserSessionDownloader:
 
         self._check_owner()
         if not self._closed:
-            self._closed = True
+            cleanup = asyncio.create_task(self._resources.aclose())
             try:
-                await self._resources.aclose()
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    await cleanup
+                    self._closed = True
+                    raise
+                self._closed = True
             finally:
                 self._page = None
                 self._document = None
