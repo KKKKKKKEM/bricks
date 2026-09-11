@@ -126,7 +126,7 @@ requires-dist = [
     { name = "cssselect", specifier = ">=1.3,<2" },
     { name = "curl-cffi", specifier = ">=0.16.3,<0.17" },
     { name = "httpx", marker = "extra == 'httpx'", specifier = ">=0.28,<1" },
-    { name = "interlace", git = "https://github.com/KKKKKKKEM/interlace.git?rev=744ac5951702693c7c7fb6aa59ea2f8b196b5982" },
+    { name = "interlace", git = "https://github.com/KKKKKKKEM/interlace.git?rev=34896afcb4b22b95de56aebe4f798e0f6528abbc" },
     { name = "jmespath", specifier = ">=1.0,<2" },
     { name = "lxml", specifier = ">=6,<7" },
     { name = "playwright", marker = "extra == 'camoufox'", specifier = "==1.62.0" },
@@ -573,7 +573,7 @@ wheels = [
 [[package]]
 name = "interlace"
 version = "0.1.0"
-source = { git = "https://github.com/KKKKKKKEM/interlace.git?rev=744ac5951702693c7c7fb6aa59ea2f8b196b5982#744ac5951702693c7c7fb6aa59ea2f8b196b5982" }
+source = { git = "https://github.com/KKKKKKKEM/interlace.git?rev=34896afcb4b22b95de56aebe4f798e0f6528abbc#34896afcb4b22b95de56aebe4f798e0f6528abbc" }
 
 [[package]]
 name = "iregexp-check"
