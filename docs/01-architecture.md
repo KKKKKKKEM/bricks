@@ -5,7 +5,7 @@ Bricks 是爬虫领域框架，Interlace 是独立发布的编排微内核。
 | 所属项目 | 职责 |
 | --- | --- |
 | Interlace | 静态 typed Graph、Event、Execution、Slot、Runtime、插件与基础设施协议 |
-| Bricks | HTTP 请求与响应、下载器、下载节点、爬虫数据记录、独立解析器与批量提取规则 |
+| Bricks | HTTP 请求与响应、下载器、下载节点、爬虫数据记录、独立解析器、批量提取规则与种子任务存储 |
 | 用户应用 | 站点解析规则、业务幂等、数据存储和业务流程 |
 
 Bricks 单向依赖 Interlace 的公开 API。领域模型不持有 Runtime；下载节点通过构造器接受下载器，
@@ -24,6 +24,10 @@ EventBus、任务传输和 GraphExecutor 的替换遵循 Interlace 的 SPI。
 
 `bricks.parsers` 通过独立 Parser 协议提供内容查询，公共 match 负责字段规则和记录展开。
 解析器不绑定 Response 或执行上下文，使用方式见[独立解析与批量规则](06-parsers.md)。
+
+`bricks.queues` 提供本地和 Redis 种子任务存储，以及初始化租约与断点。
+QueueBackend 通过公开 SPI 接入 Interlace，并组合其本地调度器管理线程和 Slot，
+使用方式及可靠性边界见[任务队列](07-task-queues.md)。
 
 ## 安装和版本
 
@@ -46,7 +50,9 @@ uv run --no-sync pytest -q
 
 默认运行时是进程内实现，不提供持久 broker、自动重试、跨进程恢复或 exactly-once。
 URL 去重、下载重试、代理与会话策略属于爬虫领域。当前下载器支持代理和按 Slot 装配的会话，
-默认使用 curl_cffi，HTTPX 与 requests 为可选依赖；尚未内建 URL 去重或自动重试。
+默认使用 curl_cffi，HTTPX 与 requests 为可选依赖；尚未内建 URL 去重或请求级自动重试。
+显式装配 QueueBackend 可以按 Work.id 去重并按交付结果有界重投；Redis 存储支持租约到期恢复，
+不改变默认内存 Runtime 的可靠性承诺，也不保证外部副作用恰好执行一次。
 取消和同步超时保持协作式语义；已发布的事件或已交付的输出不因后续失败而撤回。
 
 [文档目录](README.md) · [下一章：爬虫领域模型](02-crawler-models.md)

@@ -1,7 +1,7 @@
 # Bricks
 
 Bricks 是基于 [Interlace](https://github.com/KKKKKKKEM/interlace) 编排微内核构建的 Python 爬虫框架。
-Bricks 负责请求、响应、数据记录、下载器、独立解析器和下载节点；Interlace 负责 Graph、Event、Runtime、执行控制与插件装配。
+Bricks 负责请求、响应、数据记录、下载器、独立解析器、下载节点与种子任务存储；Interlace 负责 Graph、Event、Runtime、执行控制与插件装配。
 
 ## 安装与开发
 
@@ -63,7 +63,13 @@ requests-go 可通过 `uv sync --extra requests-go` 安装，模块 `bricks.down
 Pipeline 跨格式连续提取与 Collect 多规则收集，
 接口、第三方扩展和规则语义见[独立解析与批量规则](docs/06-parsers.md)。
 
-当前提供缓冲响应、内存上传、请求级下载器选择、Slot 会话复用与 Context 执行配置；没有爬虫调度器、自动重试、URL 去重或流式上传。
+`bricks.queues` 提供本地／Redis 任务存储、默认按内容生成 ID 的 `make_work`、交付租约、有限重投和初始化断点，
+QueueBackend 通过 Interlace SPI 接入执行。运行 `uv run --locked python -m examples.crawler_queue` 查看本地示例；
+分布式安装与装配见[任务队列](docs/07-task-queues.md)。
+手动消费可使用 `with queue.reserve(...) as task` 或 `with queue.hold(lease) as task`，
+同一队列实例的占用共享续租线程，退出时执行显式确认或释放。
+
+当前提供缓冲响应、内存上传、请求级下载器选择、Slot 会话复用与 Context 执行配置；爬虫基类、请求级自动重试、URL 去重与流式上传尚未提供。
 HTTP 网络失败通过 `Response(status_code=-1)` 表达，执行取消和超时控制异常继续传播。
 
 详细说明见[爬虫手册](docs/README.md)，通用编排语义见
@@ -82,3 +88,6 @@ uv run --locked ruff check bricks tests examples
 uv run --locked ruff format --check bricks
 uv build
 ```
+
+真实 Redis 队列测试通过 `BRICKS_TEST_REDIS_URL` 指定专用测试实例；未设置时跳过 Redis 用例，
+本地队列契约仍会执行。详细验证命令见[任务队列](docs/07-task-queues.md)。

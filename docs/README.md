@@ -11,6 +11,8 @@ Bricks 基于 Interlace 的公开 Graph API 构建爬虫领域组件。
 5. [完整爬取示例](05-crawler-pipeline.md)：列表分页、详情解析、会话复用和 JSONL 输出。
 6. [独立解析与批量规则](06-parsers.md)：CSS、XPath、JSON 查询、正则、连续提取、多规则收集、match 记录提取、笛卡尔组合、父子展开和解析协议扩展。
 
+7. [任务队列](07-task-queues.md)：本地与 Redis 存储、去重、交付租约、初始化断点及 Interlace 分布式消费装配。
+
 Graph、Event、Execution、Slot、Runtime 与插件协议的规范和教程由
 [Interlace 手册](https://github.com/KKKKKKKEM/interlace/blob/main/docs/README.md)维护。
 

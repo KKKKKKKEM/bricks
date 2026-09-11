@@ -26,6 +26,7 @@
    DownloadNode 和 AsyncDownloadNode。
 2. 模型位于 `bricks.models`，下载协议与实现位于 `bricks.downloaders`，领域节点位于 `bricks.nodes`。
    独立内容解析和批量规则位于 `bricks.parsers`，不在顶层转导出。
+   爬虫任务存储、初始化租约与公开任务 SPI 的装配适配器位于 `bricks.queues`，不在顶层转导出。
 3. Graph、Node、Event、Context、Execution、Slot 和 Runtime 从 `interlace` 导入，不在 Bricks 转导出。
 4. 新能力优先组合现有模型、普通函数、领域节点与窄协议，避免不必要的包装和全局注册表。
 5. curl_cffi 是默认传输和正式依赖；HTTPX、requests、wreq、primp、requests-go、playwright、camoufox
@@ -144,6 +145,47 @@
 4. 成员字段（含类属性和私有字段）必须使用中文旁注或 Attributes 节说明含义、单位、默认值、所有权和可变边界。
 5. 实现、测试和示例均遵守本条。
 
+### 第八条：种子任务队列与分布式交付
+
+1. TaskQueue 是具名任务存储的窄协议；MemoryTaskQueue 与可选 RedisTaskQueue 提供相同的
+   put、claim、renew、ack、retry、reject、get、counts、forget 和初始化租约操作。
+   QueueBackend 通过 Interlace 的公开 TaskBackend SPI 装配消费，并组合其公开内存后端管理线程及 Slot，
+   不复制执行器或访问私有状态。Redis 通过 redis extra 安装，默认导入路径不加载 Redis 库。
+2. Work.id 是队列内的去重身份；入队内容和待领取索引必须原子写入。同 ID 同内容返回已存在，
+   不同内容明确报冲突。终态保留内容与去重身份，只有显式 forget 可以移除；待处理和在途任务禁止删除。
+   make_work 默认根据规范化 JSON 信封（除 ID 外）生成 sha256 内容 ID，支持显式指定 ID；
+   graph、inputs、options、limits、trigger 和信封版本均参与指纹，字典键排序，列表顺序保留。
+   该普通函数返回独立 Work，不改变 Interlace Work 缺省使用随机 UUID 的契约，也不改写直接投递的 Work.id。
+   URL 规范化、流程版本以及外部写入幂等由调用方确定；构造后修改 Work 的嵌套内容不会重算已有 ID。
+3. 任务信封只传输公开 Work 字段及严格 JSON 值，不接受 pickle、动态类加载、字节或隐式类型转换。
+   options、trigger 和执行限制显式保存；Context、Slot、Request/Response 及 Client 不直接跨队列序列化。
+   两种存储都在输入和读取边界建立数据副本；Redis Lua 不解码用户业务 JSON，保留大整数与空数组形状。
+4. claim 创建有期限的随机 token，attempt 从 1 开始。续租、确认、重投和拒绝均原子校验 owner、token、
+   状态和到期时间；到期即失去写入权。claim 每次最多回收 100 个过期任务，重新领取使用新 token。
+   retry 支持非负延迟，达到随任务保存的最大交付次数后进入 dead；显式 reject 直接进入 dead。
+5. ACK 是交付完成，业务结果 success/failure 只能显式登记，不能由 ACK 推断。
+   QueueBackend 不解释 Graph 的业务输出，正常 DeliveryResult.ACK 只确认交付；RETRY 有界重投，
+   REJECT 保留死信；编程错误、取消和存储异常向等待方传播。存储写回失败由租约到期恢复，不谎报确认。
+   Redis 提供至少一次交付，持久性取决于服务端 AOF、复制与故障切换配置；外部副作用必须幂等。
+6. 初始化租约使用随机 token 与递增 fence；续租、进度写入、带租约入队与结束都校验当前有效凭据。
+   接管保留 JSON 进度；成功初始化不重新申请，失败允许显式重新申请，新一轮业务使用新队列名称。
+   进度提交与前一次入队不是跨调用事务，恢复时以稳定任务 ID 重放；初始化完成不代表消费完成。
+7. Redis 使用服务端时间和 Lua 原子迁移，同队列键使用同一 hash tag。MemoryTaskQueue 使用进程内锁与单调时间，
+   不提供进程重启恢复。同名内存实例不共享数据；Redis 客户端与存储均由装配方管理。
+8. QueueBackend 每个绑定最多预取 concurrency 项并周期续租，Slot 分配及释放由 Interlace 管理。
+   每次通过任务存储的交付建立本地 Slot 链，不提供 submit_local；跨队列会话延续或 Worker 身份路由不在本实现范围。
+   注销和 close 停止新领取并等待已领取交付及 Slot 清理，未领取任务保留；close 不关闭借用客户端。
+   wait_idle 检查已配置队列的全部 pending/leased 任务及本地 Slot 清理，不证明外部生产者已停止或全局爬取完成。
+9. MemoryTaskQueue 与 RedisTaskQueue 的 reserve(owner) 提供进入时领取的同步 with 上下文，
+   hold(lease) 接管已领取凭据；TaskQueue 存储协议本身保持独立。无任务时 as 值为 None。
+   每个队列实例的全部上下文共享一个惰性续租线程，按最早到期时间调度；最后一个占用退出时等待线程停止。
+   同一实例不允许两个上下文同时管理同一 token，不建立全局线程或租约注册表；每个上下文只能进入一次。
+10. 上下文内的 ack/retry/reject 只登记一次退出决定，保持占用直到正常退出。
+    未登记决定或块内异常退出时请求有界重投，原异常继续传播，达到最大次数仍进入 dead；不根据退出推断业务成功。
+    正常退出先停止该占用的续租，再对最新有效凭据写入决定。续租失败由 check/退出报告，不强制中断业务函数；
+    释放失败可等待租约到期恢复，不伪称已释放。占用期间不得绕过上下文直接操作同一凭据。
+    续租更新凭据不替换上下文中的 Work 对象，业务修改仅保留在当前进程的本次占用中。
+
 ## 验证要求
 
 ```bash
@@ -155,3 +197,5 @@ uv build
 ```
 
 文档变更还应检查本地链接、Markdown 围栏和发生变化的 Mermaid 图。
+队列分布式验证设置 `BRICKS_TEST_REDIS_URL` 指向专用测试 Redis 后运行队列测试；
+测试仅清理随机生成的独立前缀，禁止清空共享数据库。必须覆盖真实 Redis、竞争领取、旧租约写入拒绝与进程退出恢复。

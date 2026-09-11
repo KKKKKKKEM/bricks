@@ -1,0 +1,434 @@
+"""将爬虫任务存储接入 Interlace 的公开 TaskBackend SPI。"""
+
+from __future__ import annotations
+
+import inspect
+import time
+from collections import deque
+from collections.abc import Callable, Mapping
+from functools import partial
+from threading import Event, RLock, Thread
+from uuid import uuid4
+
+from interlace.adapters.memory import TaskBackend as LocalBackend
+from interlace.spi import (
+    Delivery,
+    DeliveryOutcome,
+    DeliveryResult,
+    SlotProvider,
+    Work,
+    WorkHandler,
+)
+
+from .base import TaskQueue
+from .models import LeaseLostError, TaskLease, seconds, text
+
+
+class _Binding:
+    """一个独立的队列领取器及其本地执行装配。
+
+    Attributes:
+        queue: 借用的任务存储。
+        local: 自有的 Interlace 内存调度器，负责 Slot 和执行线程。
+        active: 已领取但尚未结束处理的交付，按 Work ID 索引。
+        lock: 保护 active、errors 和关闭状态。
+        stop: 停止领取新任务的通知，已领取任务继续续租并排空。
+        thread: 自有的轮询与心跳线程。
+        errors: 尚未交给调用方的失败记录。
+        _handler: Interlace 注入的完整执行处理器。
+        _concurrency: 最多预取的交付数，等于本地执行并发。
+        _ttl: 交付租约秒数。
+        _interval: 轮询间隔秒数。
+        _owner: 此绑定独有的 Worker 身份。
+        _unbind: 本地调度器的独立注销句柄。
+        _closed: 是否已完成关闭。
+        _close_lock: 串行化重复关闭，所有调用均等待资源清理完成。
+        _lost: 已续租失败的 token，停止反复续租并避免影响其他交付的心跳。
+    """
+
+    def __init__(
+        self,
+        queue: TaskQueue,
+        handler: WorkHandler,
+        concurrency: int,
+        slots: SlotProvider | None,
+        ttl: float,
+        interval: float,
+    ) -> None:
+        """装配本地执行器，不复制引擎或 Slot 调度逻辑。
+
+        Args:
+            queue: 任务存储。
+            handler: 完整 Graph 执行处理器。
+            concurrency: 本地并发和预取上限。
+            slots: 调用方提供的 Slot 池。
+            ttl: 租约秒数。
+            interval: 轮询间隔秒数。
+        """
+        self.queue = queue
+        self.local = LocalBackend(max_delivery_attempts=1)
+        self.active: dict[str, TaskLease] = {}
+        self.lock = RLock()
+        self.stop = Event()
+        self.errors: deque[BaseException] = deque()
+        self._handler = handler
+        self._concurrency = concurrency
+        self._ttl = ttl
+        self._interval = interval
+        self._owner = uuid4().hex
+        self._closed = False
+        self._close_lock = RLock()
+        self._lost: set[str] = set()
+        self._unbind = self.local.bind(
+            queue.name, self._handle, concurrency=concurrency, slots=slots
+        )
+        self.thread = Thread(
+            target=self._poll, name=f"bricks-queue-{queue.name}", daemon=True
+        )
+
+    def _handle(self, delivery: Delivery) -> DeliveryResult:
+        """将交付结果写回存储，再让本地调度器释放 Slot。
+
+        Args:
+            delivery: 本地调度器提供的 Slot 和 Work。
+
+        Returns:
+            本地调度器的 ACK；业务错误保留给外层 wait_idle。
+        """
+        with self.lock:
+            lease = self.active[delivery.work.id]
+        failure: BaseException | None = None
+        try:
+            result = self._handler(
+                Delivery(delivery.work, lease.attempt, slot_lease=delivery.slot_lease)
+            )
+            if not isinstance(result, DeliveryResult):
+                if inspect.iscoroutine(result):
+                    result.close()
+                raise TypeError("work handler must return DeliveryResult")
+        except BaseException as exc:
+            failure = exc
+            result = DeliveryResult.reject(exc)
+        # 续租与确认、移除本地凭据必须互斥，防止确认后的续租误报失效。
+        with self.lock:
+            try:
+                if result.outcome is DeliveryOutcome.ACK:
+                    self.queue.ack(lease)
+                elif result.outcome is DeliveryOutcome.RETRY:
+                    self.queue.retry(
+                        lease, error="" if result.error is None else str(result.error)
+                    )
+                    record = self.queue.get(delivery.work.id)
+                    if record is not None and record.status == "dead":
+                        failure = result.error or RuntimeError(
+                            "maximum delivery attempts exhausted"
+                        )
+                else:
+                    self.queue.reject(
+                        lease, error="" if result.error is None else str(result.error)
+                    )
+                    failure = result.error
+            except BaseException as exc:
+                # 写回失败时由过期回收恢复；不能以本地执行结束代替存储确认。
+                failure = failure or exc
+                self.stop.set()
+            finally:
+                if failure is not None:
+                    self.errors.append(failure)
+                self.active.pop(delivery.work.id, None)
+                self._lost.discard(lease.token)
+        return DeliveryResult.ack()
+
+    def _poll(self) -> None:
+        """有界预取并持续续租；存储异常后停止新领取，仍等待当前执行清理。"""
+        next_heartbeat = time.monotonic() + self._ttl / 3
+        while True:
+            with self.lock:
+                active = tuple(self.active.values())
+            if self.stop.is_set() and not active:
+                return
+            try:
+                if time.monotonic() >= next_heartbeat:
+                    for lease in active:
+                        with self.lock:
+                            if (
+                                lease.work.id not in self.active
+                                or lease.token in self._lost
+                            ):
+                                continue
+                            # 与完成确认互斥，防止确认后多余的续租误报失效。
+                            try:
+                                self.queue.renew(lease, lease_seconds=self._ttl)
+                            except BaseException as exc:
+                                self._lost.add(lease.token)
+                                self.errors.append(exc)
+                                self.stop.set()
+                    next_heartbeat = time.monotonic() + self._ttl / 3
+                if not self.stop.is_set() and len(active) < self._concurrency:
+                    claimed = self.queue.claim(self._owner, lease_seconds=self._ttl)
+                    if claimed is not None:
+                        with self.lock:
+                            if claimed.work.id in self.active:
+                                self.queue.retry(
+                                    claimed,
+                                    error="previous local delivery is still running",
+                                )
+                                raise LeaseLostError(
+                                    "overlapping redelivery of an active task"
+                                )
+                            self.active[claimed.work.id] = claimed
+                        try:
+                            self.local.submit(self.queue.name, claimed.work)
+                        except BaseException:
+                            with self.lock:
+                                self.active.pop(claimed.work.id, None)
+                            self.queue.retry(claimed, error="local scheduling failed")
+                            raise
+                        continue
+            except BaseException as exc:
+                with self.lock:
+                    if not self.errors:
+                        self.errors.append(exc)
+                self.stop.set()
+                next_heartbeat = time.monotonic() + self._ttl / 3
+            # stop 后也要按正常间隔等待，不能使用已置位 Event 造成忙循环。
+            interval = min(self._interval, self._ttl / 3)
+            if self.stop.is_set():
+                time.sleep(interval)
+            else:
+                self.stop.wait(interval)
+
+    def close(self) -> None:
+        """停止领取并等待所有已领取交付及 Slot 清理，不关闭借用存储。"""
+        with self._close_lock:
+            self.stop.set()
+            if self.thread.ident is not None:
+                self.thread.join()
+            if self._closed:
+                return
+            self._closed = True
+            try:
+                self._unbind()
+            finally:
+                self.local.close()
+
+
+class QueueBackend:
+    """将显式装配的爬虫队列映射适配为 Interlace TaskBackend。
+
+    每次存储交付均创建本地 Slot 链，不提供 submit_local，不跨持久队列传递
+    会话。close 停止领取并排空已领取任务，尚未领取任务保留在存储中。
+
+    Attributes:
+        _queues: 构造时复制的队列映射，存储与 Redis 客户端归调用方管理。
+        _bindings: 当前实例创建的独立消费者绑定。
+        _ttl: 交付租约秒数。
+        _interval: 非阻塞领取之间的轮询间隔秒数。
+        _lock: 保护提交、绑定和关闭入口。
+        _closed: 是否已停止接受提交和绑定。
+        _close_lock: 保证并发 close 均等待清理完成。
+        _errors: 已注销绑定留下的未报告错误，不保留完整消费者对象。
+    """
+
+    def __init__(
+        self,
+        queues: Mapping[str, TaskQueue],
+        *,
+        lease_seconds: float = 30,
+        poll_interval: float = 0.05,
+    ) -> None:
+        """装配明确的命名队列，不创建隐藏的默认队列。
+
+        Args:
+            queues: Runtime 通道名称到同名任务存储的映射。
+            lease_seconds: 领取租约秒数，默认 30。
+            poll_interval: 空轮询间隔秒数，默认 0.05。
+
+        Raises:
+            ValueError: 配置非法或通道名称不匹配。
+        """
+        self._queues = dict(queues)
+        for name, queue in self._queues.items():
+            if text(name, "queue name") != queue.name:
+                raise ValueError("binding name must equal task queue name")
+        self._ttl = seconds(lease_seconds)
+        self._interval = seconds(poll_interval)
+        self._bindings: list[_Binding] = []
+        self._lock = RLock()
+        self._closed = False
+        self._close_lock = RLock()
+        self._errors: deque[BaseException] = deque()
+
+    def _queue(self, name: str) -> TaskQueue:
+        """在持锁入口校验生命周期与队列名。
+
+        Args:
+            name: 通道名称。
+
+        Returns:
+            借用的任务存储。
+
+        Raises:
+            RuntimeError: 后端已关闭。
+            ValueError: 队列未装配。
+        """
+        if self._closed:
+            raise RuntimeError("queue backend is closed")
+        if name not in self._queues:
+            raise ValueError(f"queue is not configured: {name!r}")
+        return self._queues[name]
+
+    def submit(self, queue: str, work: Work) -> None:
+        """按 Work.id 原子去重并提交，正常返回表示存储已经接受。
+
+        Args:
+            queue: 已装配通道名称。
+            work: JSON 可序列化任务。
+        """
+        with self._lock:
+            self._queue(queue).put(work)
+
+    def bind(
+        self,
+        queue: str,
+        handler: WorkHandler,
+        *,
+        concurrency: int,
+        slots: SlotProvider | None = None,
+    ) -> Callable[[], None]:
+        """注册独立竞争消费者并返回幂等注销句柄。
+
+        Args:
+            queue: 已装配通道。
+            handler: 完整执行处理器。
+            concurrency: 本地执行及预取上限。
+            slots: 本地 Slot 资源池，生命周期由调用方管理。
+
+        Returns:
+            停止领取并排空此绑定的注销函数。
+
+        Raises:
+            TypeError: 处理器、Slot 或并发类型非法。
+            ValueError: 并发小于一或通道未装配。
+        """
+        with self._lock:
+            store = self._queue(queue)
+            if not callable(handler) or any(
+                check(candidate)
+                for candidate in (handler, getattr(handler, "__call__", None))
+                for check in (
+                    inspect.iscoroutinefunction,
+                    inspect.isasyncgenfunction,
+                    inspect.isgeneratorfunction,
+                )
+            ):
+                raise TypeError(
+                    "work handler must be a synchronous callable returning DeliveryResult"
+                )
+            binding = _Binding(
+                store, handler, concurrency, slots, self._ttl, self._interval
+            )
+            try:
+                binding.thread.start()
+            except BaseException:
+                binding.close()
+                raise
+            self._bindings.append(binding)
+        return partial(self._unbind, binding)
+
+    def _unbind(self, binding: _Binding) -> None:
+        """注销后释放后端持有的绑定引用，并保留尚未报告的错误。
+
+        Args:
+            binding: 此注销句柄对应的独立绑定。
+        """
+        try:
+            binding.close()
+        finally:
+            with self._lock, binding.lock:
+                if binding in self._bindings:
+                    self._bindings.remove(binding)
+                    self._errors.extend(binding.errors)
+                    binding.errors.clear()
+
+    @property
+    def idle(self) -> bool:
+        """检查配置队列均无未完成任务且本地 Slot 已释放。
+
+        Returns:
+            当前快照是否空闲；不表示外部生产者不会再提交。
+        """
+        with self._lock:
+            bindings = tuple(self._bindings)
+        for queue in self._queues.values():
+            counts = queue.counts()
+            if counts["pending"] or counts["leased"]:
+                return False
+        return all(binding.local.idle for binding in bindings)
+
+    def _raise_failure(self) -> None:
+        """向调用方传播尚未报告的消费或存储错误。
+
+        Raises:
+            BaseException: 原始处理器异常或后台存储错误。
+        """
+        with self._lock:
+            if self._errors:
+                raise self._errors.popleft()
+            bindings = tuple(self._bindings)
+        for binding in bindings:
+            with binding.lock:
+                if binding.errors:
+                    raise binding.errors.popleft()
+
+    def wait_idle(self, timeout: float | None = None) -> None:
+        """等待队列排空，包含其他 Worker 正在处理的共享任务。
+
+        Args:
+            timeout: 最大等待秒数；None 持续等待，零表示立即检查。
+
+        Raises:
+            TimeoutError: 未在指定时间内排空。
+            BaseException: 处理器或存储错误，保留原异常。
+        """
+        deadline = (
+            None
+            if timeout is None
+            else time.monotonic() + seconds(timeout, positive=False)
+        )
+        while True:
+            self._raise_failure()
+            if self.idle:
+                self._raise_failure()
+                return
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("task queues did not become idle")
+            time.sleep(
+                self._interval
+                if deadline is None
+                else min(self._interval, max(0, deadline - time.monotonic()))
+            )
+
+    def close(self) -> None:
+        """关闭本地绑定并保留未领取任务；借用存储和客户端继续可用。
+
+        Raises:
+            BaseException: 排空过程中尚未报告的失败。
+        """
+        with self._close_lock:
+            with self._lock:
+                if self._closed:
+                    return
+                self._closed = True
+                bindings = tuple(self._bindings)
+                for binding in bindings:
+                    binding.stop.set()
+            failures: list[BaseException] = []
+            for binding in bindings:
+                try:
+                    self._unbind(binding)
+                except BaseException as exc:
+                    failures.append(exc)
+            self._raise_failure()
+            if failures:
+                raise failures[0]
