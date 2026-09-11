@@ -5,7 +5,7 @@ Bricks 是爬虫领域框架，Interlace 是独立发布的编排微内核。
 | 所属项目 | 职责 |
 | --- | --- |
 | Interlace | 静态 typed Graph、Event、Execution、Slot、Runtime、插件与基础设施协议 |
-| Bricks | HTTP 请求与响应、下载器、下载节点、爬虫数据记录、独立解析器、批量提取规则与种子任务存储 |
+| Bricks | HTTP 请求与响应、下载器、下载节点、爬虫数据记录、独立解析器、任务存储、Air 基类、领域插件与代理供应工具 |
 | 用户应用 | 站点解析规则、业务幂等、数据存储和业务流程 |
 
 Bricks 单向依赖 Interlace 的公开 API。领域模型不持有 Runtime；下载节点通过构造器接受下载器，
@@ -50,7 +50,8 @@ uv run --no-sync pytest -q
 
 默认运行时是进程内实现，不提供持久 broker、自动重试、跨进程恢复或 exactly-once。
 URL 去重、下载重试、代理与会话策略属于爬虫领域。当前下载器支持代理和按 Slot 装配的会话，
-默认使用 curl_cffi，HTTPX 与 requests 为可选依赖；尚未内建 URL 去重或请求级自动重试。
+默认使用 curl_cffi，HTTPX 与 requests 为可选依赖。Air 通过复用的响应检查插件与图内回边实现有限下载重试，
+URL 规范化和业务幂等由应用提供，见 [Air 爬虫基类](08-air-spider.md)。
 显式装配 QueueBackend 可以按 Work.id 去重并按交付结果有界重投；Redis 存储支持租约到期恢复，
 不改变默认内存 Runtime 的可靠性承诺，也不保证外部副作用恰好执行一次。
 取消和同步超时保持协作式语义；已发布的事件或已交付的输出不因后续失败而撤回。

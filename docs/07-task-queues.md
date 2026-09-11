@@ -196,8 +196,11 @@ QueueBackend 不提供 submit_local；跨队列事件不会保留源 Slot，也�
 可能等待其他 Worker；它是当前队列状态的快照，不是分布式终止检测。
 调用方仍需确认初始化结束、外部生产者停止，并收集各 Worker 的错误。
 `runtime.wait_idle` 还等待本实例的跨图事件流转。
+backend 关闭后，idle/wait_idle 只检查本地已接受交付的清理，不再等待留在共享存储中的任务，
+因此仅负责初始化投放的进程可以关闭 Runtime 并让其他消费者继续处理。
 
-关闭顺序为 Runtime、QueueBackend、Slot 中的会话资源、Redis 客户端。
+显式装配时先关闭 QueueBackend 以停止领取并清理本地交付，再关闭 Runtime、Slot 中的会话资源和 Redis 客户端。
+若已经等待队列完全排空，也可以正常退出 Runtime 上下文后再关闭 QueueBackend；只生产任务的实例不能等待共享队列排空。
 注销和 close 停止新领取，等待已领取任务和 Slot 引用清理，未领取任务留在存储中。
 关闭不强杀同步函数，处理器永久阻塞会阻止排空。调用方注入的队列和 Redis 客户端不会被 backend 关闭。
 

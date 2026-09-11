@@ -44,6 +44,8 @@ class _Binding:
         _closed: 是否已完成关闭。
         _close_lock: 串行化重复关闭，所有调用均等待资源清理完成。
         _lost: 已续租失败的 token，停止反复续租并避免影响其他交付的心跳。
+        _before_claim: 领取前同步门控，返回延迟秒数时暂缓领取，None 放行。
+        _before_execute: 获得 Slot 后、执行 Graph 前的同步交付决策。
     """
 
     def __init__(
@@ -54,6 +56,9 @@ class _Binding:
         slots: SlotProvider | None,
         ttl: float,
         interval: float,
+        before_claim: Callable[[TaskQueue], float | None] | None = None,
+        before_execute: Callable[[TaskLease, Delivery], DeliveryResult | None]
+        | None = None,
     ) -> None:
         """装配本地执行器，不复制引擎或 Slot 调度逻辑。
 
@@ -64,6 +69,8 @@ class _Binding:
             slots: 调用方提供的 Slot 池。
             ttl: 租约秒数。
             interval: 轮询间隔秒数。
+            before_claim: 可选领取前门控，不执行异步回调。
+            before_execute: 可选交付前决策，在本地执行线程运行，续租继续。
         """
         self.queue = queue
         self.local = LocalBackend(max_delivery_attempts=1)
@@ -79,6 +86,8 @@ class _Binding:
         self._closed = False
         self._close_lock = RLock()
         self._lost: set[str] = set()
+        self._before_claim = before_claim
+        self._before_execute = before_execute
         self._unbind = self.local.bind(
             queue.name, self._handle, concurrency=concurrency, slots=slots
         )
@@ -99,9 +108,16 @@ class _Binding:
             lease = self.active[delivery.work.id]
         failure: BaseException | None = None
         try:
-            result = self._handler(
-                Delivery(delivery.work, lease.attempt, slot_lease=delivery.slot_lease)
+            current = Delivery(
+                delivery.work, lease.attempt, slot_lease=delivery.slot_lease
             )
+            result = (
+                None
+                if self._before_execute is None
+                else self._before_execute(lease, current)
+            )
+            if result is None:
+                result = self._handler(current)
             if not isinstance(result, DeliveryResult):
                 if inspect.iscoroutine(result):
                     result.close()
@@ -142,6 +158,7 @@ class _Binding:
     def _poll(self) -> None:
         """有界预取并持续续租；存储异常后停止新领取，仍等待当前执行清理。"""
         next_heartbeat = time.monotonic() + self._ttl / 3
+        next_claim = 0.0  # 领取前 Hook 的延迟不会暂停已领取任务的续租。
         while True:
             with self.lock:
                 active = tuple(self.active.values())
@@ -164,7 +181,23 @@ class _Binding:
                                 self.errors.append(exc)
                                 self.stop.set()
                     next_heartbeat = time.monotonic() + self._ttl / 3
-                if not self.stop.is_set() and len(active) < self._concurrency:
+                if (
+                    not self.stop.is_set()
+                    and len(active) < self._concurrency
+                    and time.monotonic() >= next_claim
+                ):
+                    delay = (
+                        None
+                        if self._before_claim is None
+                        else self._before_claim(self.queue)
+                    )
+                    if delay is not None:
+                        if inspect.iscoroutine(delay):
+                            delay.close()
+                        next_claim = time.monotonic() + seconds(delay, positive=False)
+                        # 即使请求零延迟也等待一轮，避免空轮询忙循环。
+                        self.stop.wait(min(self._interval, self._ttl / 3))
+                        continue
                     claimed = self.queue.claim(self._owner, lease_seconds=self._ttl)
                     if claimed is not None:
                         with self.lock:
@@ -228,6 +261,8 @@ class QueueBackend:
         _closed: 是否已停止接受提交和绑定。
         _close_lock: 保证并发 close 均等待清理完成。
         _errors: 已注销绑定留下的未报告错误，不保留完整消费者对象。
+        _before_claim: 可选领域领取前门控。
+        _before_execute: 可选已领取交付的前置决策。
     """
 
     def __init__(
@@ -236,6 +271,9 @@ class QueueBackend:
         *,
         lease_seconds: float = 30,
         poll_interval: float = 0.05,
+        before_claim: Callable[[TaskQueue], float | None] | None = None,
+        before_execute: Callable[[TaskLease, Delivery], DeliveryResult | None]
+        | None = None,
     ) -> None:
         """装配明确的命名队列，不创建隐藏的默认队列。
 
@@ -243,6 +281,8 @@ class QueueBackend:
             queues: Runtime 通道名称到同名任务存储的映射。
             lease_seconds: 领取租约秒数，默认 30。
             poll_interval: 空轮询间隔秒数，默认 0.05。
+            before_claim: 同步函数返回 None 放行，非负秒数推迟下一次领取。
+            before_execute: 在本地 Slot 已分配后调用，None 进入 Graph，否则使用明确交付结果。
 
         Raises:
             ValueError: 配置非法或通道名称不匹配。
@@ -258,6 +298,15 @@ class QueueBackend:
         self._closed = False
         self._close_lock = RLock()
         self._errors: deque[BaseException] = deque()
+        for callback in (before_claim, before_execute):
+            if callback is not None and (
+                not callable(callback)
+                or inspect.iscoroutinefunction(callback)
+                or inspect.isasyncgenfunction(callback)
+            ):
+                raise TypeError("queue callbacks must be synchronous callables")
+        self._before_claim = before_claim
+        self._before_execute = before_execute
 
     def _queue(self, name: str) -> TaskQueue:
         """在持锁入口校验生命周期与队列名。
@@ -326,7 +375,14 @@ class QueueBackend:
                     "work handler must be a synchronous callable returning DeliveryResult"
                 )
             binding = _Binding(
-                store, handler, concurrency, slots, self._ttl, self._interval
+                store,
+                handler,
+                concurrency,
+                slots,
+                self._ttl,
+                self._interval,
+                self._before_claim,
+                self._before_execute,
             )
             try:
                 binding.thread.start()
@@ -360,6 +416,13 @@ class QueueBackend:
         """
         with self._lock:
             bindings = tuple(self._bindings)
+            closed = self._closed
+        if closed:
+            # 已停止领取的实例只负责本地清理，存储中剩余任务留给其他消费者。
+            return all(
+                binding.local.idle and not binding.thread.is_alive()
+                for binding in bindings
+            )
         for queue in self._queues.values():
             counts = queue.counts()
             if counts["pending"] or counts["leased"]:
@@ -382,7 +445,7 @@ class QueueBackend:
                     raise binding.errors.popleft()
 
     def wait_idle(self, timeout: float | None = None) -> None:
-        """等待队列排空，包含其他 Worker 正在处理的共享任务。
+        """运行时等待共享队列排空；关闭后只等待本地交付和线程清理。
 
         Args:
             timeout: 最大等待秒数；None 持续等待，零表示立即检查。

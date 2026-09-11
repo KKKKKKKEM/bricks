@@ -21,7 +21,7 @@ classifiers = [
 ]
 requires-python = ">=3.10,<3.14"
 dependencies = [
-    "interlace @ git+https://github.com/KKKKKKKEM/interlace.git@34896afcb4b22b95de56aebe4f798e0f6528abbc",
+    "interlace @ git+https://github.com/KKKKKKKEM/interlace.git@e9020ff99adb8091a48827fa6670b1e12e82fb8d",
     "urllib3>=2,<3",
     "curl-cffi>=0.16.3,<0.17",
     "lxml>=6,<7",
@@ -32,6 +32,8 @@ dependencies = [
 
 [project.optional-dependencies]
 redis = ["redis>=6,<7"]
+mongo = ["pymongo>=4.10,<5"]
+clash = ["PyYAML>=6,<7"]
 httpx = ["httpx>=0.28,<1"]
 requests = ["requests>=2.32,<3"]
 requests-go = ["requests-go==1.0.9"]
@@ -43,6 +45,9 @@ camoufox = ["camoufox==0.5.6", "playwright==1.62.0"]
 [dependency-groups]
 dev = [
     "redis>=6,<7",
+    "pymongo>=4.10,<5",
+    "PyYAML>=6,<7",
+    "types-PyYAML>=6,<7",
     "mypy>=1.15,<2",
     "pytest>=8,<10",
     "ruff>=0.11,<1",

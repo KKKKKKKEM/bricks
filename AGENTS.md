@@ -27,6 +27,10 @@
 2. 模型位于 `bricks.models`，下载协议与实现位于 `bricks.downloaders`，领域节点位于 `bricks.nodes`。
    独立内容解析和批量规则位于 `bricks.parsers`，不在顶层转导出。
    爬虫任务存储、初始化租约与公开任务 SPI 的装配适配器位于 `bricks.queues`，不在顶层转导出。
+   爬虫基类与领域 Context 位于 `bricks.spider`，共享声明位于 `bricks.hooks`，可复用领域插件位于
+   `bricks.plugins`；该插件包不包含 Interlace 的插件宿主或注册实现。
+   爬虫流程信号位于 `bricks.signals`，由领域节点处理，不并入 Interlace 的执行控制异常。
+   独立代理值、供应源、Clash 控制与按 Slot 装配的管理工具位于 `bricks.proxies`，不在顶层转导出。
 3. Graph、Node、Event、Context、Execution、Slot 和 Runtime 从 `interlace` 导入，不在 Bricks 转导出。
 4. 新能力优先组合现有模型、普通函数、领域节点与窄协议，避免不必要的包装和全局注册表。
 5. curl_cffi 是默认传输和正式依赖；HTTPX、requests、wreq、primp、requests-go、playwright、camoufox
@@ -176,6 +180,9 @@
    每次通过任务存储的交付建立本地 Slot 链，不提供 submit_local；跨队列会话延续或 Worker 身份路由不在本实现范围。
    注销和 close 停止新领取并等待已领取交付及 Slot 清理，未领取任务保留；close 不关闭借用客户端。
    wait_idle 检查已配置队列的全部 pending/leased 任务及本地 Slot 清理，不证明外部生产者已停止或全局爬取完成。
+   后端关闭后 idle/wait_idle 只检查本地清理，不再等待存储中留给其他消费者的任务，允许只生产任务的 Runtime 正常关闭。
+   可选 before_claim 同步门控返回 None 放行或非负秒数延后领取，延迟不能中断续租；
+   before_execute 在已分配 Slot 的交付边界返回 None 继续 Graph，或返回显式 DeliveryResult 终结交付。
 9. MemoryTaskQueue 与 RedisTaskQueue 的 reserve(owner) 提供进入时领取的同步 with 上下文，
    hold(lease) 接管已领取凭据；TaskQueue 存储协议本身保持独立。无任务时 as 值为 None。
    每个队列实例的全部上下文共享一个惰性续租线程，按最早到期时间调度；最后一个占用退出时等待线程停止。
@@ -185,6 +192,102 @@
     正常退出先停止该占用的续租，再对最新有效凭据写入决定。续租失败由 check/退出报告，不强制中断业务函数；
     释放失败可等待租约到期恢复，不伪称已释放。占用期间不得绕过上下文直接操作同一凭据。
     续租更新凭据不替换上下文中的 Work 对象，业务修改仅保留在当前进程的本次占用中。
+
+### 第九条：Air 爬虫基类与领域插件
+
+1. `bricks.spider.air.Spider` 保留 concurrency、downloader、task_queue、queue_name、proxy、forever
+   等业务参数，concurrency 默认 1，forever 默认 False。下载器按 fetch 协议注入，queue_name 必须与
+   已注入任务存储的 name 一致；proxy 接受固定地址、ProxyProvider 或 Manager，固定地址显式规范为 URL，
+   供应源由实例装配成 Manager。高级 Slot 会话装配通过 build_download_node 扩展。
+2. 运行仅装配初始化和消费两张领域 Graph。业务 Hook 的每个插槽必须是独立 HookNode，
+   节点按 index 执行该阶段的回调快照，不通过 Interlace NodeHook 装配业务插槽。
+   初始化逐项或逐批通过 make_seeds、next_seed、submit、checkpoint 推进，消费通过
+   make_request、download、parse、pipeline、complete 推进，并显式连接对应 before/after 插槽。
+   retry、before_retry、retry_prepare、after_retry、retry_wait 构成回到 before_request 的重试分支。
+   普通返回值沿 Output 传递，不隐式发布 Event；不保留 check_response、ResponseAction 或 action/stop 路由。
+3. 业务入口为 make_seeds(context, **kwargs)、make_request(context)、parse(context)、item_pipeline(context)。
+   make_seeds 的 record 关键字携带恢复记录，接受 None、单个 dict、记录列表或同步迭代器，迭代器可产出一批记录；
+   parse 明确接受 Items 或 list[dict]。业务方法可以返回 Awaitable，但不接受异步生成器或隐式函数参数注入。
+4. air.Context 的 seeds/request/response/items/target/task_queue/queue_name/form 为领域接口，
+   它与 air.InitContext 均通过 Context(parent=base) 组合核心执行能力；Spider.Context 可替换并重写 make。
+   当前数据由图内载体传递，实例每次 firing 独立创建；核心 enter Hook 替换输入后节点绑定最终输入。
+   Context 中的运行时对象不跨队列序列化，提交只接受 JSON 种子。
+5. context.submit(*obj) 与初始化使用同一显式提交入口，返回 Work 列表而不返回未来执行的 Context。
+   独立种子使用 make_work 生成稳定 ID，显式 id 只用于单种子提交；配置从 Spider 默认值加本次覆盖构造，
+   不自动继承当前 execution 的 options 或 Slot。已接受的新种子不因父执行后续失败而撤回。
+6. 业务流程通过 `bricks.signals` 的 Retry、Success、Failure、Skip、Pass 明确中断回调；
+   信号继承独立 Signal(BaseException)，由当前领域节点捕获并转为已声明端口或业务失败，核心不解释信号。
+   不保留 Context.success/failure/retry 包装或延后生效的流程标志。普通业务方法返回 None 表示继续。
+   Success 跳到 complete 后才 ACK；Failure 使执行失败。Pass 只停止当前插槽剩余回调。
+   Skip 只在受支持 before 插槽跳过对应业务操作，仍经过 after 插槽；跳过请求构造、下载、解析须先提供替代数据。
+   Retry 只允许在 after_make_request、before_request、download、after_request，次数独立计数，
+   即使尚未下载也消耗重试预算；不重建 Slot。同步与异步回调中的信号使用同一处理规则。
+   普通错误、取消、超时和非法阶段信号不得作为普通重试恢复，存储失败仍不确认交付。
+7. 通用成功检查、响应展示及代理设置实现为 `bricks.plugins.on_request` 中的 Before.set_proxy、
+   After.show_response、After.bypass，由 install 调用 use 注册；Spider 不内置 HTTP 成功判断方法。
+   bypass 默认 2xx 正常返回，-1、429、5xx 抛出 Retry，其余抛出 Failure；同步 ok(context)
+   返回 True 时抛出 Pass，False 时抛出 Retry。展示与统计插件应排在会中断插槽的校验之前。
+8. 共享 Hook 使用 on(form, index, args, kwargs, match) 与 Task(func, args, kwargs, index, match)，
+   Spider.use(form, *events) 接受 Task 或参数字典。插件首个参数显式接收 Context，声明按实例绑定，支持方法继承覆盖，
+   图内支持同步与异步回调及同步布尔条件，插槽内按 index 升序，信号终止剩余回调。
+   普通回调返回 None，节点实例不保存执行状态；一个插槽的一组异步回调保持串行等待，调用线程不作为资源身份。
+   不读取全局当前 Context，不解析表达式或动态函数路径；不支持的阶段在启动时失败。install 在打开时执行一次。
+9. run(task_name="all", args=None, kwargs=None) 分派 all/init/spider 并在结束时关闭资源。
+   run_init、run_spider 可在 with Spider(...) 中分开运行；forever=True 时消费者保持服务直到外部关闭。
+   初始化调用线程等待 Execution 时定期续租，不为每条种子新增线程。失败记录与检查点受初始化 token/fence 保护。
+   初始化失败仍允许已提交种子排空，原始失败继续传播；初始化完成与队列空闲分别判断。
+10. Spider 关闭自建 Runtime、QueueBackend 和空资源 SlotPool；注入的下载器、Slot 资源、会话与 Redis 客户端
+    由调用方在停止执行后关闭。默认 curl_cffi 资源仍由每次 fetch 创建与关闭。关闭协作式取消初始化并排空已接受的消费，
+    不强杀同步函数；禁止在自身业务或插件回调中重入阻塞生命周期方法。RunReport 返回队列快照，不替代跨进程错误收集。
+    Spider 记录自建 Slot，并在执行停止后归还其中的托管代理；借用 Slot 内的代理由调用方归还。
+    关闭先停止 QueueBackend 领取并排空本地交付，再等待运行入口退出；等待使用完整超时预算，
+    不以捕获通用 TimeoutError 的短轮询方式吞掉存储或非图 Hook 的真实超时。
+11. BEFORE_START、BEFORE_CLOSE、ERROR_OCCURRED、BEFORE_GET_SEEDS、AFTER_GET_SEEDS
+    在真实非图边界以 HookContext 调用同步回调。领取前没有种子与 Slot；领取后在本地 Slot 已分配、
+    Graph 尚未开始的交付边界运行，不暂停在途续租。Success/Failure 可明确终结已领取交付，
+    状态仍由 QueueBackend 校验租约后写回；Retry 在领取边界非法。
+    领取前只允许 Pass、Skip、Wait，Wait 延后轮询而不阻塞续租；启动 Success 跳过本实例的初始化和消费。
+    BEFORE_CLOSE 在停止执行后、释放自有资源前运行；错误插槽不能恢复原失败，二次错误保留为原因链。
+    旧物理线程 BEFORE_WORKER_START/CLOSE 及仅标记状态的 ON_* 不属于 Air 插槽，注册时明确拒绝。
+12. BEFORE_PUT_SEEDS、AFTER_PUT_SEEDS 是初始化图中的真实节点，只覆盖初始化迭代批次；
+    AFTER_PUT_SEEDS 之后才提交恢复记录，失败时按稳定 Work ID 重放。Skip 表示有意跳过当前批次，
+    仍执行 after 插槽和进度提交；普通 context.submit 不伪装成初始化投放。
+13. build_init_graph 独立装配生产流程；build_crawl_plan 从同一消费定义选择正式 pipeline 或 survey_pipeline，
+    声明完整出口并保留前后 Hook 和重试回路。build_graphs 使用公开 Graph.compose 装配所选节点和边，
+    队列消费继续通过正常 Work/Slot/ACK 契约执行，不复制执行器或把 Plan 写入 JSON 任务信封。
+14. survey(*seeds, extract=None, timeout=None) 是新实例的手动消费入口，要求 forever=False，结束后关闭。
+    跳过 make_seeds 和默认 item_pipeline，保留下载、重试、解析、前后插件与动态种子提交及消费。
+    默认实例使用独立内存队列；显式装配队列时也消费原有任务，不宣称只消费本次传入的种子或没有副作用。
+    完成节点收集 Context，按完成顺序返回，可提取指定属性；提前 Success 的结果允许尚无 Request/Response/Items。
+    后置插件失败不确认任务；Context 仅供读取完成结果，不作为可继续执行或持有活跃会话的句柄。
+
+### 第十条：可复用领域插件与代理管理
+
+1. `plugins.make_seeds` 的 by_csv、by_sqlite、by_mongo、by_redis、by_range 是独立种子函数，
+   不隐式读取 Context。批次只包含严格 JSON 对象；record 保留调用方原对象，在 yield 前更新，
+   Air 在整批入队后提交进度。排序及源快照由调用方保证；Redis SCAN 不承诺断点恢复或无重复。
+   SQLite 查询原样执行，不以正则改写 LIMIT/OFFSET；非 JSON 类型由显式同步 transform 转换。
+2. `plugins.storage` 的 to_sqlite、to_mongo、to_csv、to_redis 显式接收 Context，可用 use 注册。
+   不修改 Items，不提前 ACK；SQLite 每批使用独立连接和事务，Mongo 必须使用有确认的写入，
+   Redis 使用规范 JSON，string 身份由 row_keys 的 JSON 摘要生成。CSV 并发需调用方提供共享锁，
+   CSV 追加和 Mongo 多文档写入不声称原子或自动幂等，Redis 事务不声称命令错误回滚。
+3. fake_ua 使用显式同步工厂，默认保留已有 UA；conditional_scripts、scripts.is_success、
+   turn_page 和 inject 使用同步条件/动作，不解析表达式或执行字符串代码。
+   条件只接受 bool，普通动作返回 None；signals 立即中断回调，错误原样传播。
+   is_success 用 Pass/Retry 选择后继；翻页复制并提交新种子，success=True 明确抛出 Success 结束当前任务。
+4. `proxies.ProxyProvider` 是 get/recover/clear 窄协议，BaseProxy 是可选辅助基类。
+   CustomProxy、ApiProxy、RedisProxy 和 ClashProxy 接收显式配置与借用客户端；默认导入不加载
+   Redis、Mongo 或 YAML，可选依赖分别通过 redis、mongo 和 clash extra 安装。
+5. Manager 不创建全局注册表、单例或线程局部状态，get/now/use/recover/clear/fresh 明确接收 Slot。
+   不同管理器在同一 Slot 使用不同命名空间；阈值按新请求次数与明确 ttl 秒数计算，use 只登记，
+   下一次 get 才回收。Air 已选 Request.proxy 在重试中保留，不自动更换会话或代理。
+   context.clear_proxy 显式丢弃请求代理并清除地址，下一次请求准备重新选择，不热切会话。
+   供应源无可用代理时报错，不静默直连；程序错误、取消、认证和回收失败不转换为空代理。
+6. 会话代理仍在 prepare_session 时固定，托管请求代理不热切现有会话。Clash 控制器是共享出口，
+   同一实例只允许一个未归还占用，重叠获取立即失败；不在构造时修改模式，不承诺隔离外部控制者。
+   订阅内容解析与联网获取分开；Clash YAML 使用 safe_load，VMess 只支持明确实现的 TCP/WebSocket。
+7. 旧版能力迁移按当前公共契约实施，不恢复动态 ref、参数反射、全局当前 Context 或旧导入别名。
+   插件必须有独立用例和 Air 组合验证，覆盖恢复位置、写入失败、不提前确认、Slot 隔离和重试资源保持。
 
 ## 验证要求
 
@@ -199,3 +302,4 @@ uv build
 文档变更还应检查本地链接、Markdown 围栏和发生变化的 Mermaid 图。
 队列分布式验证设置 `BRICKS_TEST_REDIS_URL` 指向专用测试 Redis 后运行队列测试；
 测试仅清理随机生成的独立前缀，禁止清空共享数据库。必须覆盖真实 Redis、竞争领取、旧租约写入拒绝与进程退出恢复。
+Mongo 插件验证通过 `BRICKS_TEST_MONGO_URL` 指向专用实例，只删除测试创建的随机数据库；CI 装配专用 Redis 和 Mongo 服务。

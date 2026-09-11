@@ -69,7 +69,20 @@ QueueBackend 通过 Interlace SPI 接入执行。运行 `uv run --locked python 
 手动消费可使用 `with queue.reserve(...) as task` 或 `with queue.hold(lease) as task`，
 同一队列实例的占用共享续租线程，退出时执行显式确认或释放。
 
-当前提供缓冲响应、内存上传、请求级下载器选择、Slot 会话复用与 Context 执行配置；爬虫基类、请求级自动重试、URL 去重与流式上传尚未提供。
+`bricks.spider.air.Spider` 提供种子初始化与消费两张图，保留 `downloader/task_queue/queue_name` 等业务参数，
+通过可复用的 `bricks.plugins.on_request` 插件处理响应检查、展示与代理设置。
+运行 `uv run --locked python -m examples.air_spider --output products.sqlite3` 可验证分页、详情发现与幂等存储，
+接口和插件注册见 [Air 爬虫基类](docs/08-air-spider.md)。
+业务插槽是图中的独立 HookNode，回调通过 `raise signals.Retry()` 等信号改变流程；
+插槽位置和合法信号见 [Hook 节点与 signals](docs/12-hooks-and-signals.md)。
+
+`bricks.plugins` 提供 CSV、SQLite、Mongo、Redis、范围种子源，以及存储、分页、条件动作和 UA 插件，
+见[领域插件](docs/09-domain-plugins.md)。`bricks.proxies` 提供固定、API、Redis、Clash 供应源和按 Slot
+管理的阈值回收，见[代理管理](docs/10-proxies.md)。旧调用方式的迁移见[迁移指南](docs/11-dev-migration.md)。
+Mongo 与 YAML 订阅工具分别通过 `uv sync --extra mongo`、`uv sync --extra clash` 安装。
+
+当前支持有限下载重试、缓冲响应、内存上传、请求级下载器选择、Slot 会话复用与 Context 执行配置；
+URL 规范化和业务幂等由应用提供，尚未提供流式上传。
 HTTP 网络失败通过 `Response(status_code=-1)` 表达，执行取消和超时控制异常继续传播。
 
 详细说明见[爬虫手册](docs/README.md)，通用编排语义见

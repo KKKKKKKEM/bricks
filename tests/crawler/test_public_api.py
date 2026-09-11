@@ -29,5 +29,6 @@ def test_crawler_api_uses_interlace_node_types() -> None:
 def test_crawler_does_not_ship_an_embedded_runtime() -> None:
     """爬虫发行包不包含旧引擎或领域框架兼容入口。"""
 
-    for module in ("engine", "runtime", "spi", "plugins", "adapters", "frameworks"):
+    for module in ("engine", "runtime", "spi", "adapters", "frameworks"):
         assert find_spec(f"bricks.{module}") is None
+    assert find_spec("bricks.plugins.host") is None

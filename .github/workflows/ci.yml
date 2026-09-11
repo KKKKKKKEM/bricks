@@ -16,6 +16,28 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
+    services:
+      redis:
+        image: redis:7.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      mongo:
+        image: mongo:5.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongo --quiet --eval 'db.adminCommand({ping:1})'"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      BRICKS_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+      BRICKS_TEST_MONGO_URL: mongodb://127.0.0.1:27017
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
