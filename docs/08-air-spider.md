@@ -61,7 +61,8 @@ spider.run()
 业务方法支持普通 def 与 async def；异步 make_seeds 应返回同步种子集合，不使用异步生成器。
 同步方法由引擎的执行线程调用，Awaitable 交给引擎的异步运行器等待，不将全部同步业务放入异步循环。
 默认 item_pipeline 正常返回 None，不替应用持久化数据，实际爬虫应重写它。
-Request、Response、Items 和 TaskQueue 使用当前包的模型与协议，不恢复动态字符串加载、参数反射注入或旧引擎状态。
+Request、Response、Items 和 TaskQueue 使用当前包的模型与协议，不按字符串动态加载函数或按名称注入任意参数。
+领域 scripts 插件可以显式执行可信业务表达式，但不改变核心对象的构造和所有权。
 
 ## 两张 Graph
 
@@ -75,6 +76,8 @@ Request、Response、Items 和 TaskQueue 使用当前包的模型与协议，不
       → before_pipeline → pipeline → after_pipeline → complete
 
 重试：retry → before_retry → retry_prepare → after_retry → retry_wait → before_request
+
+子任务：context.submit(seed, affinity="current") → 持久化并本地优先执行
 ```
 
 初始化逐项推进种子源，每个种子或批次提交后才推进下一次迭代并保存记录，能够与消费者同时工作。
@@ -134,16 +137,39 @@ survey 是手动消费，不是副作用沙箱。默认内存队列按实例隔�
 request/response/items 在对应阶段完成之前不可读取。数据在同一图内沿 Output 传递，不保存在共享 Spider 或 Node 上。
 seeds 的修改只影响当前交付，不回写原始队列任务或自动重算 ID。
 
+业务方法和 Hook 实际执行期间也可以调用 `Context.get_context()` 取得当前消费 Context；初始化和生命周期插件分别使用
+`InitContext.get_context()` 与 `HookContext.get_context()`。绑定使用 ContextVar 隔离同步调用链和异步任务，跨越 await
+仍指向同一次 firing，回调结束后立即恢复；在回调外或使用错误的 Context 类别会抛出 RuntimeError。
+显式参数仍适合需要清楚依赖或复用测试的函数，当前 Context 适合直接 use 的简洁插件，两者可按场景混用。
+
+`context.install(name, value, nx=False)` 将进程内业务资源写入当前 Slot，`context.obtain(name, default=None)`
+先读取 Context 字段，再读取 Slot 资源。`concurrency=N` 时框架维护 N 个长期 Slot，作用类似 dev 的 N 份线程变量，
+但资源身份不绑定物理线程：同一 Slot 即共享，不同 Slot 即隔离。本地优先子任务继续使用原 Slot；Slot 归还池后，
+后续根任务若再次取得它，也能看到尚未清除的资源。
+
 ```python
 context.submit({"url": next_url})
+context.submit({"url": related_url}, affinity="current")
+context.submit({"url": distributed_url}, affinity="any")
 context.submit({"url": first_url}, {"url": second_url})
 context.submit({"url": detail_url}, id="article:123", options={"crawler.session.reuse": False})
 ```
 
-submit 返回已接受或去重命中的 Work 列表。新种子独立进入队列，不返回尚未执行的 Context，
-也不复制源 Slot 或自动继承当前 execution 的 options；配置使用 Spider 默认值加本次显式覆盖。
-单个 id 只能对应一条提交。此入口不提供进程内递归分支、call_later 或 attrs 搬运运行时对象的路径。
+submit 返回已接受或去重命中的 Work 列表，不返回尚未执行的 Context。两种模式都先持久化并使用 Spider 默认配置
+加本次 options 覆盖；affinity 只决定首次调度是否优先携带当前 Slot，不改变 Work 内容和恢复规则。
+单个 id 只能对应一条提交。此入口不提供进程内递归分支或 attrs 搬运运行时对象的路径。
 通用跨图业务事件仍通过核心 Context.emit 显式发出，并由应用在 Runtime 上注册目标图和路由。
+当前 QueueBackend 支持 Interlace 本地 Event 的 SlotLease 延续；跨进程路由仍重新建立 Slot。
+
+`context.submit(seed, affinity="current")` 是通用子任务入口：先原子持久化并领取新 Work，再由 Interlace 本地调度器
+携带当前 SlotLease 执行。它适用于分页、详情拆分、同账号多接口等场景；每个子任务独立 ACK，进程异常后由
+任务租约恢复，但恢复执行不保证原 Slot。`affinity="any"` 只持久化为 pending，允许任意 Worker 和 Slot 领取。
+`scripts.turn_page(call_later=False)` 映射 current；call_later=True 映射 any。
+
+跨图派生使用相同口径：`context.emit("detail.parse", payload, affinity="current")` 让目标 Work 持久化并优先复用
+当前 Slot，any 则普通发布等待目标通道领取。目标事件仍须通过 Runtime 注册明确 route；跨图 Event 不自动
+继承源 options，领域配置应放入 payload 或目标 Graph 配置。当前 execution 内无需声明复用，直接通过
+`context.install/obtain` 访问 Slot 资源。
 
 流程控制使用 `from bricks import signals` 与 `raise signals.Retry()`、`raise signals.Success()`、
 `raise signals.Failure()`。信号立即退出回调；Success 跳到 complete，Failure 明确拒绝任务。
@@ -161,8 +187,9 @@ make_seeds 的 kwargs["record"] 与开始生产时的 context.record 为同一�
 
 ## 插件注册与复用
 
-响应检查、响应展示及默认代理分别位于 `bricks.plugins.on_request.After.bypass`、
-`After.show_response`、`Before.set_proxy`。Spider.install 默认通过 use 注册这些插件。
+响应检查、动态脚本、响应展示、UA 预设及默认代理分别位于 `bricks.plugins.on_request.After.bypass`、
+`After.conditional_scripts`、`After.show_response`、`Before.fake_ua`、`Before.set_proxy`。
+Spider.install 默认通过 use 注册这些插件。
 
 CSV/SQLite/Mongo/Redis 存储、种子源、分页动作和条件插件见[领域插件](09-domain-plugins.md)。
 固定、API、Redis、Clash 代理与阈值回收见[代理管理](10-proxies.md)。
@@ -186,26 +213,31 @@ spider.use(
 )
 ```
 
-is_success(context) 是应用定义的同步布尔判断。False 抛出 Retry；True 抛出 Pass，
-结束当前插槽剩余回调，避免随后默认校验覆盖业务判断。因此展示等插件应排在业务判断之前。
+is_success(context) 是应用定义的同步布尔判断。False 抛出 Retry；True 正常继续，
+随后默认校验仍会执行。因此展示和动态动作等插件应排在会中断流程的判断之前。
 默认 bypass 对 2xx 正常返回，对 -1、429、5xx 抛出 Retry，其余抛出 Failure。
 因此同一个判断函数可以通过参数注册到多个爬虫，也可在不同子类的 install 中复用。
 show_response 保留 handle、fmt 参数，默认使用标准 logger.debug，fmt=0 为单行摘要，fmt=1 为多行元数据。
 
 use(form, *events) 接受 Task 或包含 func、args、kwargs、index、match 的字典；
 同阶段入口和出口都按 index 升序执行，同索引保持声明顺序。
-回调首个参数显式接收领域 Context，后续是 args 和 kwargs，不从全局状态查找当前请求。
+回调可在首个参数显式接收领域 Context，也可以不声明 Context 参数并在函数内调用对应类型的 `get_context()`；
+后者尤其适合直接注册的通用插件。若函数签名同时兼容两种形式，优先显式传入 Context；后续仍是 args 和 kwargs，
+不会按参数名称注入其他运行时对象。match 使用相同的 Context 传入规则，但仍必须同步返回 bool。
 注册参数固定外层容器，内部可变值和注入资源归调用方管理。
 
 也可以使用 `@hooks.on(hooks.AFTER_REQUEST, index=10, match=condition)` 声明方法。
 支持实例方法、staticmethod、classmethod 与继承覆盖；子类同名方法会替换父类声明。
 图内回调可同步或异步，普通返回值必须为 None，改变流程时抛出 signals；match 必须同步返回 bool。
 混合回调链始终串行等待，不保证链内回调处于同一操作系统线程，不应依赖线程局部资源。
-不支持表达式字符串、动态函数路径和全局事件注册。
+Hook 自身的 match 不支持表达式字符串或动态函数路径；需要动态表达式时注册 `bricks.plugins.scripts`
+或 `After.conditional_scripts`。当前 Context 只在回调作用域内可见，不是事件或资源注册表。
 
 图内支持 BEFORE/AFTER_MAKE_SEEDS、BEFORE/AFTER_PUT_SEEDS、BEFORE/AFTER_MAKE_REQUEST、
 BEFORE/AFTER_REQUEST、BEFORE/AFTER_RETRY、BEFORE/AFTER_PARSE、BEFORE/AFTER_PIPELINE。
 BEFORE_START、BEFORE_CLOSE、ERROR_OCCURRED、BEFORE/AFTER_GET_SEEDS 位于真实非图边界，使用同步 HookContext。
+领取后的 AFTER_GET_SEEDS 在本地 Slot 已分配、Graph 尚未开始时执行，并与同 Slot 的 Graph execution 共用 Interlace `SlotLease.execution()` 串行边界。
+若父 Graph 正持有该 Slot，子任务 Hook 会等父 Graph 退出后再运行；父 Graph 不应同步等待依赖该子 Hook 的信号。
 use 应在打开前调用；install 在首次打开时执行一次，可调用 super().install() 扩展默认插件，也可完全自行注册。
 完全覆盖 install 时，响应是否接受由自行装配的插件决定；无信号的正常返回沿图的正常边继续。
 
@@ -223,9 +255,10 @@ forever=True 的消费者在空队列时仍保持运行，外部 close 会通知
 初始化失败会记录断点并允许已经提交的种子排空，原始异常仍向调用方传播。
 InitRecord 表示生产状态，RunReport.counts 表示当前共享队列快照，不替代各 Worker 的异常收集或外部生产者的结束协议。
 
-默认下载器逐请求创建和关闭资源。需要会话复用时，由应用按 Slot 装配客户端并重写 build_download_node，
-可参考[会话示例](../examples/crawler_session.py)的 Slot 解析函数。
-注入的 downloader、SlotPool、会话和 Redis 客户端均由调用方在 Spider 停止后关闭；
+未注入 slots 且同步 downloader 支持 SessionDownloader 时，Air 按 concurrency 自动创建长期 Slot 和独立 Session，
+并在执行停止后关闭会话；爬虫作者无需构造 SlotPool 或重写 build_download_node。
+异步 Session 与自定义多资源 Slot 可参考[会话示例](../examples/crawler_session.py)显式装配。
+注入的 SlotPool、显式会话和 Redis 客户端由调用方在 Spider 停止后关闭；
 异步客户端必须在使用它的事件循环中关闭，基类不会跨线程关闭调用方的浏览器会话。
 使用自建 Slot 的托管代理时，Spider 在执行停止后归还占用；借用 Slot 的代理仍由装配方归还。
 

@@ -43,19 +43,40 @@ local function save(id, r)
 end
 
 local r = a.id and read(records, a.id) or nil
-if op == 'put' then
-    if a.init ~= null and not valid(read(meta, 'init'), a.init, true) then
+if op == 'put' or op == 'put_claim' then
+    if op == 'put' and a.init ~= null and not valid(read(meta, 'init'), a.init, true) then
         return out({failure='lease'})
     end
     if r then
-        if r.body == a.body then return out(false) end
-        return out({failure='conflict'})
+        if r.body ~= a.body then return out({failure='conflict'}) end
+        if op == 'put' then return out(false) end
+        if r.status == 'leased' and r.deadline <= now then
+            redis.call('ZREM', active, a.id)
+            r.token, r.owner, r.deadline = '', '', 0
+            r.error, r.ready = 'delivery lease expired', now
+            if r.attempt >= r.maximum then
+                r.status = 'dead'
+                redis.call('HINCRBY', meta, 'dead', 1)
+            else
+                r.status = 'pending'
+                redis.call('ZADD', ready, now, a.id)
+            end
+            save(a.id, r)
+        end
+        if r.status ~= 'pending' or r.ready > now then return out(nil) end
+    else
+        r = {body=a.body, status='pending', attempt=0, maximum=a.maximum,
+             ready=now, deadline=0, token='', owner='', error='', result=null}
+        save(a.id, r)
+        redis.call('ZADD', ready, now, a.id)
+        if op == 'put' then return out(true) end
     end
-    r = {body=a.body, status='pending', attempt=0, maximum=a.maximum,
-         ready=now, deadline=0, token='', owner='', error='', result=null}
+    r.status, r.attempt, r.token, r.owner = 'leased', r.attempt + 1, a.token, a.owner
+    r.deadline = now + a.ttl
     save(a.id, r)
-    redis.call('ZADD', ready, now, a.id)
-    return out(true)
+    redis.call('ZREM', ready, a.id)
+    redis.call('ZADD', active, r.deadline, a.id)
+    return out(r)
 end
 if op == 'claim' then
     local expired = redis.call('ZRANGEBYSCORE', active, '-inf', now, 'LIMIT', 0, 100)

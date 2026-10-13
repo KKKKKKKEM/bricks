@@ -9,7 +9,12 @@ import requests
 
 from ..models import Request, Response
 from ._options import TransportOptions
-from ._requests_common import _response, _sent_request
+from ._requests_common import (
+    _StrictHostCookieSession,
+    _request_cookies,
+    _response,
+    _sent_request,
+)
 
 
 def _fetch(client: requests.Session, source: Request) -> Response:
@@ -38,7 +43,7 @@ def _fetch(client: requests.Session, source: Request) -> Response:
             source.method,
             source.real_url,
             headers=dict(source.headers.raw),
-            cookies=dict(source.cookies),
+            cookies=_request_cookies(source),
             data=source.body,
             proxies=dict(client.proxies),
             timeout=source.timeout,
@@ -79,7 +84,7 @@ class RequestsDownloader(TransportOptions):
             由调用方负责成对关闭的会话下载器。
         """
 
-        client = requests.Session()
+        client = _StrictHostCookieSession()
         client.verify = self.verify
         client.trust_env = self.trust_env
         client.max_redirects = self.max_redirects

@@ -34,6 +34,7 @@ def _serve(tls_context=None):
             seen.append((self.command, self.path, self.headers, body))
             headers = []
             status = 200
+            scheme = "https" if tls_context is not None else "http"
             data = json.dumps(
                 {
                     "path": self.path,
@@ -63,8 +64,28 @@ def _serve(tls_context=None):
             elif self.path == "/cross":
                 status = 302
                 headers = [
-                    ("Location", f"http://localhost:{self.server.server_port}/echo")
+                    ("Location", f"{scheme}://localhost:{self.server.server_port}/echo")
                 ]
+            elif self.path.startswith("/downgrade/"):
+                status = 302
+                port = self.path.rsplit("/", 1)[1]
+                headers = [("Location", f"http://localhost:{port}/echo")]
+            elif self.path.startswith("/login-secure/"):
+                headers = [
+                    (
+                        "Set-Cookie",
+                        f"account={self.path.rsplit('/', 1)[1]}; Path=/; Secure",
+                    )
+                ]
+            elif self.path == "/subdomain":
+                status = 302
+                headers = [
+                    (
+                        "Location",
+                        f"{scheme}://sub.localhost:{self.server.server_port}/echo",
+                    )
+                ]
+
             elif self.path == "/gzip":
                 data = gzip.compress(b"hello" * 100)
                 headers = [("Content-Encoding", "gzip")]

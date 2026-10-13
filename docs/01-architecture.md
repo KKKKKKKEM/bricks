@@ -35,6 +35,12 @@ Interlace 尚未发布到 PyPI，`pyproject.toml` 使用完整 Git 提交 ID 声
 `uv sync --locked` 可从远端安装，不依赖本地相邻目录、隐式路径或可编辑安装。
 后续发布 Interlace 到 PyPI 后，再统一更新依赖声明和锁文件。
 
+PyPI 与 TestPyPI 不接受包含直接 URL 依赖的发行包，构建成功不代表可以上传。
+发布工作流在上传前通过 `.github/scripts/check_distribution.py` 检查 wheel 的真实 `Requires-Dist`，
+发现直接依赖即明确失败；当前 Git 依赖仍会触发该检查，不静默跳过上传，也不删除依赖元数据。
+正式发布须先将经过验证的 Interlace 版本发布到包索引，再更新 Bricks 的依赖与锁文件并运行跨包验证。
+本地可执行 `uv run --locked python .github/scripts/check_distribution.py dist/*.whl` 检查构建产物。
+
 本地同时开发两个项目时，可显式覆盖当前环境：
 
 ```bash
@@ -49,10 +55,12 @@ uv run --no-sync pytest -q
 ## 可靠性边界
 
 默认运行时是进程内实现，不提供持久 broker、自动重试、跨进程恢复或 exactly-once。
-URL 去重、下载重试、代理与会话策略属于爬虫领域。当前下载器支持代理和按 Slot 装配的会话，
-默认使用 curl_cffi，HTTPX 与 requests 为可选依赖。Air 通过复用的响应检查插件与图内回边实现有限下载重试，
+URL 去重、下载重试、代理与会话策略属于爬虫领域。当前下载器支持代理和按 Slot 装配的会话；Air 对同步
+SessionDownloader 按 concurrency 自动创建和关闭 Slot 会话，默认使用 curl_cffi，HTTPX 与 requests 为可选依赖。
+Air 通过复用的响应检查插件与图内回边实现有限下载重试，
 URL 规范化和业务幂等由应用提供，见 [Air 爬虫基类](08-air-spider.md)。
 显式装配 QueueBackend 可以按 Work.id 去重并按交付结果有界重投；Redis 存储支持租约到期恢复，
+本地子任务通过 put_claim 原子持久化并优先延续当前 SlotLease；
 不改变默认内存 Runtime 的可靠性承诺，也不保证外部副作用恰好执行一次。
 取消和同步超时保持协作式语义；已发布的事件或已交付的输出不因后续失败而撤回。
 

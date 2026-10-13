@@ -58,7 +58,7 @@ class ProductSpider(air.Spider):
             context: 当前种子上下文。
 
         Returns:
-            演示 HTTP 请求；真实登录态应由应用显式装配会话。
+            演示 HTTP 请求；同步 SessionDownloader 由 Air 按并发 Slot 自动复用。
         """
         return Request(context.seeds["url"], cookies={"demo": "active"})
 
@@ -95,9 +95,7 @@ class ProductSpider(air.Spider):
                 for record in context.items
             ]
         )
-        storage.to_sqlite(
-            context, path=self.database, table="products", row_keys=["url"]
-        )
+        storage.to_sqlite("products", self.database, row_keys=["url"])
 
 
 def run_demo(output: Path) -> tuple[air.RunReport, int]:

@@ -217,6 +217,26 @@ def make_work(
 
 
 @dataclass(frozen=True)
+class _LocalSubmission:
+    """仅在当前进程 Event 中携带完整持久 Work 的内部信封。
+
+    Attributes:
+        work: 已包含稳定 ID、options 和 limits 的目标 Work。
+    """
+
+    work: Work
+
+    def __post_init__(self) -> None:
+        """校验本地信封只包装 Interlace Work。
+
+        Raises:
+            TypeError: 内容不是 Work。
+        """
+        if not isinstance(self.work, Work):
+            raise TypeError("local submission requires a Work")
+
+
+@dataclass(frozen=True)
 class TaskLease:
     """一次交付的凭据；续租不改变 token，重新领取必须生成新 token。
 

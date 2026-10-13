@@ -15,13 +15,14 @@ from interlace.spi import (
     Delivery,
     DeliveryOutcome,
     DeliveryResult,
+    SlotLease,
     SlotProvider,
     Work,
     WorkHandler,
 )
 
 from .base import TaskQueue
-from .models import LeaseLostError, TaskLease, seconds, text
+from .models import LeaseLostError, TaskLease, _LocalSubmission, seconds, text
 
 
 class _Binding:
@@ -111,11 +112,13 @@ class _Binding:
             current = Delivery(
                 delivery.work, lease.attempt, slot_lease=delivery.slot_lease
             )
-            result = (
-                None
-                if self._before_execute is None
-                else self._before_execute(lease, current)
-            )
+            if self._before_execute is None:
+                result = None
+            elif delivery.slot_lease is None:
+                result = self._before_execute(lease, current)
+            else:
+                with delivery.slot_lease.execution():
+                    result = self._before_execute(lease, current)
             if result is None:
                 result = self._handler(current)
             if not isinstance(result, DeliveryResult):
@@ -154,6 +157,40 @@ class _Binding:
                 self.active.pop(delivery.work.id, None)
                 self._lost.discard(lease.token)
         return DeliveryResult.ack()
+
+    def submit_local(self, work: Work, slot_lease: SlotLease) -> None:
+        """原子持久化并领取 Work，再延续当前 Slot 执行。
+
+        Args:
+            work: 已包含稳定 ID 与执行配置的目标 Work。
+            slot_lease: Router 已为本次交接保留的 Slot 引用。
+
+        Raises:
+            RuntimeError: 本地调度器已关闭。
+            TypeError: Work 或 lease 不符合 Interlace 契约。
+        """
+        with self.lock:
+            if self._closed or self.stop.is_set():
+                raise RuntimeError("queue binding is closed")
+        lease = self.queue.put_claim(work, self._owner, lease_seconds=self._ttl)
+        if lease is None:
+            slot_lease.release()
+            return
+        with self.lock:
+            if self._closed or self.stop.is_set():
+                self.queue.retry(lease, error="local queue binding is closed")
+                raise RuntimeError("queue binding is closed")
+            if work.id in self.active:
+                self.queue.retry(lease, error="local task is already active")
+                raise LeaseLostError("overlapping local delivery of an active task")
+            self.active[work.id] = lease
+        try:
+            self.local.submit_local(self.queue.name, lease.work, slot_lease)
+        except BaseException:
+            with self.lock:
+                self.active.pop(work.id, None)
+            self.queue.retry(lease, error="local scheduling failed")
+            raise
 
     def _poll(self) -> None:
         """有界预取并持续续租；存储异常后停止新领取，仍等待当前执行清理。"""
@@ -249,8 +286,8 @@ class _Binding:
 class QueueBackend:
     """将显式装配的爬虫队列映射适配为 Interlace TaskBackend。
 
-    每次存储交付均创建本地 Slot 链，不提供 submit_local，不跨持久队列传递
-    会话。close 停止领取并排空已领取任务，尚未领取任务保留在存储中。
+    持久存储交付创建本地 Slot 链；submit_local 接受 Interlace 已保留的 lease，
+    原子持久化并领取目标 Work 后在当前进程延续同一 Slot。
 
     Attributes:
         _queues: 构造时复制的队列映射，存储与 Redis 客户端归调用方管理。
@@ -261,6 +298,7 @@ class QueueBackend:
         _closed: 是否已停止接受提交和绑定。
         _close_lock: 保证并发 close 均等待清理完成。
         _errors: 已注销绑定留下的未报告错误，不保留完整消费者对象。
+        _local_cursor: 相同通道多个 binding 之间的本地延续轮询位置。
         _before_claim: 可选领域领取前门控。
         _before_execute: 可选已领取交付的前置决策。
     """
@@ -298,6 +336,7 @@ class QueueBackend:
         self._closed = False
         self._close_lock = RLock()
         self._errors: deque[BaseException] = deque()
+        self._local_cursor = 0
         for callback in (before_claim, before_execute):
             if callback is not None and (
                 not callable(callback)
@@ -336,6 +375,35 @@ class QueueBackend:
         """
         with self._lock:
             self._queue(queue).put(work)
+
+    def submit_local(self, queue: str, work: Work, lease: SlotLease) -> None:
+        """持久化目标 Work 并在当前进程延续同一 Slot 链。
+
+        Args:
+            queue: 已绑定的本地消费通道。
+            work: Interlace Router 创建的工作请求；本地提交信封可携带完整目标 Work。
+            lease: Router 已 retain 并转交给本次投递的 Slot 引用。
+
+        Raises:
+            RuntimeError: 后端已关闭或通道没有本地消费者。
+            ValueError: 通道未装配。
+            TypeError: Work 或 lease 不符合 Interlace 契约。
+        """
+        with self._lock:
+            self._queue(queue)
+            bindings = tuple(
+                binding
+                for binding in self._bindings
+                if binding.queue.name == queue and not binding.stop.is_set()
+            )
+            if not bindings:
+                raise RuntimeError(f"task queue {queue!r} has no local consumers")
+            binding = bindings[self._local_cursor % len(bindings)]
+            self._local_cursor += 1
+            target = (
+                work.inputs.work if isinstance(work.inputs, _LocalSubmission) else work
+            )
+            binding.submit_local(target, lease)
 
     def bind(
         self,

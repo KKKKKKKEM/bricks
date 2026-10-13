@@ -17,6 +17,23 @@ from bricks.queues.models import encode
 from ._utils import identifier, integer, seed, sync
 
 
+def _skip(value: Any) -> int | None:
+    """把 dev 的省略值和 auto 恢复写法映射到当前断点语义。
+
+    Args:
+        value: 非负整数、None、省略值或字符串 auto。
+
+    Returns:
+        None 表示从 record 恢复，否则为显式跳过条数。
+
+    Raises:
+        ValueError: 跳过位置非法。
+    """
+    if value is ... or value is None or value == "auto":
+        return None
+    return integer(value, "skip")
+
+
 def _batch(
     source: Iterable[Any],
     *,
@@ -86,12 +103,12 @@ def by_range(
     start: int = 0,
     stop: int | None = None,
     step: int = 1,
-    *,
+    batch_size: int = 10000,
+    skip: Any = ...,
+    record: dict[str, Any] | None = None,
     key: str = "id",
     reverse: bool = False,
-    batch_size: int = 10000,
-    skip: int | None = None,
-    record: dict[str, Any] | None = None,
+    *,
     checkpoint: str | None = None,
 ) -> Iterator[list[dict[str, Any]]]:
     """生成整数种子，有限范围严格使用 Python range 的方向与边界。
@@ -103,7 +120,7 @@ def by_range(
         key: 种子中的整数键名。
         reverse: 对有限范围反向遍历，默认 False。
         batch_size: 每批最大条数。
-        skip: 显式跳过条数；None 从 record 恢复。
+        skip: 显式跳过条数；省略值、auto 或 None 从 record 恢复。
         record: 调用方持有的恢复记录。
         checkpoint: 自定义记录键；缺省根据范围生成。
 
@@ -127,7 +144,7 @@ def by_range(
     yield from _batch(
         ({key: value} for value in values),
         batch_size=batch_size,
-        skip=skip,
+        skip=_skip(skip),
         record=record,
         checkpoint=checkpoint or _key("range", [start, stop, step, key, reverse]),
     )
@@ -135,14 +152,14 @@ def by_range(
 
 def by_csv(
     path: str | Path,
+    query: str | None = None,
+    batch_size: int = 10000,
+    skip: Any = ...,
+    reader_options: Mapping[str, Any] | None = None,
+    record: dict[str, Any] | None = None,
     *,
     encoding: str = "utf-8-sig",
-    reader_options: Mapping[str, Any] | None = None,
-    query: str | None = None,
     parameters: Sequence[Any] = (),
-    batch_size: int = 10000,
-    skip: int | None = None,
-    record: dict[str, Any] | None = None,
     checkpoint: str | None = None,
     transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> Iterator[list[dict[str, Any]]]:
@@ -155,7 +172,7 @@ def by_csv(
         query: 可选 SQL；有查询时将每个文件装入临时 data 表，字段为 TEXT。
         parameters: SQL 值参数。
         batch_size: 每批最大条数。
-        skip: 显式跳过结果条数；None 恢复。
+        skip: 显式跳过结果条数；省略值、auto 或 None 恢复。
         record: 调用方恢复记录；源文件和顺序必须稳定。
         checkpoint: 独立记录键。
         transform: 可选同步字段转换。
@@ -171,6 +188,7 @@ def by_csv(
     if not files:
         raise FileNotFoundError(path)
     options = dict(reader_options or {})
+    selected_query = None if query is None else query.replace("<TABLE>", "data")
 
     def rows() -> Generator[dict[str, Any], None, None]:
         """逐文件读取并在退出或生成器关闭时释放文件与临时数据库。
@@ -188,7 +206,7 @@ def by_csv(
                     or any(not name for name in fields)
                 ):
                     raise ValueError("CSV requires unique non-empty headers")
-                if query is None:
+                if selected_query is None:
                     for row in reader:
                         if None in row or any(value is None for value in row.values()):
                             raise ValueError("CSV row width differs from header")
@@ -215,7 +233,7 @@ def by_csv(
                             connection.execute(
                                 statement, tuple(row[name] for name in fields)
                             )
-                        yield from _sql_rows(connection, query, parameters)
+                        yield from _sql_rows(connection, selected_query, parameters)
                     finally:
                         connection.close()
 
@@ -224,9 +242,10 @@ def by_csv(
         yield from _batch(
             source,
             batch_size=batch_size,
-            skip=skip,
+            skip=_skip(skip),
             record=record,
-            checkpoint=checkpoint or _key("csv", [files, query, list(parameters)]),
+            checkpoint=checkpoint
+            or _key("csv", [files, selected_query, list(parameters)]),
             transform=transform,
         )
     finally:
@@ -265,11 +284,11 @@ def _sql_rows(
 def by_sqlite(
     path: str,
     conn: sqlite3.Connection,
+    batch_size: int = 10000,
+    skip: Any = ...,
+    record: dict[str, Any] | None = None,
     *,
     parameters: Sequence[Any] = (),
-    batch_size: int = 10000,
-    skip: int | None = None,
-    record: dict[str, Any] | None = None,
     checkpoint: str | None = None,
     transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> Iterator[list[dict[str, Any]]]:
@@ -280,7 +299,7 @@ def by_sqlite(
         conn: 当前线程可用的原生连接，归调用方管理。
         parameters: 查询参数。
         batch_size: 每批最大条数。
-        skip: 显式跳过条数；None 恢复。
+        skip: 显式跳过条数；省略值、auto 或 None 恢复。
         record: 调用方恢复记录。
         checkpoint: 记录键；不同数据库使用同一查询时应显式区分。
         transform: 可选同步字段转换。
@@ -293,7 +312,7 @@ def by_sqlite(
         yield from _batch(
             source,
             batch_size=batch_size,
-            skip=skip,
+            skip=_skip(skip),
             record=record,
             checkpoint=checkpoint or _key("sqlite", [path, list(parameters)]),
             transform=transform,
@@ -303,34 +322,46 @@ def by_sqlite(
 
 
 def by_mongo(
+    path: str,
     conn: Any,
-    *,
     query: Mapping[str, Any] | None = None,
     projection: Mapping[str, Any] | None = None,
-    sort: Sequence[tuple[str, int]] = (),
+    database: str | None = None,
     batch_size: int = 10000,
-    skip: int | None = None,
+    skip: Any = ...,
     record: dict[str, Any] | None = None,
-    checkpoint: str = "mongo",
+    sort: Sequence[tuple[str, int]] | None = None,
+    *,
+    checkpoint: str | None = None,
     transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> Iterator[list[dict[str, Any]]]:
     """从显式 Mongo Collection 读取种子，不导入或创建 Mongo 客户端。
 
     Args:
-        conn: 同步 Collection；Cursor 由本函数关闭，Collection 归调用方管理。
+        path: Collection 名称。
+        conn: 同步 Collection、Database 或 MongoClient；资源归调用方管理。
         query: 原生查询条件。
         projection: 字段投影；默认排除 _id，其他非 JSON 字段需 transform。
+        database: conn 为 MongoClient 时选择的数据库。
         sort: 恢复时应提供包含唯一键的稳定排序。
         batch_size: 每批最大条数。
-        skip: 显式跳过条数；None 恢复。
+        skip: 显式跳过条数；省略值、auto 或 None 恢复。
         record: 调用方恢复记录。
-        checkpoint: 当前查询独立的记录键，默认 mongo。
+        checkpoint: 当前查询独立的记录键；缺省根据源配置生成。
         transform: 显式转换 ObjectId、日期等类型。
 
     Yields:
         严格 JSON 种子批次。
     """
-    cursor = conn.find(
+    if hasattr(conn, "find"):
+        collection = conn
+        if getattr(collection, "name", path) != path:
+            raise ValueError("path must match the injected Mongo Collection name")
+    elif database is None:
+        collection = conn[path]
+    else:
+        collection = conn[database][path]
+    cursor = collection.find(
         dict(query or {}), {"_id": 0} if projection is None else dict(projection)
     )
     try:
@@ -340,9 +371,19 @@ def by_mongo(
         yield from _batch(
             cursor,
             batch_size=batch_size,
-            skip=skip,
+            skip=_skip(skip),
             record=record,
-            checkpoint=checkpoint,
+            checkpoint=checkpoint
+            or _key(
+                "mongo",
+                [
+                    path,
+                    query,
+                    projection,
+                    database,
+                    [list(item) for item in sort or ()],
+                ],
+            ),
             transform=transform,
         )
     finally:
@@ -352,9 +393,8 @@ def by_mongo(
 def by_redis(
     path: str,
     conn: Any,
-    *,
-    key_type: str = "set",
     batch_size: int = 10000,
+    key_type: str = "set",
 ) -> Iterator[list[dict[str, Any]]]:
     """无损读取 Redis 集合、列表或匹配的字符串键，显式 JSON 解码。
 

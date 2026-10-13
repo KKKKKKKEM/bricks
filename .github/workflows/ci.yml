@@ -70,10 +70,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run Ruff
-        run: uv run --locked ruff check bricks tests examples
+        run: uv run --locked ruff check bricks tests examples .github/scripts
       - name: Run mypy
         run: uv run --locked mypy bricks
       - name: Check formatting
-        run: uv run --locked ruff format --check bricks
+        run: uv run --locked ruff format --check bricks .github/scripts
       - name: Build distributions
         run: uv build

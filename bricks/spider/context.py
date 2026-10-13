@@ -3,19 +3,90 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from interlace import Context as EngineContext
-from interlace import Slot
+from interlace import Event, Slot
 from interlace.spi import Work
 
 from bricks import Items, Request, Response
-from bricks.queues import InitLease, TaskLease, TaskQueue
 from bricks.proxies import Manager
+from bricks.queues import InitLease, TaskLease, TaskQueue
+from bricks.queues.models import _LocalSubmission
 
 if TYPE_CHECKING:
     from .air import Spider
+
+
+_ContextT = TypeVar("_ContextT", bound="_CurrentContext")
+_CURRENT_CONTEXT: ContextVar[_CurrentContext | None] = ContextVar(
+    "bricks.spider.current_context", default=None
+)  # 当前同步调用链或异步任务的领域 Context，不跨回调保留。
+_RESOURCES = "bricks.context.resources"  # Slot 内由业务按名称共享的资源映射。
+Affinity = Literal["current", "any"]
+
+
+def _affinity(value: Affinity) -> Affinity:
+    """校验派生任务的 Slot 亲和策略。
+
+    Args:
+        value: current 延续当前 Slot，any 交给任意 Worker 领取。
+
+    Returns:
+        已校验的原字符串。
+
+    Raises:
+        ValueError: 亲和策略不存在。
+    """
+    if value not in ("current", "any"):
+        raise ValueError("affinity must be current or any")
+    return value
+
+
+class _CurrentContext:
+    """提供按线程及异步任务隔离的当前领域 Context。"""
+
+    @classmethod
+    def get_context(cls: type[_ContextT]) -> _ContextT:
+        """取得当前正在执行的同类领域 Context。
+
+        Returns:
+            当前回调绑定的消费、初始化或生命周期 Context。
+
+        Raises:
+            RuntimeError: 当前不在回调中，或 Context 类别不匹配。
+        """
+        current = _CURRENT_CONTEXT.get()
+        if current is None:
+            raise RuntimeError("no domain Context is active")
+        if not isinstance(current, cls):
+            raise RuntimeError(
+                f"current domain Context is {type(current).__name__}, not {cls.__name__}"
+            )
+        return cast(_ContextT, current)
+
+
+def _activate_context(context: _CurrentContext) -> Token[_CurrentContext | None]:
+    """为当前调用链绑定领域 Context。
+
+    Args:
+        context: 即将传给业务函数或 Hook 的领域 Context。
+
+    Returns:
+        用于精确恢复上一层绑定的 ContextVar token。
+    """
+    return _CURRENT_CONTEXT.set(context)
+
+
+def _reset_context(token: Token[_CurrentContext | None]) -> None:
+    """恢复进入当前回调之前的领域 Context。
+
+    Args:
+        token: `_activate_context` 返回的绑定凭据。
+    """
+    _CURRENT_CONTEXT.reset(token)
 
 
 class ResponseRejectedError(RuntimeError):
@@ -65,7 +136,7 @@ class _Initialization:
 
 
 @dataclass
-class HookContext:
+class HookContext(_CurrentContext):
     """启停、领取和错误插槽的上下文，不伪造 Graph execution。
 
     Attributes:
@@ -120,7 +191,7 @@ class HookContext:
         return self.lease.work.inputs
 
 
-class Context(EngineContext):
+class Context(_CurrentContext, EngineContext):
     """沿用 seeds/request/response/items/target 的消费上下文。
 
     Attributes:
@@ -255,6 +326,87 @@ class Context(EngineContext):
             manager.clear(self.slot)
         self.request.proxy = None
 
+    def emit(
+        self,
+        event_type: str,
+        payload: Any = None,
+        *,
+        affinity: Affinity = "current",
+    ) -> Event:
+        """发布跨图事件并选择是否延续当前 Slot。
+
+        Args:
+            event_type: 已在 Runtime 注册路由的领域事件类型。
+            payload: 目标 Graph 的输入数据。
+            affinity: current 使用本地 emitter；any 通过 Runtime 普通发布。
+
+        Returns:
+            已被 Router 接受的 Event。
+
+        Raises:
+            ValueError: affinity 不是 current 或 any。
+            RuntimeError: 普通发布时 Spider Runtime 尚未打开。
+        """
+        if _affinity(affinity) == "current":
+            return super().emit(event_type, payload)
+        return self.target.runtime.emit(event_type, payload)
+
+    def install(self, name: str, value: Any, *, nx: bool = False) -> Any:
+        """把业务资源写入当前 Slot，供后续取得同一 Slot 的 Context 使用。
+
+        Args:
+            name: 当前业务定义的非空资源名称。
+            value: 进程内资源值，不跨队列或进程序列化。
+            nx: True 时保留已存在资源并返回旧值。
+
+        Returns:
+            实际保存在当前 Slot 中的资源值。
+
+        Raises:
+            RuntimeError: 当前执行没有 Slot。
+            ValueError: 资源名称非法。
+            TypeError: nx 不是布尔值。
+        """
+        if not isinstance(name, str) or not name:
+            raise ValueError("resource name must be a non-empty string")
+        if type(nx) is not bool:
+            raise TypeError("nx must be boolean")
+        if self.slot is None:
+            raise RuntimeError("context resources require an execution Slot")
+        resources = self.slot.setdefault(_RESOURCES, {})
+        if not isinstance(resources, dict):
+            raise TypeError("context resource namespace must be a dictionary")
+        if nx and name in resources:
+            return resources[name]
+        resources[name] = value
+        return value
+
+    def obtain(self, name: str, default: Any = None) -> Any:
+        """读取 Context 字段或当前 Slot 中的具名业务资源。
+
+        Args:
+            name: Context 属性或业务资源名称。
+            default: 两处均不存在时的返回值。
+
+        Returns:
+            Context 属性、Slot 资源或 default。
+
+        Raises:
+            ValueError: 名称非法。
+        """
+        if not isinstance(name, str) or not name:
+            raise ValueError("resource name must be a non-empty string")
+        try:
+            return getattr(self, name)
+        except (AttributeError, RuntimeError):
+            pass
+        if self.slot is None:
+            return default
+        resources = self.slot.get(_RESOURCES, {})
+        if not isinstance(resources, dict):
+            raise TypeError("context resource namespace must be a dictionary")
+        return resources.get(name, default)
+
     @property
     def request(self) -> Request:
         """取得已经构造的请求。
@@ -362,6 +514,7 @@ class Context(EngineContext):
     def submit(
         self,
         *obj: dict[str, Any],
+        affinity: Affinity = "current",
         id: str | None = None,
         options: Mapping[str, Any] | None = None,
     ) -> list[Work]:
@@ -369,6 +522,7 @@ class Context(EngineContext):
 
         Args:
             obj: JSON 种子对象序列。
+            affinity: current 持久化后延续当前 Slot；any 等待任意 Worker 领取。
             id: 单种子提交时可指定的业务 ID。
             options: 覆盖 Spider 默认值的执行配置。
 
@@ -379,12 +533,23 @@ class Context(EngineContext):
             ValueError: 多个种子同时指定一个 ID。
         """
         self.checkpoint()
+        affinity = _affinity(affinity)
         if id is not None and len(obj) != 1:
             raise ValueError("explicit id requires exactly one seed")
-        return [self.target._submit(seed, id=id, options=options) for seed in obj]
+        works = [self.target._make_work(seed, id=id, options=options) for seed in obj]
+        for work in works:
+            if affinity == "current":
+                self.emit(
+                    self.target.local_submission_event_name,
+                    _LocalSubmission(work),
+                    affinity="current",
+                )
+            else:
+                self.task_queue.put(work)
+        return works
 
 
-class InitContext(EngineContext):
+class InitContext(_CurrentContext, EngineContext):
     """初始化上下文，提供 target、seeds、task_queue、queue_name 和 record。
 
     Attributes:

@@ -30,16 +30,41 @@ BEFORE_PIPELINE = "BEFORE_PIPELINE"  # 存储之前。
 AFTER_PIPELINE = "AFTER_PIPELINE"  # 存储返回之后。
 
 
+def current(callback: Any) -> Any:
+    """声明插件不接收 Context，并在内部使用 Context.get_context()。
+
+    Args:
+        callback: 同步或异步插件函数。
+
+    Returns:
+        未包装的原函数，便于 staticmethod、继承和测试复用。
+
+    Raises:
+        TypeError: 装饰对象不是函数。
+    """
+    function = (
+        callback.__func__
+        if isinstance(callback, (staticmethod, classmethod))
+        else callback
+    )
+    if not inspect.isfunction(function):
+        raise TypeError("hooks.current decorates functions")
+    setattr(function, "__bricks_current_context__", True)
+    return callback
+
+
 @dataclass(frozen=True)
 class Task:
-    """可重复注册的插件调用描述，沿用 func/args/kwargs/index/match 命名。
+    """可重复注册的插件调用描述，支持显式或当前 Context 写法。
 
     Attributes:
-        func: 首个参数接收当前领域 Context 的同步或异步函数。
+        func: 可显式首参接收 Context，或通过 Context.get_context() 读取。
         args: 追加的位置参数，固定外层元组，内部值归调用方管理。
         kwargs: 追加的关键字参数，只读外层快照，内部资源归调用方管理。
         index: 同阶段升序执行的索引，None 等同默认顺序 0。
-        match: 接收 Context 的同步布尔条件，None 表示总是执行。
+        match: 可显式接收或通过 get_context() 读取 Context 的同步布尔条件。
+        _with_context: 是否向 func 注入 Context；None 表示签名无法静态判断。
+        _match_with_context: 是否向 match 注入 Context；无条件时为 None。
     """
 
     func: Callable[..., Any]
@@ -47,6 +72,8 @@ class Task:
     kwargs: Mapping[str, Any] = field(default_factory=dict)
     index: int | float | None = None
     match: Callable[..., bool] | None = None
+    _with_context: bool | None = field(init=False, repr=False, compare=False)
+    _match_with_context: bool | None = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """校验声明并固定参数容器，不解析函数路径或表达式字符串。
@@ -78,6 +105,51 @@ class Task:
             raise TypeError("plugin match must be a synchronous callable")
         object.__setattr__(self, "args", tuple(self.args))
         object.__setattr__(self, "kwargs", MappingProxyType(dict(self.kwargs)))
+        object.__setattr__(
+            self,
+            "_with_context",
+            self._resolve_context_binding(self.func, self.args, self.kwargs),
+        )
+        object.__setattr__(
+            self,
+            "_match_with_context",
+            None
+            if self.match is None
+            else self._resolve_context_binding(self.match, (), {}),
+        )
+
+    @staticmethod
+    def _resolve_context_binding(
+        function: Callable[..., Any], args: tuple[Any, ...], kwargs: Mapping[str, Any]
+    ) -> bool | None:
+        """根据最终调用参数判断是否需要注入当前 Context。
+
+        显式 Context 与无 Context 两种形式都能绑定时优先显式形式，保持
+        当前 API 的既有行为。装饰器收集阶段的未绑定方法可能暂时无法判断，
+        实例绑定后创建的新 Task 会重新计算。
+
+        Returns:
+            True 注入 Context，False 直接调用，None 表示签名不可检查或不匹配。
+        """
+        target = getattr(function, "__func__", function)
+        if getattr(target, "__bricks_current_context__", False):
+            return False
+        try:
+            signature = inspect.signature(function)
+        except (TypeError, ValueError):
+            return None
+        marker = object()
+        try:
+            signature.bind(marker, *args, **kwargs)
+        except TypeError:
+            pass
+        else:
+            return True
+        try:
+            signature.bind(*args, **kwargs)
+        except TypeError:
+            return None
+        return False
 
 
 @dataclass(frozen=True)

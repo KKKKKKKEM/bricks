@@ -55,14 +55,27 @@ def run_hooks(
             None 或回调 Awaitable。
         """
         if task.match is not None:
+            match = partial(
+                task.match,
+                *((context,) if task._match_with_context is not False else ()),
+            )
             value = invoke(
-                owner, task.match, context, lambda result: result, allow_await=False
+                owner,
+                lambda _: match(),
+                context,
+                lambda result: result,
+                allow_await=False,
             )
             if type(value) is not bool:
                 raise TypeError("hook condition must return bool synchronously")
             if not value:
                 return None
-        callback = partial(task.func, context, *task.args, **task.kwargs)
+        callback = partial(
+            task.func,
+            *((context,) if task._with_context is not False else ()),
+            *task.args,
+            **task.kwargs,
+        )
         return invoke(
             owner, lambda _: callback(), context, _none, allow_await=allow_await
         )

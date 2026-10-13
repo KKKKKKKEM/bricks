@@ -7,7 +7,6 @@ import os
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -69,6 +68,10 @@ def test_range_checkpoint_keeps_empty_record_and_resumes_exactly():
     assert list(make_seeds.by_range(-3, 4, 2, reverse=True)) == [
         [{"id": 3}, {"id": 1}, {"id": -1}, {"id": -3}]
     ]
+    assert list(make_seeds.by_range(0, 4, 1, 2, 1, {}, "page", False)) == [
+        [{"page": 1}, {"page": 2}],
+        [{"page": 3}],
+    ]
     with pytest.raises(ValueError):
         list(make_seeds.by_range(step=0))
 
@@ -85,7 +88,7 @@ def test_csv_query_multiple_files_and_sqlite_query_boundaries(tmp_path):
         )
     record = {}
     options = {
-        "query": "SELECT * FROM data WHERE id >= ? ORDER BY id",
+        "query": "SELECT * FROM <TABLE> WHERE id >= ? ORDER BY id",
         "parameters": ["2"],
         "record": record,
         "batch_size": 1,
@@ -151,12 +154,12 @@ def test_sqlite_upsert_and_batch_rollback_preserve_input(tmp_path):
         tmp_path: 独占数据库目录。
     """
     path = tmp_path / "items.sqlite3"
-    context = SimpleNamespace(items=Items([{"id": 1, "name": "first"}]))
-    original = copy.deepcopy(list(context.items))
-    storage.to_sqlite(context, path=path, table='items"quoted', row_keys=["id"])
-    assert list(context.items) == original
-    context.items = Items([{"id": 1, "name": "updated"}])
-    storage.to_sqlite(context, path=path, table='items"quoted', row_keys=["id"])
+    items = Items([{"id": 1, "name": "first"}])
+    original = copy.deepcopy(list(items))
+    storage.to_sqlite('items"quoted', path, items, row_keys=["id"])
+    assert list(items) == original
+    items = Items([{"id": 1, "name": "updated"}])
+    storage.to_sqlite('items"quoted', path, items, row_keys=["id"])
     connection = sqlite3.connect(path)
     try:
         assert connection.execute('SELECT * FROM "items""quoted"').fetchall() == [
@@ -166,9 +169,9 @@ def test_sqlite_upsert_and_batch_rollback_preserve_input(tmp_path):
             "CREATE TABLE checked (id INTEGER PRIMARY KEY, value INTEGER CHECK(value > 0))"
         )
         connection.commit()
-        context.items = Items([{"id": 1, "value": 1}, {"id": 2, "value": -1}])
+        items = Items([{"id": 1, "value": 1}, {"id": 2, "value": -1}])
         with pytest.raises(sqlite3.IntegrityError):
-            storage.to_sqlite(context, path=path, table="checked", row_keys=["id"])
+            storage.to_sqlite("checked", path, items, row_keys=["id"])
         assert connection.execute("SELECT * FROM checked").fetchall() == []
     finally:
         connection.close()
@@ -188,7 +191,7 @@ def test_csv_shared_lock_and_header_validation(tmp_path):
         Args:
             index: 当前记录编号。
         """
-        storage.to_csv(SimpleNamespace(items=[{"id": index}]), path=path, lock=lock)
+        storage.to_csv(path, [{"id": index}], lock=lock)
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         list(executor.map(write, range(20)))
@@ -197,7 +200,7 @@ def test_csv_shared_lock_and_header_validation(tmp_path):
     assert sorted(int(row["id"]) for row in rows) == list(range(20))
     before = path.read_bytes()
     with pytest.raises(ValueError, match="header"):
-        storage.to_csv(SimpleNamespace(items=[{"name": "different"}]), path=path)
+        storage.to_csv(path, [{"name": "different"}])
     assert path.read_bytes() == before
 
 
@@ -214,14 +217,14 @@ def test_real_redis_storage_and_seed_roundtrip(redis_client, key_type):
     original = copy.deepcopy(rows)
     try:
         storage.to_redis(
-            SimpleNamespace(items=rows),
-            path=prefix,
-            conn=redis_client,
+            prefix,
+            redis_client,
+            rows,
             key_type=key_type,
             row_keys=["id"],
             ttl=60,
         )
-        path = prefix + ":*" if key_type == "string" else prefix
+        path = prefix + "*" if key_type == "string" else prefix
         loaded = [
             row
             for batch in make_seeds.by_redis(
@@ -239,9 +242,9 @@ def test_real_redis_storage_and_seed_roundtrip(redis_client, key_type):
         )
         if key_type == "string":
             storage.to_redis(
-                SimpleNamespace(items=rows),
-                path=prefix,
-                conn=redis_client,
+                prefix,
+                redis_client,
+                rows,
                 key_type="string",
                 row_keys=["id"],
             )
@@ -260,28 +263,28 @@ def test_real_mongo_upsert_projection_and_explicit_conversion(mongo_collection):
     """
     mongo_collection.create_index("id", unique=True)
     rows = [{"id": 1, "name": "first"}, {"id": 2, "name": "second"}]
+    storage.to_mongo("items", mongo_collection, rows, row_keys=["id"])
     storage.to_mongo(
-        SimpleNamespace(items=rows), conn=mongo_collection, row_keys=["id"]
-    )
-    storage.to_mongo(
-        SimpleNamespace(items=[{"id": 1, "name": "updated"}]),
-        conn=mongo_collection,
+        "items",
+        mongo_collection,
+        [{"id": 1, "name": "updated"}],
         row_keys=["id"],
     )
     assert all("_id" not in row for row in rows)
     record = {}
     source = make_seeds.by_mongo(
-        mongo_collection, sort=[("id", 1)], batch_size=1, record=record
+        "items", mongo_collection, sort=[("id", 1)], batch_size=1, record=record
     )
     assert next(source) == [{"id": 1, "name": "updated"}]
     source.close()
     assert list(
-        make_seeds.by_mongo(mongo_collection, sort=[("id", 1)], record=record)
+        make_seeds.by_mongo("items", mongo_collection, sort=[("id", 1)], record=record)
     ) == [[{"id": 2, "name": "second"}]]
     with pytest.raises(TypeError):
-        list(make_seeds.by_mongo(mongo_collection, projection={}))
+        list(make_seeds.by_mongo("items", mongo_collection, projection={}))
     converted = list(
         make_seeds.by_mongo(
+            "items",
             mongo_collection,
             projection={},
             transform=lambda row: {**row, "_id": str(row["_id"])},
@@ -292,51 +295,266 @@ def test_real_mongo_upsert_projection_and_explicit_conversion(mongo_collection):
 
     unacknowledged = mongo_collection.with_options(write_concern=WriteConcern(w=0))
     with pytest.raises(ValueError, match="acknowledged"):
-        storage.to_mongo(SimpleNamespace(items=[{"id": 3}]), conn=unacknowledged)
+        storage.to_mongo("items", unacknowledged, [{"id": 3}])
     assert mongo_collection.count_documents({}) == 2
 
 
-def test_plugins_are_composable_and_reject_async_or_nonboolean_conditions():
-    """条件动作按序执行，错误条件和异步回调不被解释为业务成功。"""
-    context = SimpleNamespace(request=Request("https://example.com"))
-    observed = []
-    on_request.After.conditional_scripts(
-        context,
-        rules=[
-            (lambda ctx: True, lambda ctx: observed.append(1)),
-            (lambda ctx: True, lambda ctx: observed.append(2)),
-        ],
-        first=True,
+def test_real_mongo_row_key_operator_value_is_matched_literally(mongo_collection):
+    """row_keys 中形似查询操作符的值仍按业务数据精确匹配。
+
+    Args:
+        mongo_collection: 独占测试集合。
+    """
+    mongo_collection.insert_one({"id": 1, "name": "existing"})
+    storage.to_mongo(
+        "items",
+        mongo_collection,
+        [{"id": {"$ne": None}, "name": "operator-shaped value"}],
+        row_keys=["id"],
     )
-    assert observed == [1]
-    with pytest.raises(TypeError, match="bool"):
-        scripts.is_success(context, match=lambda ctx: 1)
 
-    async def invalid(ctx):
-        """提供被同步插件明确拒绝的异步条件。
-
-        Args:
-            ctx: 当前上下文。
-
-        Returns:
-            异步布尔结果。
-        """
-        return True
-
-    with pytest.raises(TypeError, match="synchronous"):
-        scripts.is_success(context, match=invalid)
-    on_request.Before.fake_ua(context, factory=lambda: "test-UA")
-    on_request.Before.fake_ua(context, factory=lambda: "different-UA")
-    assert context.request.headers["User-Agent"] == "test-UA"
-    scripts.inject(context, [lambda ctx: observed.append(3)])
-    assert observed == [1, 3]
+    assert mongo_collection.count_documents({}) == 2
+    assert (
+        mongo_collection.find_one({"id": {"$eq": {"$ne": None}}})["name"]
+        == "operator-shaped value"
+    )
+    assert mongo_collection.find_one({"id": 1})["name"] == "existing"
+    with pytest.raises(ValueError, match="plain field names"):
+        storage.to_mongo(
+            "items", mongo_collection, [{"id.value": 3}], row_keys=["id.value"]
+        )
 
 
-def test_air_plugins_page_store_then_ack(tmp_path):
-    """种子插件、分页动作和 SQLite 插件组成完整 Air，存储提交后才 ACK。
+def test_show_response_redacts_credentials_and_request_body_by_default():
+    """响应诊断保留状态信息但不暴露认证、查询值或请求体。"""
+    messages = []
+
+    class LoggingSpider(Spider):
+        """使用带敏感字段的请求验证消费者实际收到的日志。"""
+
+        def __init__(self):
+            """装配返回固定响应的下载器。"""
+            super().__init__(
+                downloader=type(
+                    "Downloader",
+                    (),
+                    {
+                        "fetch": lambda _, request: Response(
+                            b"{}", status_code=200, request=request
+                        )
+                    },
+                )()
+            )
+
+        def make_seeds(self, context, **kwargs):
+            """提供单条请求种子。
+
+            Args:
+                context: 初始化上下文。
+                kwargs: 初始化记录。
+
+            Returns:
+                含敏感 URL 的种子。
+            """
+            return {
+                "url": "https://user:known-url-credential@example.test/path?token=url-secret"
+            }
+
+        def make_request(self, context):
+            """构造包含认证信息的非 GET 请求。
+
+            Args:
+                context: 消费上下文。
+
+            Returns:
+                待下载请求。
+            """
+            return Request(
+                context.seeds["url"],
+                method="POST",
+                headers={
+                    "Authorization": "header-secret",
+                    "Cookie": "cookie-secret",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "X-Auth-Token": "token-header-secret",
+                    "Referer": "https://referrer.test/page?token=referer-secret",
+                    "X-Password": "password-header-secret",
+                },
+                body="field=known-body-credential",
+                proxy="http://proxy-user:known-proxy-credential@proxy.test:8080",
+            )
+
+        def parse(self, context):
+            """返回空解析结果。
+
+            Args:
+                context: 当前响应上下文。
+
+            Returns:
+                空记录列表。
+            """
+            return []
+
+        def install(self):
+            """收集两种格式的消费者可见诊断文本。"""
+            self.use(
+                hooks.AFTER_REQUEST,
+                {
+                    "func": on_request.After.show_response,
+                    "kwargs": {"handle": messages.append},
+                },
+                {
+                    "func": on_request.After.show_response,
+                    "kwargs": {"handle": messages.append, "fmt": 1},
+                    "index": 1,
+                },
+            )
+
+    spider = LoggingSpider()
+    assert spider.run().counts["acked"] == 1
+    assert len(messages) == 2
+    output = "\n".join(messages)
+    for secret in (
+        "user",
+        "known-url-credential",
+        "url-secret",
+        "proxy-user",
+        "known-proxy-credential",
+        "header-secret",
+        "cookie-secret",
+        "token-header-secret",
+        "referer-secret",
+        "password-header-secret",
+        "application/x-www-form-urlencoded",
+        "known-body-credential",
+    ):
+        assert secret not in output
+    assert "status=200" in output
+    assert "POST" in output
+    assert "body: [REDACTED]" in output
+    assert "Authorization" in output and "Cookie" in output
+    assert "Referer" in output and "X-Password" in output
+    assert "example.test" in output and "proxy.test:8080" in output
+
+
+def test_dynamic_plugins_keep_dev_parameters_and_callable_flexibility():
+    """直接 use 的动态脚本保留旧参数，并可与 callable 和当前 Context 混用。"""
+
+    class DynamicSpider(Spider):
+        """记录默认和显式动态插件产生的动作。"""
+
+        def __init__(self):
+            """装配单次成功响应和动作记录。"""
+            super().__init__(
+                downloader=type(
+                    "Downloader",
+                    (),
+                    {
+                        "fetch": lambda _, request: Response(
+                            b"{}", status_code=200, request=request
+                        )
+                    },
+                )(),
+                options={
+                    "$scripts": {
+                        "response.status_code == 200": (
+                            "context.target.observed.append('options')"
+                        )
+                    }
+                },
+            )
+            self.observed = []
+
+        def make_seeds(self, context, **kwargs):
+            """提供一条动态插件测试种子。
+
+            Args:
+                context: 初始化 Context。
+                kwargs: 初始化记录。
+
+            Returns:
+                单条种子。
+            """
+            return {"url": "https://example.com", "page": 1}
+
+        def make_request(self, context):
+            """构造含旧式 UA 预设的请求。
+
+            Args:
+                context: 消费 Context。
+
+            Returns:
+                当前请求。
+            """
+            return Request(context.seeds["url"], headers={"User-Agent": "@chrome"})
+
+        def parse(self, context):
+            """确认默认 UA 插件已经展开预设。
+
+            Args:
+                context: 当前响应 Context。
+
+            Returns:
+                空记录集合。
+            """
+            assert not context.request.headers["User-Agent"].startswith("@")
+            return []
+
+        def install(self):
+            """通过 use 组合旧式字符串参数和 callable。"""
+            super().install()
+            self.use(
+                hooks.AFTER_REQUEST,
+                {
+                    "func": on_request.After.conditional_scripts,
+                    "kwargs": {
+                        "rules": {
+                            lambda: True: lambda: self.observed.append("callable")
+                        }
+                    },
+                    "index": 1,
+                },
+                {
+                    "func": scripts.is_success,
+                    "kwargs": {
+                        "match": ["response.status_code == 200"],
+                        "pre": "context.target.observed.append('pre')",
+                        "post": "context.target.observed.append('post')",
+                    },
+                    "index": 2,
+                },
+            )
+            self.use(
+                hooks.AFTER_PIPELINE,
+                {
+                    "func": scripts.inject,
+                    "kwargs": {
+                        "flows": [
+                            (
+                                scripts.Type.condition,
+                                {
+                                    "context.seeds['page'] == 1": (
+                                        "context.target.observed.append('inject')"
+                                    )
+                                },
+                            )
+                        ]
+                    },
+                },
+            )
+
+    spider = DynamicSpider()
+    assert spider.run().counts["acked"] == 1
+    assert spider.observed == ["options", "callable", "pre", "post", "inject"]
+
+
+@pytest.mark.parametrize("call_later", [False, True])
+def test_air_plugins_page_store_then_ack(tmp_path, call_later):
+    """本地翻页共用交付，持久翻页逐页建 Work，存储均在 ACK 前提交。
 
     Args:
         tmp_path: 独占数据库目录。
+        call_later: 是否通过持久队列投递下一页。
     """
     path = tmp_path / "air.sqlite3"
     checked = []
@@ -403,13 +621,17 @@ def test_air_plugins_page_store_then_ack(tmp_path):
                 hooks.AFTER_PIPELINE,
                 {
                     "func": storage.to_sqlite,
-                    "kwargs": {"path": path, "table": "items", "row_keys": ["id"]},
+                    "kwargs": {"path": "items", "conn": path, "row_keys": ["id"]},
                     "index": 0,
                 },
                 {"func": self.check_commit, "index": 1},
                 {
                     "func": scripts.turn_page,
-                    "kwargs": {"match": lambda ctx: ctx.seeds["page"] < 3},
+                    "kwargs": {
+                        "match": ["context.seeds['page'] < 3"],
+                        "action": "+1",
+                        "call_later": call_later,
+                    },
                     "index": 2,
                 },
             )
@@ -473,7 +695,7 @@ def test_storage_hook_failure_after_pipeline_does_not_ack(tmp_path, server):
     spider = FailureSpider()
     spider.use(
         hooks.AFTER_PIPELINE,
-        {"func": storage.to_sqlite, "kwargs": {"path": tmp_path, "table": "items"}},
+        {"func": storage.to_sqlite, "kwargs": {"path": "items", "conn": tmp_path}},
     )
     with pytest.raises(ExecutionError):
         spider.run()

@@ -1,8 +1,80 @@
 """requests 与 requests-go 共用的响应和 PreparedRequest 转换。"""
 
+from http.cookiejar import DefaultCookiePolicy
+from urllib.parse import urlsplit
+
 import requests
 
 from ..models import Request, Response
+
+
+def _request_cookies(source: Request) -> requests.cookies.RequestsCookieJar:
+    """按初始请求主机及协议约束显式 Cookie。
+
+    Args:
+        source: 已复制的领域请求。
+
+    Returns:
+        仅匹配初始主机、且 HTTPS Cookie 不发送到明文 HTTP 的 CookieJar。
+
+    Raises:
+        ValueError: 初始请求 URL 没有可绑定的主机。
+
+    """
+    parsed = urlsplit(source.real_url)
+    hostname = parsed.hostname
+    if hostname is None:
+        raise ValueError("request URL must include a host when sending cookies")
+    if ":" in hostname:
+        cookie_host = f"[{hostname}].local"
+    else:
+        cookie_host = hostname if "." in hostname else f"{hostname}.local"
+    cookies = requests.cookies.RequestsCookieJar()
+    for name, value in source.cookies.items():
+        cookie = requests.cookies.create_cookie(
+            name=name,
+            value=value,
+            domain=cookie_host,
+            path="/",
+            secure=parsed.scheme.lower() == "https",
+        )
+        cookie.domain_specified = False
+        cookies.set_cookie(cookie)
+    return cookies
+
+
+class _StrictHostCookieSession(requests.Session):
+    """在每次请求的合并 CookieJar 上启用严格主机匹配。"""
+
+    def prepare_request(self, request: requests.Request) -> requests.PreparedRequest:
+        """准备请求并阻止无 Domain Cookie 匹配子域。
+
+        Args:
+            request: requests 的原始请求。
+
+        Returns:
+            应用严格 host-only Cookie 策略的已准备请求。
+        """
+
+        # prepare_request 会把请求 Jar 合并进默认宽松策略的 Jar，需在合并后收紧。
+        prepared = super().prepare_request(request)
+        # requests 的重定向复制保留此 Jar，但 types-requests 未声明该内部字段。
+        cookie_jar: requests.cookies.RequestsCookieJar = prepared._cookies  # type: ignore[attr-defined]
+        cookie_jar.set_policy(
+            DefaultCookiePolicy(
+                strict_ns_domain=DefaultCookiePolicy.DomainStrictNonDomain
+            )
+        )
+        explicit_cookie_header = any(
+            name.lower() == "cookie"
+            for headers in (request.headers, self.headers)
+            if headers
+            for name in headers
+        )
+        if not explicit_cookie_header:
+            prepared.headers.pop("Cookie", None)
+            prepared.prepare_cookies(cookie_jar)
+        return prepared
 
 
 def _sent_request(source: Request, sent: requests.PreparedRequest) -> Request:

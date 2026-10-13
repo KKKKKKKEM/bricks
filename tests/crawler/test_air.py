@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 import pytest
-from interlace import ExecutionLimits, Slot, SlotPool
+from interlace import ExecutionLimits, Graph, Node, Ports, Slot, SlotPool
 from interlace.engine.errors import (
     ExecutionCancelledError,
     ExecutionError,
@@ -27,7 +27,7 @@ from bricks import hooks, signals
 from bricks.downloaders.curl_cffi import AsyncCurlCffiDownloader, CurlCffiDownloader
 from bricks.queues import MemoryTaskQueue
 from bricks.spider import Context, Spider
-from bricks.plugins import on_request
+from bricks.plugins import on_request, scripts
 
 
 class FakeDownloader:
@@ -209,6 +209,53 @@ def test_two_graphs_stream_seeds_before_source_finishes():
     spider.close()
     with pytest.raises(RuntimeError):
         spider.open()
+
+
+def test_local_child_claim_hook_waits_for_parent_slot_graph():
+    """同槽本地子任务领取 Hook 不得与父 Graph 并发访问 Slot。"""
+    child_hook_entered = threading.Event()
+    hook_busy_values = []
+
+    class ParentChildSpider(SimpleSpider):
+        """提交本地子任务并用有界探针检查领取 Hook 顺序。"""
+
+        def parse(self, context):
+            """父任务持有 Slot 时短暂观察子领取 Hook。
+
+            Args:
+                context: 当前页面解析上下文。
+
+            Returns:
+                当前页面记录。
+            """
+            if context.seeds["page"] == "parent":
+                context.slot["busy"] = True
+                context.submit({"url": "https://example.com/child", "page": "child"})
+                observed_during_graph = child_hook_entered.wait(0.1)
+                context.slot["busy"] = False
+                assert not observed_during_graph
+            return super().parse(context)
+
+        @hooks.on(hooks.AFTER_GET_SEEDS)
+        def after_get_seeds(self, context):
+            """记录子任务领取 Hook 看到的 Slot 状态。
+
+            Args:
+                context: 已领取任务的 Hook 上下文。
+            """
+            if context.seeds["page"] == "child":
+                hook_busy_values.append(context.slot.get("busy", False))
+                child_hook_entered.set()
+
+    spider = ParentChildSpider(concurrency=2)
+    spider.submit({"url": "https://example.com/parent", "page": "parent"})
+    try:
+        report = spider.run(kwargs={"timeout": 5})
+        assert report.counts["acked"] == 2
+        assert child_hook_entered.is_set()
+        assert hook_busy_values == [False]
+    finally:
+        spider.close()
 
 
 def test_http_response_dynamic_seeds_and_default_option_boundary(server):
@@ -710,6 +757,68 @@ def test_reusable_response_plugins_registered_with_use():
     assert len(messages) == 2 and all("status=403" in message for message in messages)
 
 
+def test_use_plugins_can_read_isolated_current_context_without_parameter():
+    """use 支持零 Context 参数插件，异步等待前后绑定不串任务或泄漏。"""
+    seen = []
+
+    def record(marker):
+        """通过当前 Context 记录带自有参数的同步插件调用。
+
+        Args:
+            marker: 插件注册时提供的业务标记。
+        """
+        context = Context.get_context()
+        seen.append((marker, context.seeds["url"], id(context)))
+
+    async def record_async():
+        """验证异步插件在挂起后仍取得自身 Context。"""
+        context = Context.get_context()
+        await asyncio.sleep(0)
+        assert Context.get_context() is context
+        seen.append(("async", context.seeds["url"], id(context)))
+
+    def select_second():
+        """通过当前 Context 选择第二个种子。"""
+        return Context.get_context().seeds["url"].endswith("/second")
+
+    class ImplicitContext(SimpleSpider):
+        """直接通过 use 装配隐式 Context 插件。"""
+
+        def install(self):
+            """注册同步和异步的零 Context 参数插件。"""
+            self.use(
+                hooks.AFTER_REQUEST,
+                hooks.Task(record, args=("sync",), index=0),
+                hooks.Task(record_async, index=1),
+                hooks.Task(record, args=("matched",), match=select_second, index=2),
+            )
+
+    with pytest.raises(RuntimeError, match="no domain Context is active"):
+        Context.get_context()
+    spider = ImplicitContext(
+        [
+            {"url": "https://example.com/first"},
+            {"url": "https://example.com/second"},
+        ],
+        concurrency=2,
+    )
+    assert spider.run(kwargs={"timeout": 5}).counts["acked"] == 2
+    assert {(marker, url) for marker, url, _ in seen} == {
+        ("sync", "https://example.com/first"),
+        ("async", "https://example.com/first"),
+        ("sync", "https://example.com/second"),
+        ("async", "https://example.com/second"),
+        ("matched", "https://example.com/second"),
+    }
+    grouped = {}
+    for marker, url, identity in seen:
+        grouped.setdefault(url, {})[marker] = identity
+    assert all(values["sync"] == values["async"] for values in grouped.values())
+    assert len({values["sync"] for values in grouped.values()}) == 2
+    with pytest.raises(RuntimeError, match="no domain Context is active"):
+        Context.get_context()
+
+
 def test_success_and_failure_signals_skip_download():
     """显式提前成功沿完成端口路由；显式失败不被普通 ACK 吞掉。"""
     downloader = FakeDownloader()
@@ -1150,16 +1259,21 @@ def test_native_async_download_and_business_methods_complete(server):
 
 
 def test_borrowed_slot_session_is_reused_and_remains_caller_owned(server):
-    """显式 Slot 会话装配可复用 Cookie，Spider 关闭后不会关闭借用资源。
+    """本地翻页在多个可用 Slot 中固定会话，关闭后不关闭借用资源。
 
     Args:
         server: 本地 HTTP 服务。
     """
     base, _, _ = server
     factory = CurlCffiDownloader(trust_env=False)
-    session = factory.prepare_session()
-    pool = SlotPool(slots=[Slot({"crawler.downloaders": {"default": session}})])
+    sessions = [factory.prepare_session(), factory.prepare_session()]
+    pool = SlotPool(
+        slots=[
+            Slot({"crawler.downloaders": {"default": session}}) for session in sessions
+        ]
+    )
     stored = []
+    slot_ids = []
 
     class SessionSpider(Spider):
         """为同一业务身份装配一个显式会话槽。"""
@@ -1185,7 +1299,7 @@ def test_borrowed_slot_session_is_reused_and_remains_caller_owned(server):
             Returns:
                 一项种子。
             """
-            return {"url": base + "/login/account"}
+            return {"url": base + "/login/account", "page": 1}
 
         def parse(self, context):
             """登录后提交同队列的后续请求。
@@ -1196,9 +1310,18 @@ def test_borrowed_slot_session_is_reused_and_remains_caller_owned(server):
             Returns:
                 回显记录。
             """
-            if context.seeds["url"].endswith("/login/account"):
-                context.submit({"url": base + "/echo"})
             return [context.response.json()]
+
+        def make_request(self, context):
+            """忽略分页业务字段并构造当前 URL 请求。
+
+            Args:
+                context: 当前页的消费 Context。
+
+            Returns:
+                当前 URL 请求。
+            """
+            return Request(context.seeds["url"])
 
         def item_pipeline(self, context):
             """保存回显记录。
@@ -1207,18 +1330,241 @@ def test_borrowed_slot_session_is_reused_and_remains_caller_owned(server):
                 context: 当前结果。
             """
             stored.extend(context.items)
+            slot_ids.append(id(context.slot))
+
+        def install(self):
+            """登录页处理后在当前 Slot 中继续回显页。"""
+            super().install()
+            self.use(
+                hooks.AFTER_PIPELINE,
+                {
+                    "func": scripts.turn_page,
+                    "kwargs": {
+                        "match": ["context.seeds['page'] == 1"],
+                        "action": lambda: {"url": base + "/echo", "page": 2},
+                        "call_later": False,
+                    },
+                },
+            )
 
     try:
         spider = SessionSpider(downloader=factory, slots=pool)
         assert spider.run(kwargs={"timeout": 5}).counts["acked"] == 2
         assert stored[-1]["cookie"] == "account=account"
+        assert len(slot_ids) == 2 and len(set(slot_ids)) == 1
         assert (
-            session.fetch(Request(base + "/echo")).json()["cookie"] == "account=account"
+            sum(
+                session.fetch(Request(base + "/echo")).json()["cookie"]
+                == "account=account"
+                for session in sessions
+            )
+            == 1
         )
-        assert pool.available == 1
+        assert pool.available == 2
     finally:
         pool.close()
-        factory.close_session(session)
+        for session in sessions:
+            factory.close_session(session)
+
+
+def test_framework_manages_slot_sessions_and_context_resources():
+    """作者只配置并发，框架按 Slot 创建会话并让持久本地子任务复用资源。"""
+
+    class Session:
+        """保存一个 Slot 独占的模拟 Cookie。"""
+
+        def __init__(self, identity):
+            """初始化空会话。
+
+            Args:
+                identity: 当前会话编号。
+            """
+            self.identity = identity
+            self.cookie = ""
+
+        def fetch(self, request):
+            """登录页写 Cookie，后续页返回当前状态。
+
+            Args:
+                request: 当前页请求。
+
+            Returns:
+                携带会话观察值的响应。
+            """
+            before = self.cookie
+            if request.url.endswith("/login"):
+                self.cookie = "account=A"
+            return Response(
+                json.dumps(
+                    {"session": self.identity, "cookie_before": before}
+                ).encode(),
+                status_code=200,
+                request=request,
+            )
+
+    class Factory:
+        """记录框架创建、临时调用和关闭的会话。"""
+
+        def __init__(self):
+            """初始化资源观察集合。"""
+            self.sessions = []
+            self.closed = []
+            self.temporary_calls = 0
+
+        def prepare_session(self, *, proxy=None):
+            """为一个 Slot 创建独立会话。
+
+            Args:
+                proxy: 框架确定的固定会话代理。
+
+            Returns:
+                新会话。
+            """
+            assert proxy is None
+            session = Session(len(self.sessions))
+            self.sessions.append(session)
+            return session
+
+        def close_session(self, session):
+            """记录框架释放的会话。
+
+            Args:
+                session: 已停止使用的会话。
+            """
+            self.closed.append(session)
+
+        def fetch(self, request):
+            """拒绝在复用模式下走临时下载路径。
+
+            Args:
+                request: 当前请求。
+
+            Raises:
+                AssertionError: 框架未使用 Slot Session。
+            """
+            self.temporary_calls += 1
+            raise AssertionError("temporary downloader must not be used")
+
+    observed = []
+
+    class Managed(Spider):
+        """不接触 SlotPool 或 DownloadNode 的普通业务爬虫。"""
+
+        def make_seeds(self, context, **kwargs):
+            """提供登录页。
+
+            Args:
+                context: 初始化 Context。
+                kwargs: 初始化记录。
+
+            Returns:
+                登录种子。
+            """
+            return {"url": "https://example.com/login", "page": 1}
+
+        def make_request(self, context):
+            """构造当前页请求。
+
+            Args:
+                context: 消费 Context。
+
+            Returns:
+                当前 URL 请求。
+            """
+            return Request(context.seeds["url"])
+
+        def parse(self, context):
+            """登录后持久化并本地提交第二页。
+
+            Args:
+                context: 当前响应 Context。
+
+            Returns:
+                会话观察记录。
+            """
+            if context.seeds["page"] == 1:
+                context.submit({"url": "https://example.com/page/2", "page": 2})
+            return [context.response.json()]
+
+        def item_pipeline(self, context):
+            """跨页写入和读取 Slot 业务资源。
+
+            Args:
+                context: 当前页 Context。
+            """
+            if context.seeds["page"] == 1:
+                assert context.install("account", "A", nx=True) == "A"
+            observed.append(
+                (
+                    context.seeds["page"],
+                    context.items[0],
+                    context.obtain("account"),
+                    id(context.slot),
+                )
+            )
+
+    factory = Factory()
+    spider = Managed(downloader=factory, concurrency=2)
+    assert spider.run(kwargs={"timeout": 5}).counts["acked"] == 2
+    assert len(factory.sessions) == 2
+    assert factory.closed == list(reversed(factory.sessions))
+    assert factory.temporary_calls == 0
+    assert observed[1][1]["cookie_before"] == "account=A"
+    assert observed[1][2] == "A"
+    assert observed[0][3] == observed[1][3]
+
+
+def test_context_emit_selects_slot_reuse_for_arbitrary_target_graph():
+    """跨图派生可显式选择是否延续 Slot，两种目标 Work 都持久化。"""
+    observed = []
+
+    class Collect(Node):
+        """记录目标 Graph 的 Slot 身份。"""
+
+        input_ports = Ports(payload=dict)  # 领域事件携带的 JSON 数据。
+        output_ports = Ports()  # 只记录观察值。
+
+        def execute(self, inputs, context):
+            """保存事件类别和 Slot。
+
+            Args:
+                inputs: 含事件 payload 的输入。
+                context: 目标 Graph 的核心 Context。
+            """
+            observed.append((inputs["payload"]["kind"], id(context.slot)))
+
+    class Source(SimpleSpider):
+        """从消费 Graph 派生两个不同 Slot 策略的目标 Work。"""
+
+        def parse(self, context):
+            """发布本地优先和普通分发事件。
+
+            Args:
+                context: 源消费 Context。
+
+            Returns:
+                当前页面记录。
+            """
+            observed.append(("source", id(context.slot)))
+            context.emit("child.local", {"kind": "local"}, affinity="current")
+            context.emit("child.any", {"kind": "any"}, affinity="any")
+            return super().parse(context)
+
+    spider = Source(
+        [{"url": "https://example.com/source"}],
+        concurrency=3,
+        queue_name="context-emit-slot",
+    )
+    spider.open()
+    spider.runtime.register(
+        "child@v1", Graph(entrypoint="collect").add(collect=Collect())
+    )
+    spider.runtime.route("child.local", graph="child@v1", queue=spider.queue_name)
+    spider.runtime.route("child.any", graph="child@v1", queue=spider.queue_name)
+    assert spider.run(kwargs={"timeout": 5}).counts["acked"] == 3
+    identities = dict(observed)
+    assert identities["local"] == identities["source"]
+    assert set(identities) == {"source", "local", "any"}
 
 
 def test_survey_consumes_dynamic_seeds_and_keeps_hooks_retries_and_side_effects(
@@ -1272,7 +1618,7 @@ def test_survey_consumes_dynamic_seeds_and_keeps_hooks_retries_and_side_effects(
             Args:
                 context: 当前 Items 上下文。
             """
-            assert context.task_queue.counts()["leased"] == 1
+            assert context.task_queue.counts()["leased"] == 3 - context.seeds["page"]
             context.items[0]["after"] = True
             with records.open("a") as stream:
                 stream.write(f"after:{context.seeds['page']}\n")

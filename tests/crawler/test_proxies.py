@@ -6,7 +6,6 @@ import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -386,12 +385,49 @@ def test_air_retries_pin_proxy_and_close_recovers_owned_slots(rotate):
 def test_explicit_request_proxy_wins_and_default_imports_are_lazy():
     """显式请求代理不触发供应商，默认导入不加载 Mongo、Redis 或 YAML。"""
     source = Supply()
-    context = SimpleNamespace(
-        target=SimpleNamespace(proxy=Manager(source)),
-        slot=Slot(),
-        request=Request("https://example.com", proxy="http://localhost:9999"),
-    )
-    Before.set_proxy(context)
+
+    class Download:
+        """返回固定成功响应。"""
+
+        def fetch(self, request):
+            """返回当前请求的空响应。
+
+            Args:
+                request: 已保留显式代理的请求。
+
+            Returns:
+                固定成功响应。
+            """
+            return Response(b"{}", status_code=200, request=request)
+
+    class ExplicitProxySpider(Spider):
+        """通过默认 set_proxy 插件验证请求级代理优先。"""
+
+        def make_seeds(self, context, **kwargs):
+            """提供一条测试种子。
+
+            Args:
+                context: 初始化 Context。
+                kwargs: 初始化记录。
+
+            Returns:
+                单条种子。
+            """
+            return {"url": "https://example.com"}
+
+        def make_request(self, context):
+            """构造带显式代理的请求。
+
+            Args:
+                context: 消费 Context。
+
+            Returns:
+                当前请求。
+            """
+            return Request(context.seeds["url"], proxy="http://localhost:9999")
+
+    spider = ExplicitProxySpider(proxy=source, downloader=Download())
+    assert spider.run().counts["acked"] == 1
     assert source.issued == []
     result = subprocess.run(
         [

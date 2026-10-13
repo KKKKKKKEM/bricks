@@ -35,10 +35,11 @@ from bricks import (
     DownloadNode,
     Items,
     Request,
+    signals,
 )
 from bricks import hooks as hook_api
-from bricks import signals
 from bricks.downloaders.curl_cffi import CurlCffiDownloader
+from bricks.downloaders import SessionDownloader
 from bricks.hooks import Task, _Binding
 from bricks.plugins import on_request
 from bricks.proxies import Manager, ProxyProvider, format_proxy
@@ -47,8 +48,8 @@ from bricks.queues import (
     InitRecord,
     MemoryTaskQueue,
     QueueBackend,
-    TaskQueue,
     TaskLease,
+    TaskQueue,
     make_work,
 )
 from bricks.queues.models import seconds, text
@@ -59,11 +60,10 @@ from ._hooks import run_hooks
 from ._nodes import CrawlNode, HookNode, InitNode
 from .context import (
     Context,
-    InitContext,
     HookContext,
+    InitContext,
     _Initialization,
 )
-
 
 __all__ = ["Context", "InitContext", "HookContext", "RunReport", "Spider"]
 
@@ -106,6 +106,8 @@ class Spider:
         _start_allowed: BEFORE_START 是否允许启动初始化和消费。
         _runtime: 自有 Runtime，尚未打开时为 None。
         _backend: 自有队列消费适配器，存储由调用方管理。
+        _auto_session: 是否由框架为每个自建 Slot 装配同步下载会话。
+        _owned_sessions: 框架创建并在执行停止后关闭的会话及其工厂。
         _init_execution: 当前初始化执行，便于 close 协作式取消。
         _operation: 串行化公开运行入口，不限制各种子执行并发。
         _lifecycle: 保护启动、关闭及运行资源引用。
@@ -197,6 +199,13 @@ class Spider:
         self.forever = forever
         self._slots = slots
         self._own_slots = slots is None
+        self._auto_session = (
+            slots is None
+            and not inspect.iscoroutinefunction(self.downloader.fetch)
+            and isinstance(self.downloader, SessionDownloader)
+            and getattr(self.downloader, "slot_session_reuse", True) is True
+        )
+        self._owned_sessions: list[tuple[SessionDownloader[Any], Downloader]] = []
         self._owned_proxy_slots: list[Slot] = []
         self._options = dict(validated.options)
         self._limits = validated.limits
@@ -237,6 +246,15 @@ class Spider:
             名称前缀加 .crawl。
         """
         return f"{self.queue_name}.crawl"
+
+    @property
+    def local_submission_event_name(self) -> str:
+        """返回当前实例用于持久化 Slot 亲和子任务的事件类型。
+
+        Returns:
+            与队列名称绑定的本地提交事件类型。
+        """
+        return f"bricks.air.continue:{self.queue_name}"
 
     @property
     def runtime(self) -> Runtime:
@@ -309,6 +327,37 @@ class Spider:
         """
         return None
 
+    def _make_work(
+        self,
+        seed: dict[str, Any],
+        *,
+        id: str | None = None,
+        options: Mapping[str, Any] | None = None,
+    ) -> Work:
+        """校验种子并构造包含默认配置的稳定 Work。
+
+        Args:
+            seed: JSON 种子对象。
+            id: 可选业务 ID。
+            options: 覆盖默认配置的选项。
+        Returns:
+            尚未提交的独立 Work。
+
+        Raises:
+            TypeError: 种子或配置类型非法。
+        """
+        if type(seed) is not dict:
+            raise TypeError("seed must be a JSON object")
+        if options is not None and not isinstance(options, Mapping):
+            raise TypeError("options must be a mapping")
+        return make_work(
+            self.crawl_graph_name,
+            seed,
+            id=id,
+            limits=self._limits,
+            options={**self._options, **({} if options is None else options)},
+        )
+
     def _submit(
         self,
         seed: dict[str, Any],
@@ -317,7 +366,7 @@ class Spider:
         options: Mapping[str, Any] | None = None,
         init: InitLease | None = None,
     ) -> Work:
-        """通过同一入口校验、复制、生成身份并提交独立种子。
+        """构造并持久化独立种子。
 
         Args:
             seed: JSON 种子对象。
@@ -327,21 +376,8 @@ class Spider:
 
         Returns:
             已接受或去重命中的 Work。
-
-        Raises:
-            TypeError: 种子或配置类型非法。
         """
-        if type(seed) is not dict:
-            raise TypeError("seed must be a JSON object")
-        if options is not None and not isinstance(options, Mapping):
-            raise TypeError("options must be a mapping")
-        work = make_work(
-            self.crawl_graph_name,
-            seed,
-            id=id,
-            limits=self._limits,
-            options={**self._options, **({} if options is None else options)},
-        )
+        work = self._make_work(seed, id=id, options=options)
         self.task_queue.put(work, init=init)
         return work
 
@@ -628,16 +664,36 @@ class Spider:
                 self._survey_results.append(context)
 
     def build_download_node(self) -> DownloadNode | AsyncDownloadNode:
-        """根据下载器协议装配领域节点，子类可显式改为 Slot 解析函数。
+        """按下载器能力自动选择临时或 Slot Session 节点。
 
         Returns:
-            借用当前 downloader 的下载节点。
+            同步 SessionDownloader 使用 Slot resolver，其他实现使用固定映射。
         """
         if inspect.iscoroutinefunction(self.downloader.fetch):
             return AsyncDownloadNode(
                 {"default": cast(AsyncDownloader, self.downloader)}
             )
+        if self._auto_session:
+            return DownloadNode(
+                lambda slot: slot["crawler.downloaders"],
+                isolated_downloaders={"default": cast(Downloader, self.downloader)},
+            )
         return DownloadNode({"default": cast(Downloader, self.downloader)})
+
+    def _close_owned_sessions(self) -> list[BaseException]:
+        """逆序关闭框架按 Slot 创建的同步下载会话。
+
+        Returns:
+            未吞掉的资源关闭错误列表。
+        """
+        failures = []
+        while self._owned_sessions:
+            factory, session = self._owned_sessions.pop()
+            try:
+                factory.close_session(session)
+            except BaseException as exc:
+                failures.append(exc)
+        return failures
 
     def _make_seeds(self, context: domain.InitContext) -> Any:
         """把恢复记录按 make_seeds(context, **kwargs) 契约传给业务方法。
@@ -687,10 +743,15 @@ class Spider:
 
     def install(self) -> None:
         """注册可复用的代理、响应展示和成功检查插件，子类可扩展或替换。"""
-        self.use(hook_api.BEFORE_REQUEST, {"func": on_request.Before.set_proxy})
+        self.use(
+            hook_api.BEFORE_REQUEST,
+            {"func": on_request.Before.fake_ua, "index": -100},
+            {"func": on_request.Before.set_proxy},
+        )
         self.use(
             hook_api.AFTER_REQUEST,
             {"func": on_request.After.show_response, "index": -100},
+            {"func": on_request.After.conditional_scripts},
             {"func": on_request.After.bypass, "index": 1000},
         )
 
@@ -889,20 +950,45 @@ class Spider:
             initial, crawl = self.build_graphs()
 
             def make_slot() -> Slot:
-                """记录自建槽，确保代理占用在停止执行后归还。
+                """创建自建槽并按需自动装配同步下载会话。
 
                 Returns:
-                    不含隐式 HTTP 会话的新 Slot。
+                    包含框架托管会话和业务资源命名空间的新 Slot。
                 """
                 slot = Slot()
                 self._owned_proxy_slots.append(slot)
+                if self._auto_session:
+                    factory = cast(SessionDownloader[Any], self.downloader)
+                    proxy = (
+                        self.proxy.get(slot).proxy
+                        if isinstance(self.proxy, Manager)
+                        else self.proxy
+                    )
+                    try:
+                        session = factory.prepare_session(proxy=proxy)
+                    except BaseException:
+                        if isinstance(self.proxy, Manager):
+                            self.proxy.recover(slot)
+                        self._owned_proxy_slots.remove(slot)
+                        raise
+                    slot["crawler.downloaders"] = {"default": session}
+                    slot["crawler.session.proxy"] = proxy
+                    self._owned_sessions.append((factory, session))
                 return slot
 
-            slots = (
-                SlotPool(self.concurrency, factory=make_slot)
-                if self._slots is None
-                else self._slots
-            )
+            try:
+                slots = (
+                    SlotPool(self.concurrency, factory=make_slot)
+                    if self._slots is None
+                    else self._slots
+                )
+            except BaseException:
+                self._close_owned_sessions()
+                if isinstance(self.proxy, Manager):
+                    for slot in self._owned_proxy_slots:
+                        self.proxy.recover(slot)
+                self._owned_proxy_slots.clear()
+                raise
             backend = QueueBackend(
                 {self.task_queue.name: self.task_queue},
                 lease_seconds=self._ttl,
@@ -920,12 +1006,22 @@ class Spider:
                 runtime = Runtime(router=router, worker=worker)
                 runtime.register(self.init_graph_name, initial)
                 runtime.register(self.crawl_graph_name, crawl)
+                runtime.route(
+                    self.local_submission_event_name,
+                    graph=self.crawl_graph_name,
+                    queue=self.task_queue.name,
+                )
             except BaseException:
                 if runtime is not None:
                     runtime.close()
                 backend.close()
                 if self._own_slots:
                     slots.close()
+                self._close_owned_sessions()
+                if isinstance(self.proxy, Manager):
+                    for slot in self._owned_proxy_slots:
+                        self.proxy.recover(slot)
+                self._owned_proxy_slots.clear()
                 raise
             self._slots = slots
             self._backend = backend
@@ -1271,7 +1367,8 @@ class Spider:
     def close(self) -> None:
         """停止领取，协作式取消初始化，等待已接受工作并关闭自有资源。
 
-        注入的下载节点、SlotPool、会话和 Redis 客户端由调用方在本方法返回后关闭。
+        框架自动创建的同步 Session 在本方法内关闭；注入的 SlotPool、显式会话和
+        Redis 客户端由调用方在本方法返回后关闭。downloader 工厂本身不被关闭。
 
         Raises:
             RuntimeError: 从自身业务回调重入关闭。
@@ -1327,6 +1424,7 @@ class Spider:
                     )
                 except BaseException as exc:
                     failures.append(exc)
+            failures.extend(self._close_owned_sessions())
             if isinstance(self.proxy, Manager):
                 for slot in self._owned_proxy_slots:
                     try:

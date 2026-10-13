@@ -73,9 +73,9 @@ session = factory.prepare_session(proxy=proxy.proxy)
 slot["crawler.downloaders"] = {"default": session}
 ```
 
-此时使用 [Slot 会话下载节点](03-crawler-download.md)，不要同时给 `Request.proxy` 赋值，
-也不要再让 Air 的请求代理插件覆盖它。完整装配顺序是取得代理、创建会话、运行、关闭会话、归还代理。
-默认临时下载器不跨请求保留 Cookie；相同 Slot 本身不代表已经创建持久会话。
+Air 使用自建 Slot 和同步 SessionDownloader 时会自动完成取得代理、创建会话、运行、关闭会话、归还代理，
+请求代理插件不会再给固定会话设置 Request.proxy。直接使用 [Slot 会话下载节点](03-crawler-download.md)、
+异步 Session 或注入自定义 SlotPool 时，调用方仍按上述顺序显式管理。
 更换代理应在原会话不再使用后明确重建，Cookie 是否迁移由业务决定。
 
 ## Clash 控制与订阅

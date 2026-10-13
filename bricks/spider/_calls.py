@@ -7,6 +7,8 @@ from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from typing import Any, TypeVar
 
+from .context import _CurrentContext, _activate_context, _reset_context
+
 _T = TypeVar("_T")  # 保留调用后的转换结果类型。
 _CALLER: ContextVar[object | None] = ContextVar(
     "bricks.spider.caller", default=None
@@ -29,7 +31,7 @@ def external(owner: object) -> None:
 def invoke(
     owner: object,
     callback: Callable[..., Any],
-    context: Any,
+    context: _CurrentContext,
     finish: Callable[[Any], _T],
     *,
     allow_await: bool = True,
@@ -49,11 +51,13 @@ def invoke(
     Raises:
         BaseException: 回调、取消或返回值转换失败。
     """
-    token = _CALLER.set(owner)
+    caller_token = _CALLER.set(owner)
+    context_token = _activate_context(context)
     try:
         value = callback(context)
     finally:
-        _CALLER.reset(token)
+        _reset_context(context_token)
+        _CALLER.reset(caller_token)
     if not inspect.isawaitable(value):
         return finish(value)
     if not allow_await:
@@ -67,10 +71,12 @@ def invoke(
         Returns:
             经过同步转换的结果。
         """
-        token = _CALLER.set(owner)
+        caller_token = _CALLER.set(owner)
+        context_token = _activate_context(context)
         try:
             return finish(await value)
         finally:
-            _CALLER.reset(token)
+            _reset_context(context_token)
+            _CALLER.reset(caller_token)
 
     return awaited()

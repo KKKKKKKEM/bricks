@@ -735,6 +735,8 @@ class AsyncBrowserSessionDownloader:
 class SyncBrowserDownloader(BrowserOptions, ABC):
     """同步浏览器装配模板，共用 Context、代理和临时会话生命周期。"""
 
+    slot_session_reuse = False  # 浏览器同步会话绑定创建线程，不由 Air 自动跨线程复用。
+
     browser: synchronous.Browser | None = (
         None  # 可选外部浏览器，不由下载器关闭；多个 Slot 可共用。
     )

@@ -102,28 +102,56 @@ class MemoryTaskQueue(_Queue):
             ValueError: 内部操作名未知。
         """
         record = self._records.get(args.get("id", ""))
-        if op == "put":
-            if args["init"] is not None and not self._valid(
-                self._init, args["init"], now, initial=True
+        if op in ("put", "put_claim"):
+            if (
+                op == "put"
+                and args["init"] is not None
+                and not self._valid(self._init, args["init"], now, initial=True)
             ):
                 return {"failure": "lease"}
             if record is not None:
-                return (
-                    False if record["body"] == args["body"] else {"failure": "conflict"}
-                )
-            self._records[args["id"]] = {
-                "body": args["body"],
-                "status": "pending",
-                "attempt": 0,
-                "maximum": args["maximum"],
-                "ready": now,
-                "deadline": 0,
-                "token": "",
-                "owner": "",
-                "error": "",
-                "result": None,
-            }
-            return True
+                if record["body"] != args["body"]:
+                    return {"failure": "conflict"}
+                if op == "put":
+                    return False
+                if record["status"] == "leased" and record["deadline"] <= now:
+                    record.update(
+                        status=(
+                            "dead"
+                            if record["attempt"] >= record["maximum"]
+                            else "pending"
+                        ),
+                        ready=now,
+                        token="",
+                        owner="",
+                        deadline=0,
+                        error="delivery lease expired",
+                    )
+                if record["status"] != "pending" or record["ready"] > now:
+                    return None
+            else:
+                record = self._records[args["id"]] = {
+                    "body": args["body"],
+                    "status": "pending",
+                    "attempt": 0,
+                    "maximum": args["maximum"],
+                    "ready": now,
+                    "deadline": 0,
+                    "token": "",
+                    "owner": "",
+                    "error": "",
+                    "result": None,
+                }
+                if op == "put":
+                    return True
+            record.update(
+                status="leased",
+                attempt=record["attempt"] + 1,
+                owner=args["owner"],
+                token=args["token"],
+                deadline=now + args["ttl"],
+            )
+            return record
         if op == "claim":
             expired = [
                 item

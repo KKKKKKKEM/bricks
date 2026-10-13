@@ -7,21 +7,21 @@
 | --- | --- |
 | `air.Spider` 四个业务方法 | 仍为 make_seeds/make_request/parse/item_pipeline；由初始化和消费两张 Graph 执行 |
 | `survey(*seeds, extract=...)` | 新实例调用同名手动消费入口，正常构造器提供业务配置；默认跳过 item_pipeline，保留插件和动态种子消费 |
-| `events.on`、const、隐式 Context | `bricks.hooks.on`、hooks 常量；每个回调首参数显式接收 Context，业务插槽由 HookNode 执行 |
+| `events.on`、const、当前 Context | `bricks.hooks.on`、hooks 常量；回调可显式接收 Context 或在调用期间使用同类 Context.get_context()，业务插槽由 HookNode 执行 |
 | `use(form, {...})` | 保留 func/args/kwargs/index/match 字段；func 与 match 必须是实际函数 |
 | `plugins.make_seeds.by_*` | CSV、SQLite、Mongo、Redis、range 均已迁入；显式传入恢复 record |
-| `by_csv` 的 `<TABLE>` SQL | 临时表明确命名为 data；参数使用 SQL 占位符，不替换脚本文本 |
+| `by_csv` 的 `<TABLE>` SQL | 继续支持并替换为临时 data 表；SQL 值参数使用占位符 |
 | SQLite/Mongo 的 Bricks DB 包装器 | 使用原生 SQLite Connection 或 Mongo Collection；不恢复整个 DB 包装层 |
-| `storage.to_sqlite` | 首参 Context，path 是数据库文件，table 是表名；每批独立连接事务 |
-| `storage.to_mongo/to_redis` | 首参 Context，conn 是显式原生 Collection/客户端；不修改 Items |
-| `storage.to_csv` | 首参 Context，检查表头；并发写入者显式共享 lock |
+| `storage.to_sqlite` | 保留 path 表名、conn 数据库目标、items、row_keys、with_lock 顺序；conn 使用路径或原生 Connection |
+| `storage.to_mongo/to_redis` | 保留 path/conn/items/row_keys 等参数角色，改用原生客户端；省略 items 时读取当前 Context |
+| `storage.to_csv` | 保留 path/items/conn/encoding 顺序；原生 DictWriter 可注入，并发写入者显式共享 lock |
 | Redis string 的 `$key`、拼接身份 | 使用 row_keys 的规范 JSON 摘要生成前缀键，业务记录不增删 `$key` |
 | `Before.set_proxy` | 保留请求显式地址，支持 Air 固定地址或 Slot 管理器 |
-| `Before.fake_ua` 的 `@chrome(...)` | 使用实际 factory 函数，例如调用已有 UA 库；不执行字符串表达式 |
-| `After.show_response/bypass` | 显式 Context；bypass 可接收同步业务条件 |
-| `After.conditional_scripts` | 条件与动作函数序列，按序或首个命中执行 |
-| `scripts.is_success/turn_page/inject` | 已迁入，pre/post/flow/action 均使用明确函数，禁止字符串代码 |
-| `raise signals.Retry/Success/Failure` | 使用 `bricks.signals`，由领域节点转换为图内路由或明确失败；不进入核心解释 |
+| `Before.fake_ua` 的 `@chrome(...)` | 内置常用 UA 预设；复杂策略仍可注入 factory |
+| `After.show_response/bypass` | 可直接 use；bypass 支持 `$ok`、字符串、映射和 callable |
+| `After.conditional_scripts` | 可直接 use，缺省从 execution options 的 `$scripts` 读取可信动态脚本 |
+| `scripts.is_success/turn_page/inject` | 参数顺序贴近 dev；字符串与同步 callable 可混合，Type/Generator 恢复 flow 组合 |
+| `raise signals.Retry/Success/Failure` | 使用 `bricks.signals`，由领域节点转换为图内路由或明确失败 |
 | `BEFORE_PIPELINE` 中的 Skip | 跳过 pipeline，仍执行 AFTER_PIPELINE；其他 before 阶段按明确替代数据规则处理 |
 | 启停、领取和错误插槽 | 以 HookContext 在真实边界同步执行；物理线程启停和 ON_* 状态标记不作为 Air 插槽 |
 | `bricks.lib.proxies.*` | `bricks.proxies`；固定/API/Redis/Clash 供应源和 Manager 已迁入 |
@@ -37,7 +37,9 @@
 `raise signals.Success()` 是明确的提前完成，会立即退出回调并跳过未执行的后续业务步骤。
 Context.success/failure/retry、ResponseAction 和 action/stop 标志已移除，不保留第二套控制方式。
 存储插件异常仍使执行失败，不会因前面某一步正常返回而提前 ACK。
-`context.submit()` 返回新 Work，默认按内容去重，不返回未来的 Context，不继承当前 Slot 或执行选项。
+`context.submit(..., affinity="current")` 返回稳定 Work，原子持久化并优先携带当前 SlotLease；any 只持久化等待领取。
+`turn_page(call_later=False)` 映射 current，True 映射 any。两种模式都逐任务 ACK，
+进程异常后通过持久租约恢复，但恢复任务不保证回到原 Slot。
 `raise signals.Retry()` 只在 after_make_request、before_request、download、after_request 有效，
 回边经过重试前后插槽返回 before_request；同次图执行保留 Slot，重新领取任务不保证原 Slot。
 
@@ -51,7 +53,7 @@ SQLite 原生连接有线程亲和性，源迭代器若交给 Air，应由调用
 
 本轮完成的是 Air、旧领域插件和代理管理工具的迁移；`form/template` 配置式爬虫、
 旧爬虫 RPC/CLI、SQLite/RocksDB 任务队列、旧 DB 包装器和部分传输实现尚不属于当前公开能力。
-不需要为了迁移一个插件恢复旧 Flow、动态脚本执行器或全局状态。
+动态脚本和 Flow 已作为领域插件恢复，但不恢复动态类路径、旧数据库包装器或进程级全局状态。
 
 完整示例见 [Air 爬虫](08-air-spider.md)、[领域插件](09-domain-plugins.md)、[代理管理](10-proxies.md)
 和[Hook 节点与 signals](12-hooks-and-signals.md)。

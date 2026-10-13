@@ -1,41 +1,133 @@
-"""可复用的请求准备、响应展示及成功检查插件。"""
+"""可直接 use 的请求准备、动态脚本、响应展示及成功检查插件。"""
 
 from __future__ import annotations
 
 import inspect
 import logging
-from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Any
+import random
+import threading
+from collections.abc import Callable, Mapping
+from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from bricks import signals
+from bricks import hooks, signals
 from bricks.proxies import Manager
+from bricks.spider.context import Context
 
-from ._utils import condition, sync
-
-if TYPE_CHECKING:
-    from bricks.spider.context import Context
+from . import scripts
+from ._utils import sync
 
 _LOGGER = logging.getLogger(__name__)  # 默认使用标准日志，不创建额外 Handler。
+_USER_AGENTS = {
+    "chrome": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "edge": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"
+    ),
+    "mobile": (
+        "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+    ),
+    "firefox": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) "
+        "Gecko/20100101 Firefox/133.0"
+    ),
+    "safari": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15"
+    ),
+    "opera": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 OPR/116.0.0.0"
+    ),
+    "wechat": (
+        "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Version/4.0 Chrome/131.0.0.0 Mobile "
+        "Safari/537.36 MicroMessenger/8.0"
+    ),
+}  # 内置常用 UA；复杂生成策略通过 factory 注入。
+_USER_AGENTS["pc"] = _USER_AGENTS["chrome"]
+_USER_AGENTS["android"] = _USER_AGENTS["mobile"]
 
 __all__ = ["After", "Before"]
 
 
+def _context() -> Context:
+    """取得当前消费 Context。
+
+    Returns:
+        当前 Hook 正在处理的消费 Context。
+
+    Raises:
+        RuntimeError: 插件不在消费回调中运行。
+    """
+    return Context.get_context()
+
+
+def _script_match(value: Any, context: Context) -> bool:
+    """使用动态脚本引擎计算一个业务条件。
+
+    Args:
+        value: 字符串、callable 或普通条件值。
+        context: 当前消费 Context。
+
+    Returns:
+        条件的布尔结果。
+    """
+    scope = globals() | scripts.build_namespace(context)
+    scripts.Generator([(scripts.Type.define, ("MATCHED", value))]).run(scope)
+    return bool(scope["MATCHED"])
+
+
+def _safe_url(value: str | None) -> str:
+    """隐藏诊断 URL 中的凭据、查询值和片段。
+
+    Args:
+        value: 原始请求或代理 URL。
+
+    Returns:
+        不含认证信息和敏感参数值的 URL。
+    """
+    if not value:
+        return ""
+    parts = urlsplit(value)
+    query = urlencode(
+        [
+            (name, "[REDACTED]")
+            for name, _ in parse_qsl(parts.query, keep_blank_values=True)
+        ]
+    )
+    netloc = parts.netloc.rsplit("@", 1)[-1]
+    return urlunsplit((parts.scheme, netloc, parts.path, query, ""))
+
+
 class Before:
-    """请求前的可复用插件。"""
+    """请求前可直接注册的插件集合。"""
 
     @staticmethod
-    def set_proxy(context: Context, timeout: float | None = 30) -> None:
-        """选择固定代理或当前 Slot 的代理，重试保留已经选中的地址。
+    @hooks.current
+    def set_proxy(timeout: float | None = None) -> None:
+        """选择固定代理或当前 Slot 的代理，参数与 dev 保持简洁。
 
         Args:
-            context: 当前请求上下文，target 提供默认 proxy。
-            timeout: 代理供应源的最大等待秒数，默认 30。
+            timeout: 代理供应源最大等待秒数，默认不限制。
 
         Raises:
             RuntimeError: 代理管理器未获得 Slot。
-            TypeError: 认证回调不返回 None。
+            TypeError: 认证回调返回非 None。
         """
+        context = _context()
         if context.request.proxy is not None:
+            return
+        reuse = context.options.get("crawler.session.reuse", True)
+        if (
+            reuse is True
+            and context.slot is not None
+            and "crawler.session.proxy" in context.slot
+        ):
             return
         source = context.target.proxy
         if isinstance(source, Manager):
@@ -50,84 +142,115 @@ class Before:
             context.request.proxy = source
 
     @staticmethod
+    @hooks.current
     def fake_ua(
-        context: Context, *, factory: Callable[[], str], overwrite: bool = False
+        factory: Callable[[], str] | None = None, *, overwrite: bool = False
     ) -> None:
-        """显式生成 User-Agent，默认保留已有值及同一请求的重试值。
+        """展开 User-Agent 的 @ 预设，也允许注入任意同步 UA 工厂。
 
         Args:
-            context: 当前请求上下文。
-            factory: 同步 UA 工厂，可组合现有 UA 库或 random.choice。
-            overwrite: 是否替换已有 User-Agent，默认 False。
+            factory: 可选同步 UA 工厂；缺省解析请求头中的 @chrome 等预设。
+            overwrite: 工厂模式是否替换已有普通 UA，默认 False。
 
         Raises:
-            TypeError: 工厂未返回非空字符串或 overwrite 不是布尔值。
+            ValueError: @ 预设不存在。
+            TypeError: 工厂结果或 overwrite 非法。
         """
         if type(overwrite) is not bool:
             raise TypeError("overwrite must be boolean")
-        if not overwrite and context.request.headers.get("User-Agent"):
+        request = _context().request
+        raw = request.headers.get("User-Agent", "")
+        if factory is not None:
+            if raw and not overwrite:
+                return
+            value = sync(factory)
+        elif raw.startswith("@"):
+            name = raw[1:].split("(", 1)[0]
+            if name in {"random", "get"}:
+                value = random.choice(tuple(_USER_AGENTS.values()))
+            else:
+                try:
+                    value = _USER_AGENTS[name]
+                except KeyError as exc:
+                    raise ValueError(f"unknown User-Agent preset: {name}") from exc
+        else:
             return
-        value = sync(factory)
         if not isinstance(value, str) or not value.strip():
             raise TypeError("UA factory must return a non-empty string")
-        context.request.headers["User-Agent"] = value
+        request.headers["User-Agent"] = value
 
 
 class After:
-    """响应后的可复用插件。"""
+    """响应后可直接注册的插件集合。"""
 
     @staticmethod
+    @hooks.current
     def conditional_scripts(
-        context: Context,
+        rules: Mapping[Any, Any] | None = None,
         *,
-        rules: Sequence[tuple[Callable[[Context], bool], Callable[[Context], None]]],
-        first: bool = False,
+        namespace: Mapping[str, Any] | None = None,
     ) -> None:
-        """按声明顺序执行命中条件的动作，不执行 Request 中的脚本文本。
+        """执行全部命中的动态条件动作，缺省读取 options['$scripts']。
 
         Args:
-            context: 显式领域上下文。
-            rules: 同步条件与同步动作的二元组序列。
-            first: True 只执行首个命中动作，默认执行全部命中项。
+            rules: 条件到动作的有序映射；None 从当前 execution options 读取。
+            namespace: 追加到标准脚本命名空间的可信对象。
 
         Raises:
-            TypeError: 条件、动作或 first 违反契约。
+            TypeError: rules 不是映射。
+            BaseException: 脚本错误和领域信号原样传播。
         """
-        if type(first) is not bool:
-            raise TypeError("first must be boolean")
-        for match, action in rules:
-            if condition(match, context):
-                if sync(action, context) is not None:
-                    raise TypeError("conditional action must return None")
-                if first:
-                    return
+        context = _context()
+        selected = context.options.get("$scripts", {}) if rules is None else rules
+        if not isinstance(selected, Mapping):
+            raise TypeError("conditional scripts must be a mapping")
+        if not selected:
+            return
+        scope = globals() | scripts.build_namespace(context, namespace)
+        scripts.Generator([(scripts.Type.condition, selected)]).run(scope)
 
     @staticmethod
-    def show_response(
-        context: Context, handle: Callable[[str], Any] | None = None, fmt: int = 0
-    ) -> None:
-        """展示当前响应信息，保留 handle 和 fmt 参数。
+    @hooks.current
+    def show_response(handle: Callable[[str], Any] | None = None, fmt: int = 0) -> None:
+        """展示已脱敏的响应信息，参数顺序与 dev 保持一致。
 
         Args:
-            context: 当前响应上下文。
             handle: 同步日志输出函数，None 使用模块 logger.debug。
             fmt: 0 输出单行摘要，1 输出多行元数据。
 
         Raises:
-            ValueError: 格式不是 0 或 1。
+            ValueError: fmt 不是 0 或 1。
             TypeError: 输出函数返回 Awaitable。
         """
         if type(fmt) is not int or fmt not in (0, 1):
             raise ValueError("fmt must be 0 or 1")
+        context = _context()
         request, response = context.request, context.response
-        fields = [
-            request.method,
-            f"attempt={context.attempt}",
-            f"status={response.status_code}",
-            f"bytes={len(response.content)}",
-            response.url or request.url,
-        ]
-        message = " ".join(fields) if fmt == 0 else "\n".join(fields)
+        url = _safe_url(response.url or request.url)
+        proxy = _safe_url(request.proxy)
+        if fmt == 0:
+            message = " ".join(
+                [
+                    request.method,
+                    f"attempt={context.attempt}",
+                    f"status={response.status_code}",
+                    f"proxy={proxy or threading.current_thread().name}",
+                    f"bytes={response.size()}",
+                    url,
+                ]
+            )
+        else:
+            message = "\n".join(
+                [
+                    f"url: {url}",
+                    f"method: {request.method}",
+                    f"headers: {list(request.headers)}",
+                    f"body: {'[REDACTED]' if request.body is not None else None}",
+                    f"status={response.status_code}",
+                    f"proxy: {proxy}",
+                    f"thread: {threading.current_thread().name}",
+                ]
+            )
         result = (_LOGGER.debug if handle is None else handle)(message)
         if inspect.isawaitable(result):
             if inspect.iscoroutine(result):
@@ -135,35 +258,47 @@ class After:
             raise TypeError("show_response handle must be synchronous")
 
     @staticmethod
-    def bypass(context: Context, ok: Callable[[Context], bool] | None = None) -> None:
-        """通过正常返回或 signals 控制响应后的阶段节点。
-
-        默认接受 2xx，重试传输失败、429 和 5xx，其余状态拒绝。自定义 ok
-        返回 False 时抛出 Retry，True 抛出 Pass 跳过插槽剩余默认校验。
+    @hooks.current
+    def bypass(ok: Any = None) -> None:
+        """按 dev 形式执行默认、表达式、映射或 callable 成功判断。
 
         Args:
-            context: 当前响应上下文。
-            ok: 可复用的同步成功判断，None 使用默认 HTTP 策略。
+            ok: 检查条件；缺省读取 options['$ok']，仍缺省时仅拒绝传输失败。
 
         Raises:
-            TypeError: ok 不是同步布尔判断。
-            signals.Retry: 可重试响应，由图内预算控制。
-            signals.Failure: 响应被拒绝。
-            signals.Pass: 自定义条件接受响应，停止当前插槽剩余回调。
+            signals.Retry: 检查未通过。
+            BaseException: 自定义动作、脚本或其他领域信号原样传播。
         """
-        if ok is not None:
-            value = ok(context)
-            if type(value) is not bool:
-                if inspect.iscoroutine(value):
-                    value.close()
-                raise TypeError("ok must return bool synchronously")
-            if value:
-                raise signals.Pass()
-            raise signals.Retry()
-        status = context.response.status_code
-        if 200 <= status < 300:
-            return
-        elif status == -1 or status == 429 or 500 <= status < 600:
-            raise signals.Retry()
-        else:
+        context = _context()
+        selected = context.options.get("$ok") if ok is None else ok
+        if selected is None:
+            status = context.response.status_code
+            if 200 <= status < 300:
+                return
+            if status == -1 or status == 429 or 500 <= status < 600:
+                raise signals.Retry()
             raise signals.Failure(f"response rejected: status={status}")
+        elif isinstance(selected, Mapping):
+            for match, action in selected.items():
+                if not _script_match(match, context):
+                    continue
+                if inspect.isclass(action) and issubclass(action, signals.Signal):
+                    if action is signals.Pass:
+                        return
+                    raise action()
+                if isinstance(action, str):
+                    scope = globals() | scripts.build_namespace(context)
+                    scripts.Generator([(scripts.Type.code, action)]).run(scope)
+                elif callable(action):
+                    scope = globals() | scripts.build_namespace(context)
+                    scripts.Generator([(scripts.Type.code, action)]).run(scope)
+                else:
+                    raise TypeError(
+                        "bypass actions must be signals, scripts or callables"
+                    )
+                return
+            accepted = context.response.ok
+        else:
+            accepted = _script_match(selected, context)
+        if not accepted:
+            raise signals.Retry()

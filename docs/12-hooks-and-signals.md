@@ -51,6 +51,11 @@ class MySpider(Spider):
 声明在打开时固定，同索引保持注册顺序，实例方法、静态方法、类方法和继承覆盖沿用相同规则。
 match 必须同步返回 bool，普通 Hook 必须返回 None，不能返回节点名或 Output。
 
+直接 use 的插件可以省略 Context 参数，并在函数内调用 `Context.get_context()`；显式接收 Context 的写法仍然支持。
+当前绑定按同步调用链和异步任务隔离，在 await 前后保持一致，回调结束后不可读取。消费、初始化和生命周期插件应分别
+使用 Context、InitContext 和 HookContext，类别错误会明确失败。函数同时兼容两种调用形式时优先显式传入 Context；
+match 使用相同规则，但仍只接受同步布尔结果。
+
 图内插槽支持同步与异步 Hook。异步回调抛出的信号在 await 边界使用同一规则处理；
 同一插槽内严格串行等待。不要依赖回调所在的物理线程：异步链中的后续同步回调可能运行在异步运行器线程，
 长时间同步 I/O 会阻塞该运行器，应使用原生异步回调或将同步业务安排在独立同步业务节点。
@@ -67,7 +72,8 @@ match 必须同步返回 bool，普通 Hook 必须返回 None，不能返回节�
 
 Signal 继承 BaseException，因此业务代码中的 `except Exception` 不会误吞流程控制。
 普通异常、KeyboardInterrupt、取消、超时和引擎控制异常不会被当作重试；非法阶段的信号明确报错。
-旧动态 Switch、任意修改 next、全局 Context，以及 Context.success/failure/retry 与 action/stop 标志均不保留。
+旧动态 Switch、任意修改 next、进程级全局 Context，以及 Context.success/failure/retry 与 action/stop 标志均不保留。
+回调作用域内的 Context.get_context() 只是当前 Context 的便捷视图，不保存或改变图内状态所有权。
 
 `Retry` 每经过一次 retry 节点就消耗一个预算，即使 Hook 在真正下载前要求重试，也不会无限循环。
 `context.attempt` 是实际下载次数，`context.retries` 是已消耗重试次数。
@@ -87,8 +93,8 @@ Signal 继承 BaseException，因此业务代码中的 `except Exception` 不会
 例如在 pipeline 中正常返回会执行 AFTER_PIPELINE 存储插件；在同一位置抛出 Success 则直接进入 complete。
 
 默认 `After.bypass` 对 2xx 正常返回，-1/429/5xx 抛出 Retry，其余抛出 Failure。
-显式 `ok(context)` 返回 True 时抛出 Pass，跳过插槽剩余默认检查；False 抛出 Retry。
-`scripts.is_success` 同样用 Pass/Retry 表达结果；分页的 `success=True` 会提前结束当前任务。
+显式 `ok(context)` 或可信字符串条件返回 True 时正常继续、False 时抛出 Retry。
+`scripts.is_success` 条件成功时正常继续、失败时缺省抛出 Retry；分页的 `success=True` 会提前结束当前任务。
 因此响应展示、计数等需要执行的插件应放在会中断插槽的校验之前。
 
 ## 实际插槽位置
@@ -133,7 +139,8 @@ Signal 继承 BaseException，因此业务代码中的 `except Exception` 不会
 旧版 `AFTER_RETRY` 常量没有实际调用，新版已有独立节点。
 `ON_*` 只用于当前阶段标记，不是自动触发的插槽。
 旧 BEFORE_WORKER_START/CLOSE 对应物理线程，新资源模型由 Interlace 管理线程、由 Slot 管理逻辑资源；
-Air 不提供这两个同名插槽，注册时明确失败。初始化和关闭每个 Slot 的资源应使用显式装配与所有权规则。
+Air 不提供这两个同名插槽，注册时明确失败。同步 SessionDownloader 由 Air 按 Slot 自动准备和关闭；
+异步 Session 与调用方注入的其他 Slot 资源仍遵守显式所有权规则。
 
 ## 执行限制与验证
 

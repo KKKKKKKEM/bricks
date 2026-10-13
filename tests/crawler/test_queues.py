@@ -122,6 +122,49 @@ def test_content_id_deduplicates_independently_created_work(queue):
         queue.put(make_work("crawl@v1", {"page": 3}, id="business-id"))
 
 
+def test_put_claim_atomically_persists_specific_ready_work(queue):
+    """指定 Work 的入队与领取原子完成，重复、延迟和终态不绕过状态。
+
+    Args:
+        queue: 本地或真实 Redis 任务队列。
+    """
+    work = make_work("crawl@v1", {"page": 2}, id="local-page")
+    lease = queue.put_claim(work, "local-worker", lease_seconds=10)
+    assert lease is not None
+    assert lease.work == work and lease.attempt == 1
+    assert queue.counts()["leased"] == 1
+    assert queue.put_claim(work, "other-worker", lease_seconds=10) is None
+    with pytest.raises(TaskConflictError):
+        queue.put_claim(
+            make_work("crawl@v1", {"page": 3}, id="local-page"),
+            "other-worker",
+        )
+    queue.ack(lease)
+    assert queue.put_claim(work, "other-worker") is None
+
+    delayed = make_work("crawl@v1", {"page": 4}, id="delayed-page")
+    delayed_lease = queue.put_claim(delayed, "local-worker")
+    assert delayed_lease is not None
+    queue.retry(delayed_lease, delay=60)
+    assert queue.put_claim(delayed, "other-worker") is None
+
+
+def test_put_claim_expiry_recovers_persisted_local_work():
+    """本地优先 Worker 中断后，指定 Work 由过期租约恢复且拒绝旧凭据。"""
+    now = [100.0]
+    queue = MemoryTaskQueue("local-recovery", clock=lambda: now[0])
+    work = make_work("crawl@v1", {"page": 2}, id="recover-page")
+    original = queue.put_claim(work, "first", lease_seconds=5)
+    assert original is not None
+    now[0] += 6
+    replacement = queue.put_claim(work, "second", lease_seconds=5)
+    assert replacement is not None and replacement.attempt == 2
+    with pytest.raises(LeaseLostError):
+        queue.ack(original)
+    queue.ack(replacement)
+    assert queue.get(work.id).status == "acked"
+
+
 def test_content_id_is_sensitive_to_execution_content_and_preserves_snapshots():
     """图、顺序、类型、执行配置和来源事件参与身份，输入副本独立。"""
     source = {"items": [1, 2]}
@@ -385,6 +428,118 @@ def test_backend_heartbeats_and_unbind_wait_for_slot_release(queue):
         pool.close()
 
 
+def test_backend_local_work_persists_and_prefers_transferred_slot(queue):
+    """本地 Work 持久化并优先使用转交 Slot，失败仍保留队列状态。
+
+    Args:
+        queue: 隔离的内存或 Redis 任务存储。
+    """
+    pool = SlotPool(2)
+    backend = QueueBackend({queue.name: queue}, poll_interval=0.005)
+    seen = []
+    retries = []
+    failure = TimeoutError("local business timeout")
+
+    def handler(delivery: Delivery) -> DeliveryResult:
+        """记录本地交付携带的 Slot。
+
+        Args:
+            delivery: 带调用方转交 lease 的本地 Work。
+
+        Returns:
+            ACK。
+        """
+        assert delivery.slot_lease is not None
+        seen.append((delivery.work.inputs, id(delivery.slot_lease.slot)))
+        if delivery.work.inputs == {"page": 3}:
+            return DeliveryResult.reject(failure)
+        if delivery.work.inputs == {"page": 4}:
+            retries.append((delivery.attempt, id(delivery.slot_lease.slot)))
+            if delivery.attempt == 1:
+                return DeliveryResult.retry()
+        return DeliveryResult.ack()
+
+    backend.bind(queue.name, handler, concurrency=2, slots=pool)
+    lease = pool.acquire()
+    identity = id(lease.slot)
+    try:
+        backend.submit_local(queue.name, Work("crawl", {"page": 2}), lease)
+        backend.wait_idle(5)
+        assert seen == [({"page": 2}, identity)]
+        assert queue.counts()["acked"] == 1
+        assert pool.available == 2
+        failed_lease = pool.acquire()
+        backend.submit_local(queue.name, Work("crawl", {"page": 3}), failed_lease)
+        with pytest.raises(TimeoutError) as caught:
+            backend.wait_idle(5)
+        assert caught.value is failure
+        assert pool.available == 2
+        retry_lease = pool.acquire()
+        retry_identity = id(retry_lease.slot)
+        backend.submit_local(queue.name, Work("crawl", {"page": 4}), retry_lease)
+        backend.wait_idle(5)
+        assert retries[0] == (1, retry_identity)
+        assert [attempt for attempt, _ in retries] == [1, 2]
+        assert pool.available == 2
+    finally:
+        backend.close()
+        pool.close()
+
+
+def test_backend_local_execution_uses_persisted_work_snapshot(queue):
+    """本地提交执行存储领取快照而非调用方可变 Work。
+
+    Args:
+        queue: 隔离的内存或 Redis 任务存储。
+    """
+    original_put_claim = queue.put_claim
+    observed = []
+
+    def put_claim_then_mutate(work, owner, *, lease_seconds=30):
+        """在原子领取完成后模拟生产者修改原 Work。
+
+        Args:
+            work: 正在持久化的任务。
+            owner: 领取者身份。
+            lease_seconds: 领取租约时长。
+
+        Returns:
+            存储创建的领取凭据。
+        """
+        lease = original_put_claim(work, owner, lease_seconds=lease_seconds)
+        work.inputs["value"] = "changed"
+        return lease
+
+    queue.put_claim = put_claim_then_mutate
+    pool = SlotPool(1)
+
+    def handler(delivery: Delivery) -> DeliveryResult:
+        """记录本地处理器实际收到的输入。
+
+        Args:
+            delivery: 已领取的本地任务。
+
+        Returns:
+            确认交付。
+        """
+        observed.append(delivery.work.inputs.copy())
+        return DeliveryResult.ack()
+
+    backend = QueueBackend({queue.name: queue}, poll_interval=0.005)
+    backend.bind(queue.name, handler, concurrency=1, slots=pool)
+    work = Work("crawl", {"value": "persisted"}, id="local-snapshot")
+    slot_lease = pool.acquire()
+    try:
+        backend.submit_local(queue.name, work, slot_lease)
+        backend.wait_idle(5)
+        assert observed == [{"value": "persisted"}]
+        record = queue.get(work.id)
+        assert record is not None and record.work.inputs == observed[0]
+    finally:
+        backend.close()
+        pool.close()
+
+
 @pytest.mark.parametrize("mode", ["raise", "reject", "invalid", "exhaust"])
 def test_backend_failure_is_observable(queue, mode):
     """处理器错误、非法结果及重投耗尽不能被报告为成功。
@@ -469,6 +624,7 @@ def test_runtime_graph_and_event_use_queue_backend(queue):
             runtime.wait_idle(5)
         assert [item[0] for item in received] == [1, 2]
         assert all(item[1] is not None for item in received)
+        assert received[0][1] is received[1][1]
         assert received[0][2] == {"crawler.session.reuse": False}
         assert received[1][2] == {}
         assert queue.counts()["acked"] == 2

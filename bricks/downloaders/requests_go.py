@@ -15,7 +15,45 @@ from requests_go.tls_client.exceptions import TLSClientExeption  # type: ignore[
 
 from ..models import Request, Response
 from ._options import TransportOptions
-from ._requests_common import _response, _sent_request
+from ._requests_common import (
+    _StrictHostCookieSession,
+    _request_cookies,
+    _response,
+    _sent_request,
+)
+
+
+def _restore_host_only_cookies(
+    response: requests.Response, **kwargs: object
+) -> requests.Response:
+    """从 Go adapter 原始响应重建 CookieJar，保留 host-only 属性。
+
+    Args:
+        response: requests 包装的原生下载响应。
+        **kwargs: requests response hook 传入的其他请求选项。
+
+    Returns:
+        Cookie 属性从原始 Set-Cookie 响应头恢复后的响应。
+
+    Raises:
+        RuntimeError: adapter 未保留可解析的原始响应，无法保证 Cookie 来源约束。
+    """
+
+    raw = response.raw
+    if (
+        response.request is None
+        or raw is None
+        or getattr(raw, "_original_response", None) is None
+    ):
+        raise RuntimeError("requests-go response lacks original Cookie metadata")
+    cookies = requests.cookies.RequestsCookieJar()
+    requests.cookies.extract_cookies_to_jar(cookies, response.request, raw)
+    response.cookies = cookies
+    return response
+
+
+class _ScopedRequestsGoSession(_StrictHostCookieSession, requests_go.Session):
+    """在 requests-go 会话中保留共享严格 host-only Cookie 策略。"""
 
 
 def _preset(name: str) -> tls_config.TLSConfig:
@@ -71,7 +109,8 @@ class RequestsGoDownloader(TransportOptions):
 
         resources = ExitStack()
         try:
-            client = resources.enter_context(requests_go.Session())
+            client = resources.enter_context(_ScopedRequestsGoSession())
+            client.hooks["response"].append(_restore_host_only_cookies)
             client.verify = self.verify
             client.trust_env = self.trust_env
             client.max_redirects = self.max_redirects
@@ -224,7 +263,7 @@ class RequestsGoSessionDownloader:
                 source.method,
                 url.geturl(),
                 headers=dict(source.headers.raw),
-                cookies=dict(source.cookies),
+                cookies=_request_cookies(source),
                 data=source.body,
                 proxies=dict(self.client.proxies),
                 timeout=source.timeout,

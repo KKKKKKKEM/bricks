@@ -103,8 +103,11 @@ class SessionDownloader(Downloader, Protocol[_Session]):
     准备结果仍满足 Downloader，可放入 Slot 的下载器映射；调用方负责成对关闭。
     """
 
-    def prepare_session(self) -> _Session:
+    def prepare_session(self, *, proxy: str | None = None) -> _Session:
         """准备一个独立会话，不与其他准备结果共享业务状态。
+
+        Args:
+            proxy: 会话生命周期内固定的代理地址，None 使用实现默认策略。
 
         Returns:
             可直接 fetch 的会话下载器；所有权交给调用方。
@@ -130,8 +133,11 @@ class SessionDownloader(Downloader, Protocol[_Session]):
 class AsyncSessionDownloader(AsyncDownloader, Protocol[_AsyncSession]):
     """可选异步会话能力；准备、下载和关闭遵守实现的事件循环约束。"""
 
-    async def prepare_session(self) -> _AsyncSession:
+    async def prepare_session(self, *, proxy: str | None = None) -> _AsyncSession:
         """异步准备一个由调用方拥有的独立会话。
+
+        Args:
+            proxy: 会话生命周期内固定的代理地址，None 使用实现默认策略。
 
         Returns:
             可直接 await fetch 的会话下载器。

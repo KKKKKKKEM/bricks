@@ -70,6 +70,24 @@ class TaskQueue(Protocol):
         """
         ...
 
+    def put_claim(
+        self, work: Work, owner: str, *, lease_seconds: float = 30
+    ) -> TaskLease | None:
+        """原子保存并按 ID 领取一个就绪任务。
+
+        Args:
+            work: JSON 可序列化的目标 Work。
+            owner: 本地继续执行它的 Worker 身份。
+            lease_seconds: 此次租约时长，默认 30 秒。
+
+        Returns:
+            新建或可领取任务的凭据；相同任务已在处理、延迟或终态时返回 None。
+
+        Raises:
+            TaskConflictError: 相同 ID 对应不同内容。
+        """
+        ...
+
     def renew(self, lease: TaskLease, *, lease_seconds: float = 30) -> TaskLease:
         """续租并返回新截止时间。
 
@@ -361,6 +379,30 @@ class _Queue:
         """
         data = self._execute(
             "claim",
+            owner=text(owner, "owner"),
+            ttl=seconds(lease_seconds),
+            token=uuid4().hex,
+        )
+        return None if data is None else self._task_lease(data)
+
+    def put_claim(
+        self, work: Work, owner: str, *, lease_seconds: float = 30
+    ) -> TaskLease | None:
+        """原子保存并按内容 ID 领取当前任务。
+
+        Args:
+            work: 待保存和领取的严格 JSON Work。
+            owner: 本地 Worker 身份。
+            lease_seconds: 租约秒数。
+
+        Returns:
+            本次取得的交付凭据；重复任务不可领取时返回 None。
+        """
+        data = self._execute(
+            "put_claim",
+            id=work.id,
+            body=encode_work(work),
+            maximum=self._max_attempts,
             owner=text(owner, "owner"),
             ttl=seconds(lease_seconds),
             token=uuid4().hex,

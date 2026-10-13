@@ -140,7 +140,10 @@ class HookNode(Node):
             if entry
             else Ports(task=_Task)
         )
-        ports = {normal: value_type, "complete": value_type}
+        ports: dict[str, type[Any]] = {
+            normal: value_type,
+            "complete": value_type,
+        }
         if retry:
             ports["retry"] = value_type
         if skip:

@@ -2,6 +2,7 @@
 
 import importlib
 import json
+import socket
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -10,6 +11,7 @@ from requests_go.tls_client.exceptions import TLSClientExeption
 from interlace import Context, Graph, Runtime, Slot
 
 from bricks import DownloadNode, Request, UploadFile
+from bricks.downloaders.requests import RequestsDownloader
 from bricks.downloaders.requests_go import RequestsGoDownloader
 
 
@@ -77,6 +79,126 @@ def test_buffered_http_and_https(endpoint):
         == 302
     )
     assert downloader.fetch(Request(base + "/echo")).json()["cookie"] == ""
+
+
+@pytest.mark.parametrize("endpoint", ["server", "https_server"])
+@pytest.mark.parametrize("downloader_type", [RequestsDownloader, RequestsGoDownloader])
+def test_request_cookies_stay_with_initial_origin(
+    endpoint, downloader_type, request, monkeypatch
+):
+    """验证显式与会话 Cookie 保持初始主机和 HTTPS 安全边界。
+
+    Args:
+        endpoint: 当前测试使用的本地 HTTP 或 HTTPS 服务。
+        downloader_type: requests 或 requests-go 下载器类型。
+        request: pytest 参数化上下文。
+        monkeypatch: 将测试子域解析到本地服务。
+    """
+
+    base, seen, _ = request.getfixturevalue(endpoint)
+    downloader = downloader_type(verify=False, max_redirects=2)
+    session = downloader.prepare_session()
+    secure = base.startswith("https://")
+    session.client.cookies.set(
+        "account", "session", domain="127.0.0.1", path="/", secure=secure
+    )
+    original_getaddrinfo = socket.getaddrinfo
+
+    def resolve_subdomain(host, *args, **kwargs):
+        """将测试子域连接到现有本地 HTTP 服务。
+
+        Args:
+            host: 需要解析的主机名。
+            *args: 传给 socket.getaddrinfo 的其余位置参数。
+            **kwargs: 传给 socket.getaddrinfo 的关键字参数。
+
+        Returns:
+            原始 DNS 解析结果。
+        """
+
+        if host == "sub.localhost":
+            host = "127.0.0.1"
+        return original_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve_subdomain)
+    try:
+        same_origin = session.fetch(Request(base + "/echo"))
+        assert same_origin.json()["cookie"] == "account=session"
+
+        temporary = downloader.fetch(
+            Request(base + "/cross", cookies={"account": "explicit"})
+        )
+        assert temporary.json()["cookie"] == ""
+        assert seen[-2][2].get("Cookie") == "account=explicit"
+        assert seen[-1][2].get("Cookie", "") == ""
+
+        cross_origin = session.fetch(
+            Request(base + "/cross", cookies={"account": "explicit"})
+        )
+        assert cross_origin.json()["cookie"] == ""
+        assert seen[-2][2].get("Cookie") == "account=explicit"
+        assert seen[-1][2].get("Cookie", "") == ""
+
+        localhost_base = base.replace("127.0.0.1", "localhost")
+        temporary_subdomain = downloader.fetch(
+            Request(localhost_base + "/subdomain", cookies={"account": "explicit"})
+        )
+        assert temporary_subdomain.json()["cookie"] == ""
+        assert seen[-2][2].get("Cookie") == "account=explicit"
+        assert seen[-1][2].get("Cookie", "") == ""
+
+        session.fetch(Request(localhost_base + "/login/session"))
+        same_localhost = session.fetch(Request(localhost_base + "/echo"))
+        assert same_localhost.json()["cookie"] == "account=session"
+        session_subdomain = session.fetch(Request(localhost_base + "/subdomain"))
+        assert session_subdomain.json()["cookie"] == ""
+        assert seen[-2][2].get("Cookie") == "account=session"
+        assert seen[-1][2].get("Cookie", "") == ""
+    finally:
+        downloader.close_session(session)
+
+
+@pytest.mark.parametrize("downloader_type", [RequestsDownloader, RequestsGoDownloader])
+def test_secure_cookies_do_not_follow_https_downgrade(
+    https_server, server, downloader_type
+):
+    """验证同一主机的 HTTPS→HTTP 重定向不携带 Secure Cookie。
+
+    Args:
+        https_server: 本地 TLS 服务。
+        server: 本地明文 HTTP 服务，接收同主机降级后的请求。
+        downloader_type: requests 或 requests-go 下载器类型。
+    """
+
+    https_base, https_seen, _ = https_server
+    http_base, http_seen, _ = server
+    https_base = https_base.replace("127.0.0.1", "localhost")
+    http_port = http_base.rsplit(":", 1)[1]
+    downloader = downloader_type(verify=False, max_redirects=2)
+    session = downloader.prepare_session()
+    try:
+        session.fetch(Request(https_base + "/login-secure/session"))
+        assert (
+            session.fetch(Request(https_base + "/echo")).json()["cookie"]
+            == "account=session"
+        )
+
+        explicit = downloader.fetch(
+            Request(
+                f"{https_base}/downgrade/{http_port}",
+                cookies={"account": "explicit"},
+            )
+        )
+        assert explicit.json()["cookie"] == ""
+        assert https_seen[-1][2].get("Cookie") == "account=explicit"
+        assert http_seen[-1][2].get("Cookie", "") == ""
+
+        session_response = session.fetch(Request(f"{https_base}/downgrade/{http_port}"))
+        assert session_response.json()["cookie"] == ""
+        assert https_seen[-1][2].get("Cookie") == "account=session"
+        assert http_seen[-1][2].get("Cookie", "") == ""
+    finally:
+        downloader.close_session(session)
 
 
 def test_go_sessions_and_context_fingerprints(https_server, monkeypatch):

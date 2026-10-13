@@ -70,7 +70,9 @@ QueueBackend 通过 Interlace SPI 接入执行。运行 `uv run --locked python 
 同一队列实例的占用共享续租线程，退出时执行显式确认或释放。
 
 `bricks.spider.air.Spider` 提供种子初始化与消费两张图，保留 `downloader/task_queue/queue_name` 等业务参数，
-通过可复用的 `bricks.plugins.on_request` 插件处理响应检查、展示与代理设置。
+按 concurrency 自动管理同步 Slot Session，并通过 `Context.install/obtain` 共享 Slot 资源；
+`Context.submit/emit(affinity="current")` 将派生 Work 持久化并优先延续当前 Slot。
+可复用的 `bricks.plugins.on_request` 插件处理响应检查、展示与代理设置。
 运行 `uv run --locked python -m examples.air_spider --output products.sqlite3` 可验证分页、详情发现与幂等存储，
 接口和插件注册见 [Air 爬虫基类](docs/08-air-spider.md)。
 业务插槽是图中的独立 HookNode，回调通过 `raise signals.Retry()` 等信号改变流程；
@@ -97,8 +99,8 @@ HTTPS 契约测试需要本机提供 `openssl` 命令，用于生成临时测试
 ```bash
 uv run --locked pytest -q
 uv run --locked mypy bricks
-uv run --locked ruff check bricks tests examples
-uv run --locked ruff format --check bricks
+uv run --locked ruff check bricks tests examples .github/scripts
+uv run --locked ruff format --check bricks .github/scripts
 uv build
 ```
 

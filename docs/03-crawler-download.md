@@ -96,6 +96,11 @@ uv run python -m examples.crawler_download https://example.com
 仍需通过 `prepare_session()` 按 Slot 显式装配；节点不隐式创建全局会话或账户池。
 开发依赖组包含可选传输及类型声明，`uv sync --no-dev` 只安装默认运行依赖。
 
+Air 提供更高层的自动装配：未传 slots 且同步 downloader 实现 SessionDownloader 时，Spider 按 concurrency
+创建长期 Slot，为每个 Slot 调用 `prepare_session(proxy=...)`，并在停止后配对 close_session。普通 Air 爬虫
+只需配置 concurrency；直接使用 DownloadNode、异步 Session 或组合多种 Slot 资源时仍按本章显式装配。
+同步 Playwright/Camoufox 会话受创建线程约束，明确退出 Air 自动 Slot Session，仍由调用方在正确线程装配。
+
 ## curl_cffi 实现边界
 
 - 同步与异步实现均使用缓冲响应和已编码的内存请求体，支持 JSON、表单和 multipart 上传。
@@ -124,6 +129,11 @@ verify、trust_env、max_redirects 与会话所有权规则同上；默认禁用
 requests 不能发送重复请求头，因此发现重复名称时明确抛出 ValueError，不能用于要求重复请求头的站点。
 Request.timeout 按连接与读取阶段生效，None 禁用这些超时，不是整个重定向链的总截止时间。
 close_session 可重复调用，关闭后的包装器拒绝继续 fetch；直接关闭外部 Session 的生命周期由调用方负责。
+
+显式 `Request.cookies` 按初始请求 URL 创建 host-only Cookie，只发往完全相同的主机，不会随重定向发送到子域或其他主机；单标签主机
+按 CookieJar 的 `host.local` effective-host 规则绑定。HTTPS 请求的显式 Cookie 带有 Secure 限制，不会随降级重定向发送到 HTTP。
+初始主机仍可收到显式 Cookie，且同名同路径时显式值优先于会话 Cookie。会话 Cookie 继续由 requests CookieJar 按服务端设置的
+Domain、Path、Secure 等属性管理；临时 Session 不读取或保留其他请求的 Cookie。
 
 ## HTTPX 实现边界
 
@@ -210,6 +220,11 @@ downloader = RequestsGoDownloader(verify=False, impersonate="TLS_CHROME_LATEST")
 不同 Slot 不共享模块级预设 ID 或 Go 会话。close_session 使用完整上下文退出，同时释放 Python 连接资源和原生 Go 会话，
 不能只调用 Session.close。原生请求替换 HTTPS Adapter 时，适配器会关闭已经被替换的 Python Adapter。
 TLS 握手和连接复用由原生库决定，不保证每次指纹覆盖都会重新握手。
+
+`Request.cookies` 与 requests 实现相同，限定在初始主机且不发送到子域；HTTPS 显式 Cookie 不会随降级重定向发送到 HTTP，
+同名同路径的显式值优先于会话 Cookie。会话 Cookie 继续由 Python CookieJar 管理并遵循其 Domain、Path、Secure 等属性。
+requests-go 1.0.9 会把原生响应的无 Domain Cookie 转成域 Cookie；适配器在响应 Hook 中从原始 Set-Cookie
+重新提取属性，再交给会话保存，避免登录 Cookie 扩大到子域。原始响应元数据缺失时明确失败，不退回不安全的属性。
 
 HTTPS 超时在原生库中只有整数秒精度，None 被替换为默认 15 秒。为避免隐式改变执行设置，
 适配器明确拒绝 HTTPS 的 None 和非整数超时；HTTP 保留 requests 的原有超时行为。
@@ -304,8 +319,8 @@ requests-go 同步下载和会话下载也支持原生 TLS_ 指纹名称。
 
 | 协议 | 准备 | 关闭 |
 | --- | --- | --- |
-| `SessionDownloader[S]` | `prepare_session() -> S` | `close_session(session: S) -> None` |
-| `AsyncSessionDownloader[S]` | `async prepare_session() -> S` | `async close_session(session: S) -> None` |
+| `SessionDownloader[S]` | `prepare_session(proxy=None) -> S` | `close_session(session: S) -> None` |
+| `AsyncSessionDownloader[S]` | `async prepare_session(proxy=None) -> S` | `async close_session(session: S) -> None` |
 
 S 本身满足对应的 Downloader / AsyncDownloader，因此节点仍只调用 fetch(request)，不需要认识 HTTPX、
 浏览器或其他库的原生 session。基础协议不要求实现这两个方法；只有支持会话的下载器实现扩展协议。

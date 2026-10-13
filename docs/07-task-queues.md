@@ -77,6 +77,9 @@ Redis Lua 不解析业务 JSON，避免大整数精度损失或空列表变为�
 ## 交付租约与恢复
 
 `claim(owner, lease_seconds=30)` 非阻塞领取一项任务，没有就绪项时返回 None。
+`put_claim(work, owner, lease_seconds=30)` 按 Work.id 原子完成同内容去重、持久化和指定任务领取；
+任务已 leased、处于 retry 延迟或已经终态时返回 None，不绕过现有状态。它供本地 SlotLease 延续适配器使用，
+避免先 put 再 claim 时被其他 Worker 抢走；普通生产者仍只调用 put。
 多个消费者按可领取时间竞争任务，不承诺严格 FIFO、公平分配或全局执行顺序。
 `renew` 返回新截止时间的凭据，token 保持不变；`retry`、`reject` 和 `ack` 结束当前凭据。
 重新领取产生新 token，过期凭据即使尚未被接管也不能继续写入，失败抛出 `LeaseLostError`。
@@ -189,8 +192,18 @@ Interlace 当前 GraphWorker 对普通执行失败返回 REJECT，因此并不�
 异常、取消、非法返回值以及存储写回失败会向等待方传播，不因本地执行结束而谎报存储已经确认。
 
 每次经过任务存储的交付都建立新的本地 Slot 链，包括使用 MemoryTaskQueue 时。
-QueueBackend 不提供 submit_local；跨队列事件不会保留源 Slot，也不继承源执行 options。
-需要会话延续、Worker 身份路由或浏览器迁移时必须设计独立策略，本版本不提供这些能力。
+QueueBackend 实现 Interlace 的 `LocalTaskPublisher.submit_local`：本地 Router 已为分支 retain SlotLease，
+backend 通过 `put_claim` 原子完成同内容去重、持久化和指定任务领取，并将领取返回的 Work 快照交给本地调度器，
+不再使用可能被生产者随后修改的原始 Work 对象。因此不存在“先入队再被其他 Worker 抢走”的窗口；
+进程在执行前后异常退出时，存储租约到期后仍可重新领取。
+领取后的 before_execute Hook 与同 Slot 的 Graph execution 共用 Interlace 的 `SlotLease.execution()` 串行边界；
+Graph execution 本身由 Interlace 串行执行。ACK/RETRY/REJECT 与普通持久任务使用相同状态机，
+RETRY 或异常恢复后不再保证原 Slot，错误由 wait_idle 原样传播。
+该能力只保证同一进程和 Slot，不保证同一操作系统线程，也不能跨进程序列化 Session。
+
+跨图 Event 创建独立 execution，按核心契约不继承源 execution options；领域需要的配置应放入事件 payload
+或目标 Graph 的领域配置。Air 的 `Context.submit(..., affinity="current")` 在事件 payload 中携带完整稳定 Work，
+因此子任务保留显式 options，同时被持久化并优先延续当前 Slot。
 
 `backend.wait_idle(timeout)` 检查配置队列的所有 pending/leased 任务和当前进程的 Slot 清理，
 可能等待其他 Worker；它是当前队列状态的快照，不是分布式终止检测。
