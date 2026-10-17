@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 from ._validation import duration, entries, http_url, token
 from .body import BodyInput, BodyType, encode_json, encode_multipart
 from .cookies import RequestCookies
-from .headers import HeaderInput, MutableHeaders
+from .headers import HeaderInput, Headers, MutableHeaders
 
 HttpMethod = Literal[
     "GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH"
@@ -310,6 +310,13 @@ class Request:
         elif name == "proxy":
             if value is not None and (not isinstance(value, str) or not value.strip()):
                 raise ValueError("proxy must be a non-empty string or None")
+        if name in {"headers", "cookies"}:
+            headers = value if name == "headers" else getattr(self, "headers", None)
+            cookies = value if name == "cookies" else getattr(self, "cookies", None)
+            has_cookie_header = isinstance(headers, Headers) and "cookie" in headers
+            has_cookies = isinstance(cookies, RequestCookies) and bool(cookies)
+            if has_cookie_header and has_cookies:
+                raise ValueError("Cookie header and Request.cookies cannot be combined")
         object.__setattr__(self, name, value)
 
     @property
@@ -484,6 +491,17 @@ class Request:
                 copied._body_content_type = self._body_content_type
         return copied
 
+    def __reduce__(self) -> tuple[object, tuple[dict[str, Any]]]:
+        """通过独立字段快照支持请求的 pickle 与深复制。"""
+
+        values = {
+            name: getattr(self, name)
+            for name in Request.__slots__
+            if not name.startswith("_")
+        }
+        values.update(body=self.body, body_type="raw")
+        return _restore_request, (values,)
+
     def to_curl(self, *, body_file: str | None = None) -> str:
         """返回可用于 POSIX shell 的单条 cURL 命令，不执行命令。
 
@@ -526,3 +544,9 @@ class Request:
         from .curl import parse_curl
 
         return cls(**parse_curl(command, files))
+
+
+def _restore_request(values: dict[str, Any]) -> Request:
+    """从 pickle 字段快照重建请求。"""
+
+    return Request(**values)

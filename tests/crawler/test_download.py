@@ -1,7 +1,7 @@
 import asyncio
-from http.cookies import SimpleCookie
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
+from http.cookies import SimpleCookie
 from threading import Barrier
 
 import httpx
@@ -15,13 +15,13 @@ from bricks import (
     Request,
     Response,
 )
+from bricks.downloaders import AsyncSessionDownloader, SessionDownloader
 from bricks.downloaders.httpx import (
     AsyncHttpxDownloader,
     AsyncHttpxSessionDownloader,
     HttpxDownloader,
     HttpxSessionDownloader,
 )
-from bricks.downloaders import AsyncSessionDownloader, SessionDownloader
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -77,7 +77,9 @@ def test_context_session_policy_preserves_existing_session(server, asynchronous)
         try:
             login = await fetch("/login/original")
             before = await fetch("/echo")
-            isolated = await fetch("/login/temporary", isolated=True, cookies={"explicit": "yes"})
+            isolated = await fetch(
+                "/login/temporary", isolated=True, cookies={"explicit": "yes"}
+            )
             fresh = await fetch("/echo", isolated=True)
             after = await fetch("/echo")
             assert before["cookie"] == after["cookie"] == "account=original"
@@ -115,7 +117,9 @@ def test_runtime_session_options_reach_download_node(server):
             runtime.register("crawl", graph)
             runtime.run("crawl", Request(base + "/login/original"))
             response = runtime.run(
-                "crawl", Request(base + "/echo"), options={"crawler.session.reuse": False}
+                "crawl",
+                Request(base + "/echo"),
+                options={"crawler.session.reuse": False},
             )[0].value
             assert response.json()["cookie"] == ""
             response = runtime.run("crawl", Request(base + "/echo"))[0].value
@@ -155,8 +159,6 @@ def test_invalid_session_policy_fails_before_download(asynchronous):
             invoke(value)
     with pytest.raises(ValueError, match="isolated_downloaders"):
         invoke(False)
-
-
 
 
 @pytest.fixture(params=[False, True], ids=["sync", "async"])
@@ -459,7 +461,10 @@ def test_session_example(server):
     responses = run([base + "/cookies", base + "/echo"], concurrency=1)
     assert len(responses) == 2
     cookies = SimpleCookie(responses[1].json()["cookie"])
-    assert {name: morsel.value for name, morsel in cookies.items()} == {"a": "1", "b": "2"}
+    assert {name: morsel.value for name, morsel in cookies.items()} == {
+        "a": "1",
+        "b": "2",
+    }
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -789,7 +794,7 @@ def test_selection_and_downloader_return_contracts(asynchronous):
         with pytest.raises(TypeError, match="select"):
             node_type(bindings, select=select)
     for selected in (1, [], {}):
-        node = node_type(bindings, select=lambda request: selected)
+        node = node_type(bindings, select=lambda request, selected=selected: selected)
         with pytest.raises(TypeError, match="select"):
             result = node.execute(
                 {"request": Request("https://example.com")}, Context(lambda *args: None)

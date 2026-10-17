@@ -9,10 +9,12 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from bricks import hooks, signals
-from bricks.spider.context import Context
+
+if TYPE_CHECKING:
+    from bricks.spider.context import Context
 
 from ._utils import seed
 
@@ -89,7 +91,7 @@ def _invoke(function: Callable[..., Any], context: Context, *args: Any) -> Any:
                 try:
                     signature.bind(*args)
                 except TypeError:
-                    raise with_context
+                    raise with_context from None
                 values = args
             else:
                 values = (context, *args)
@@ -132,12 +134,10 @@ def build_namespace(
     response = available("response")
     items = available("items")
     result: dict[str, Any] = {
-        "Context": Context,
         "context": context,
         "ctx": context,
         "request": request,
         "response": response,
-        "status_code": None if response is None else response.status_code,
         "items": items,
         "seeds": context.seeds,
         "signals": signals,
@@ -225,6 +225,8 @@ class Generator:
             ValueError: 步骤类别不存在或 define 结构非法。
             TypeError: 条件或动作回调违反同步契约。
         """
+        from bricks.spider.context import Context
+
         context = values.get("context")
         if not isinstance(context, Context):
             raise TypeError("script namespace requires the current Context")
@@ -277,8 +279,10 @@ def is_success(
         signals.Retry: 缺省条件不通过。
         BaseException: 脚本、回调和其他领域信号原样传播。
     """
+    from bricks.spider.context import Context
+
     context = Context.get_context()
-    scope = globals() | build_namespace(context, namespace)
+    scope = build_namespace(context)
     selected = dict(flow or {})
     selected.setdefault("not ISPASS", "raise signals.Retry")
     Generator(
@@ -326,19 +330,23 @@ def turn_page(
         raise ValueError("key must be a non-empty string")
     if type(call_later) is not bool or type(success) is not bool:
         raise ValueError("call_later and success must be boolean")
+    from bricks.spider.context import Context
+
     context = Context.get_context()
-    scope = globals() | build_namespace(context, namespace)
+    scope = build_namespace(context, namespace)
     scope["call_later"] = call_later
     _actions(pre, scope, context)
     scope["ISPASS"] = _matches(match, scope, context)
-    if callable(action):
-        scope["NEXT_SEEDS"] = seed(_invoke(action, context))
-    elif isinstance(action, str) and action.strip():
-        current = context.seeds.get(key)
-        value = eval(_compile("value " + action, "eval"), {"value": current})
-        scope["NEXT_SEEDS"] = seed({**context.seeds, key: value})
-    else:
-        raise ValueError("action must be a non-empty expression or seed factory")
+    if scope["ISPASS"]:
+        if callable(action):
+            next_seeds = seed(_invoke(action, context))
+        elif isinstance(action, str) and action.strip():
+            current = context.seeds.get(key)
+            value = eval(_compile("value " + action, "eval"), {"value": current})
+            next_seeds = seed({**context.seeds, key: value})
+        else:
+            raise ValueError("action must be a non-empty expression or seed factory")
+        scope["NEXT_SEEDS"] = next_seeds
     _actions(post, scope, context)
     if flow is None:
         if scope["ISPASS"]:
@@ -347,10 +355,11 @@ def turn_page(
                 context.seeds.get(key),
                 context.seeds,
             )
-            context.submit(
-                scope["NEXT_SEEDS"],
-                affinity="any" if call_later else "current",
+            submitted = context.submit(
+                scope["NEXT_SEEDS"], affinity="any" if call_later else "current"
             )
+            if success and submitted:
+                raise signals.Success()
         else:
             _LOGGER.debug(
                 "[停止翻页] 当前页面: %r, 种子: %r",
@@ -359,8 +368,6 @@ def turn_page(
             )
     else:
         Generator([(Type.choice, flow)]).run(scope)
-    if success:
-        raise signals.Success()
 
 
 @hooks.current
@@ -375,8 +382,10 @@ def inject(
         flows: define、choice、condition 和 code 步骤序列。
         namespace: 追加到标准脚本命名空间的可信对象。
     """
+    from bricks.spider.context import Context
+
     context = Context.get_context()
-    Generator(flows).run(globals() | build_namespace(context, namespace))
+    Generator(flows).run(build_namespace(context, namespace))
 
 
 __all__ = ["Generator", "Type", "build_namespace", "inject", "is_success", "turn_page"]

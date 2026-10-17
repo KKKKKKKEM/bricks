@@ -16,7 +16,7 @@ from bricks.hooks import Task
 
 from ._calls import invoke
 from ._hooks import run_hooks
-from .context import Context, InitContext, ResponseRejectedError, _Initialization, _Task
+from .context import Context, InitContext, Initialization, ResponseRejectedError, _Task
 
 
 def _run(
@@ -131,10 +131,10 @@ class HookNode(Node):
         """
         self._owner, self._form, self._tasks = owner, form, tasks
         self._initial, self._retry, self._skip = initial, retry, skip
-        value_type = _Initialization if initial else _Task
+        value_type = Initialization if initial else _Task
         normal = "initial" if initial else "task"
         self.input_ports = (
-            Ports(initial=_Initialization)
+            Ports(initial=Initialization)
             if initial
             else Ports(seeds=dict)
             if entry
@@ -221,17 +221,20 @@ class HookNode(Node):
                 and self._retry
                 and isinstance(context, Context)
             ):
-                context.request
+                # 属性访问校验重试前已有请求，缺失时由属性抛出 RuntimeError。
+                context.request  # noqa: B018
                 payload.retry_delay = signal.delay
+                payload.retry_reason = str(signal) or type(signal).__name__
                 return Output(payload, "retry")
             if isinstance(signal, signals.Skip) and self._skip:
                 if isinstance(context, Context):
+                    # 属性访问校验跳过前已提供替代数据，缺失时由属性抛出 RuntimeError。
                     if self._form == "BEFORE_MAKE_REQUEST":
-                        context.request
+                        context.request  # noqa: B018
                     elif self._form == "BEFORE_REQUEST":
-                        context.response
+                        context.response  # noqa: B018
                     elif self._form == "BEFORE_PARSE":
-                        context.items
+                        context.items  # noqa: B018
                 elif self._form == "BEFORE_MAKE_SEEDS":
                     context._initial.iterator = iter(())
                 return Output(payload, "skip")
@@ -341,7 +344,12 @@ class CrawlNode(Node):
                 }
             if self._stage == "retry":
                 if task.retries >= self._max_retries:
-                    raise ResponseRejectedError("download retries exhausted")
+                    detail = (
+                        f"last status={task.response.status_code}"
+                        if task.response is not None
+                        else f"trigger={task.retry_reason or 'Retry'}"
+                    )
+                    raise ResponseRejectedError(f"download retries exhausted; {detail}")
                 task.retries += 1
                 return None
             if self._stage == "retry_wait":
@@ -413,6 +421,7 @@ class CrawlNode(Node):
                 ) from signal
             if isinstance(signal, signals.Retry) and self._stage == "download":
                 task.retry_delay = signal.delay
+                task.retry_reason = str(signal) or type(signal).__name__
                 return Output(task, "retry")
             raise TypeError(f"{type(signal).__name__} is not allowed in {context.form}")
 
@@ -430,7 +439,7 @@ class InitNode(Node):
         _callback: 种子工厂或提交函数。
     """
 
-    input_ports = Ports(initial=_Initialization)  # 不跨队列传输的生产状态。
+    input_ports = Ports(initial=Initialization)  # 不跨队列传输的生产状态。
 
     def __init__(
         self, owner: Any, stage: str, callback: Callable[..., Any] | None = None
@@ -446,9 +455,9 @@ class InitNode(Node):
         self.output_ports = (
             Ports(summary=dict)
             if stage == "complete"
-            else Ports(seed=_Initialization, complete=_Initialization)
+            else Ports(seed=Initialization, complete=Initialization)
             if stage == "next_seed"
-            else Ports(initial=_Initialization, complete=_Initialization)
+            else Ports(initial=Initialization, complete=Initialization)
         )
 
     def execute(

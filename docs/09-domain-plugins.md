@@ -58,17 +58,17 @@ batches = make_seeds.by_mongo(
 ```
 
 CSV SQL 查询把每个文件装入本函数拥有的临时数据库，字段类型为 TEXT；`<TABLE>` 会替换为 `data`，
-也可以直接使用 `data` 表名。
-需要数字比较时显式 `CAST`。普通 CSV 路径逐行读取；SQL 查询需要额外内存。
-调用方传给 `by_sqlite` 的连接归调用方管理。图节点可能串行跨线程推进源，应显式创建
-`sqlite3.connect(..., check_same_thread=False)`，并确保该连接没有其他并发使用者。
+也可以直接使用 `data` 表名。需要数字比较时显式 `CAST`。普通 CSV 路径逐行读取；SQL 查询需要额外内存。
+`by_csv` 若路径已存在则按字面路径读取，否则展开 glob；`by_range` 直接计算恢复起点。
+若向 `by_sqlite`、`by_mongo` 或 `to_sqlite` 传入原生连接，应按 Slot 分别取得，避免跨线程共享连接。
+多个 Slot 共用 SQLite Connection 时，`to_sqlite` 必须传入共享互斥锁 `lock`。
 
 ## 存储与交付确认
 
 | 函数 | 装配参数 | 写入行为 |
 | --- | --- | --- |
-| `storage.to_sqlite` | `path` 表名、`conn` 数据库路径或 Connection、可选 `items/row_keys/with_lock` | 事务建表并 insert/upsert |
-| `storage.to_mongo` | `path` Collection 名、原生 `conn`、可选 `items/row_keys/database` | insert_many 或逐条 upsert；必须使用有确认的写入 |
+| `storage.to_sqlite` | `path` 表名、`conn` 数据库路径或 Connection、可选 `items/row_keys/with_lock/lock` | 事务建表并 insert/upsert |
+| `storage.to_mongo` | `path` Collection 名、原生 `conn`、可选 `items/row_keys/database` | insert_many 或 ordered bulk upsert；必须使用有确认的写入 |
 | `storage.to_csv` | `path`、可选 `items/conn/encoding/header/lock` | 检查表头后追加；并发写同一文件必须共享锁 |
 | `storage.to_redis` | `path`、原生 `conn`、`key_type`、`row_keys`、`ttl` | 规范 JSON，set/list/string；string 需要业务键 |
 
@@ -94,8 +94,7 @@ spider.use(
 不调用 ACK、不修改 Items。pipeline 正常返回后仍执行 AFTER_PIPELINE；存储插件报错时 Graph 失败，不提前确认。
 
 SQLite 主键必须完整且非空，每批字段必须一致。既有表结构需与输入匹配，不自动迁移字段；
-嵌套值应在业务层显式编码。Mongo `row_keys` 仅接受不含点号且不以 `$` 开头的字段名，并使用 `$eq` 按字面值匹配；
-业务唯一索引由调用方创建，多文档操作不保证整批原子。CSV 追加无法回滚，也不自动按业务键去重。Redis MULTI 不保证
+业务唯一索引由调用方创建，多文档操作不保证整批原子；upsert 的非 key 字段不能包含点号或以 `$` 开头。CSV 追加无法回滚，也不自动按业务键去重。Redis MULTI 不保证
 命令错误回滚；string 模式使用 `path + ':' + sha256(规范 JSON 业务键数组)` 生成键，避免字段拼接冲突；不向业务记录写入 `$key`。
 
 Redis、Mongo 客户端由调用方管理，Spider 停止后再关闭。安装可选客户端：
@@ -106,15 +105,16 @@ uv sync --locked --extra redis --extra mongo
 
 ## 请求、分页与条件动作
 
-- `Before.set_proxy(timeout=None)`：由 Air 默认注册，选择固定代理或当前 Slot 代理；请求显式值优先。
+- `Before.set_proxy(timeout=30)`：由 Air 默认注册，选择固定代理或当前 Slot 代理；请求显式值优先。
 - `Before.fake_ua()`：展开请求头中的 `@chrome/@edge/@mobile/@pc/@random`，也可传同步 factory。
 - `After.show_response` 保留 `handle`、`fmt`；默认记录响应摘要。`fmt=1` 仅列出请求头名称及请求体是否存在，
   不输出任何请求头值或请求体内容；代理认证、请求 URL 中的认证信息、查询参数值及片段均脱敏。
   方法、状态、字节数和脱敏后的 URL/代理仍可用于诊断。
-- `After.bypass(ok=...)`：默认 2xx 接受，-1/429/5xx 有限重试；字符串、映射或 callable 可覆盖，省略时读取 `$ok`。
+- `After.bypass(ok=...)`：默认及映射未命中均采用 2xx 接受、-1/429/5xx 有限重试、其他状态 Failure；字符串、映射或 callable 可覆盖，省略时读取 `$ok`。
 - `After.conditional_scripts(rules=None)`：按序执行全部命中动作；省略 rules 时读取 execution options 的 `$scripts`。
+- 动态脚本仅暴露 `context/ctx/request/response/items/seeds/signals/logger/time` 与调用方显式传入对象，不读取插件模块全局命名空间。
 - `scripts.is_success(match, pre=None, post=None, flow=None)`：参数顺序贴近 dev，失败缺省抛出 Retry。
-- `scripts.turn_page(match, pre=None, post=None, flow=None, key='page', action='+1', call_later=False, success=False)`：本地继续或持久提交下一页。
+- `scripts.turn_page(..., success=False)`：只有匹配且确实提交下一页后，`success=True` 才提前结束当前任务；否则继续解析和 pipeline。
 - `scripts.inject(flows)`：执行 `Type.define/choice/condition/code` 组合。
 
 ```python

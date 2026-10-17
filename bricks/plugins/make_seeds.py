@@ -136,15 +136,38 @@ def by_range(
         raise ValueError("step must be a nonzero integer and reverse must be bool")
     if not isinstance(key, str) or not key or (reverse and stop is None):
         raise ValueError("key must be non-empty; reverse requires stop")
-    values: Iterable[int] = (
-        itertools.count(start, step) if stop is None else range(start, stop, step)
+    integer(batch_size, "batch_size", minimum=1)
+    if record is not None and type(record) is not dict:
+        raise TypeError("record must be a dict or None")
+    if checkpoint is not None and (not isinstance(checkpoint, str) or not checkpoint):
+        raise ValueError("checkpoint must be a non-empty string")
+    skip_position = _skip(skip)
+    position = integer(
+        (
+            0
+            if record is None
+            else record.get(
+                checkpoint or _key("range", [start, stop, step, key, reverse]), 0
+            )
+        )
+        if skip_position is None
+        else skip_position,
+        "skip",
     )
-    if reverse:
-        values = reversed(range(start, stop, step))  # type: ignore[arg-type]
-    yield from _batch(
+    if stop is None:
+        values: Iterable[int] = itertools.count(start + step * position, step)
+    else:
+        ranged = range(start, stop, step)
+        if not ranged:
+            values = ranged
+        elif reverse:
+            values = range(ranged[-1], ranged[0] - step, -step)[position:]
+        else:
+            values = ranged[position:]
+    return _batch(
         ({key: value} for value in values),
         batch_size=batch_size,
-        skip=_skip(skip),
+        skip=0,
         record=record,
         checkpoint=checkpoint or _key("range", [start, stop, step, key, reverse]),
     )
@@ -184,7 +207,20 @@ def by_csv(
         FileNotFoundError: 没有匹配文件。
         ValueError: CSV 表头或行宽不合法。
     """
-    files = sorted(glob.glob(str(path)))
+    integer(batch_size, "batch_size", minimum=1)
+    if record is not None and type(record) is not dict:
+        raise TypeError("record must be a dict or None")
+    if checkpoint is not None and (not isinstance(checkpoint, str) or not checkpoint):
+        raise ValueError("checkpoint must be a non-empty string")
+    skip_position = _skip(skip)
+    if query is not None and not isinstance(query, str):
+        raise TypeError("query must be a string or None")
+    if isinstance(parameters, (str, bytes)) or not isinstance(parameters, Sequence):
+        raise TypeError("parameters must be a sequence")
+    if transform is not None and not callable(transform):
+        raise TypeError("transform must be callable or None")
+    literal = Path(path)
+    files = [str(literal)] if literal.is_file() else sorted(glob.glob(str(path)))
     if not files:
         raise FileNotFoundError(path)
     options = dict(reader_options or {})
@@ -238,18 +274,25 @@ def by_csv(
                         connection.close()
 
     source = rows()
-    try:
-        yield from _batch(
-            source,
-            batch_size=batch_size,
-            skip=_skip(skip),
-            record=record,
-            checkpoint=checkpoint
-            or _key("csv", [files, selected_query, list(parameters)]),
-            transform=transform,
-        )
-    finally:
-        source.close()
+    source_checkpoint = checkpoint or _key(
+        "csv", [files, selected_query, list(parameters)]
+    )
+
+    def batches() -> Iterator[list[dict[str, Any]]]:
+        """读取并关闭当前 CSV 源。"""
+        try:
+            yield from _batch(
+                source,
+                batch_size=batch_size,
+                skip=skip_position,
+                record=record,
+                checkpoint=source_checkpoint,
+                transform=transform,
+            )
+        finally:
+            source.close()
+
+    return batches()
 
 
 def _sql_rows(
@@ -276,7 +319,7 @@ def _sql_rows(
         if len(set(names)) != len(names):
             raise ValueError("query columns must have unique names")
         for values in cursor:
-            yield dict(zip(names, values))
+            yield dict(zip(names, values, strict=True))
     finally:
         cursor.close()
 
@@ -307,18 +350,36 @@ def by_sqlite(
     Yields:
         严格 JSON 种子批次。
     """
+    integer(batch_size, "batch_size", minimum=1)
+    skip_position = _skip(skip)
+    if type(record) is not dict and record is not None:
+        raise TypeError("record must be a dict or None")
+    if checkpoint is not None and (not isinstance(checkpoint, str) or not checkpoint):
+        raise ValueError("checkpoint must be a non-empty string")
+    if not isinstance(path, str) or not isinstance(conn, sqlite3.Connection):
+        raise TypeError("path must be SQL text and conn must be sqlite3.Connection")
+    if isinstance(parameters, (str, bytes)) or not isinstance(parameters, Sequence):
+        raise TypeError("parameters must be a sequence")
+    if transform is not None and not callable(transform):
+        raise TypeError("transform must be callable or None")
     source = _sql_rows(conn, path, parameters)
-    try:
-        yield from _batch(
-            source,
-            batch_size=batch_size,
-            skip=_skip(skip),
-            record=record,
-            checkpoint=checkpoint or _key("sqlite", [path, list(parameters)]),
-            transform=transform,
-        )
-    finally:
-        source.close()
+    source_checkpoint = checkpoint or _key("sqlite", [path, list(parameters)])
+
+    def batches() -> Iterator[list[dict[str, Any]]]:
+        """读取并关闭当前 SQLite 查询。"""
+        try:
+            yield from _batch(
+                source,
+                batch_size=batch_size,
+                skip=skip_position,
+                record=record,
+                checkpoint=source_checkpoint,
+                transform=transform,
+            )
+        finally:
+            source.close()
+
+    return batches()
 
 
 def by_mongo(
@@ -353,41 +414,62 @@ def by_mongo(
     Yields:
         严格 JSON 种子批次。
     """
-    if hasattr(conn, "find"):
+    integer(batch_size, "batch_size", minimum=1)
+    skip_position = _skip(skip)
+    if record is not None and type(record) is not dict:
+        raise TypeError("record must be a dict or None")
+    if checkpoint is not None and (not isinstance(checkpoint, str) or not checkpoint):
+        raise ValueError("checkpoint must be a non-empty string")
+    if query is not None and not isinstance(query, Mapping):
+        raise TypeError("query must be a mapping or None")
+    if projection is not None and not isinstance(projection, Mapping):
+        raise TypeError("projection must be a mapping or None")
+    if sort is not None and isinstance(sort, (str, bytes)):
+        raise TypeError("sort must be a sequence of field and direction pairs")
+    if transform is not None and not callable(transform):
+        raise TypeError("transform must be callable or None")
+    from pymongo import MongoClient
+    from pymongo.collection import Collection
+    from pymongo.database import Database
+
+    if isinstance(conn, Collection):
         collection = conn
-        if getattr(collection, "name", path) != path:
+        if collection.name != path:
             raise ValueError("path must match the injected Mongo Collection name")
-    elif database is None:
+    elif isinstance(conn, Database):
         collection = conn[path]
-    else:
+    elif isinstance(conn, MongoClient):
+        if database is None:
+            raise ValueError("database is required when conn is a MongoClient")
         collection = conn[database][path]
+    else:
+        raise TypeError("conn must be a Mongo Collection, Database or MongoClient")
     cursor = collection.find(
         dict(query or {}), {"_id": 0} if projection is None else dict(projection)
     )
-    try:
-        if sort:
-            cursor = cursor.sort(list(sort))
-        cursor = cursor.batch_size(integer(batch_size, "batch_size", minimum=1))
-        yield from _batch(
-            cursor,
-            batch_size=batch_size,
-            skip=_skip(skip),
-            record=record,
-            checkpoint=checkpoint
-            or _key(
-                "mongo",
-                [
-                    path,
-                    query,
-                    projection,
-                    database,
-                    [list(item) for item in sort or ()],
-                ],
-            ),
-            transform=transform,
-        )
-    finally:
-        cursor.close()
+    source_checkpoint = checkpoint or _key(
+        "mongo",
+        [path, query, projection, database, [list(item) for item in sort or ()]],
+    )
+
+    def batches() -> Iterator[list[dict[str, Any]]]:
+        """读取并关闭 Mongo 游标。"""
+        try:
+            if sort:
+                cursor.sort(list(sort))
+            cursor.batch_size(batch_size)
+            yield from _batch(
+                cursor,
+                batch_size=batch_size,
+                skip=skip_position,
+                record=record,
+                checkpoint=source_checkpoint,
+                transform=transform,
+            )
+        finally:
+            cursor.close()
+
+    return batches()
 
 
 def by_redis(
@@ -412,6 +494,8 @@ def by_redis(
         TypeError: Redis 键类型或种子类型不符。
     """
     integer(batch_size, "batch_size", minimum=1)
+    if not callable(getattr(conn, "type", None)):
+        raise TypeError("conn must be a synchronous Redis client")
     if key_type not in {"set", "list", "string"}:
         raise ValueError("key_type must be set, list or string")
     if key_type != "string":
@@ -446,6 +530,6 @@ def by_redis(
                     yield json.loads(value)
                 position += len(raw)
 
-    yield from _batch(
+    return _batch(
         values(), batch_size=batch_size, skip=0, record=None, checkpoint="redis"
     )

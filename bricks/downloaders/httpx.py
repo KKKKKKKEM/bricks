@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+from dataclasses import dataclass, field
 from time import monotonic
 
 import httpx
 
 from ..models import Request, Response
-from ._options import TransportOptions
+from ._options import TransportOptions, _failed_response, _redirect_failure
 
 _NETWORK_ERRORS = (
     httpx.TimeoutException,
@@ -17,7 +18,9 @@ _NETWORK_ERRORS = (
     httpx.RemoteProtocolError,
     httpx.TooManyRedirects,
     httpx.DecodingError,
-)  # 可恢复传输失败；本地协议和不支持的协议配置继续传播。
+    httpx.UnsupportedProtocol,
+    httpx.InvalidURL,
+)  # 转换远端传输与重定向失败；请求构造及配置错误继续传播。
 
 
 def _sent_request(source: Request, sent: httpx.Request) -> Request:
@@ -54,7 +57,16 @@ def _response(source: Request, received: httpx.Response, started: float) -> Resp
     Returns:
         包含解压后内容、实际请求快照和重定向历史的领域响应。
     """
-
+    for item in (*received.history, received):
+        failure = _redirect_failure(
+            source,
+            item.status_code,
+            str(item.url),
+            item.headers.multi_items(),
+            started,
+        )
+        if failure is not None:
+            return failure
     history = [
         Response(
             item.content,
@@ -79,7 +91,11 @@ def _response(source: Request, received: httpx.Response, started: float) -> Resp
     )
 
 
-def _failure(source: Request, error: httpx.RequestError, started: float) -> Response:
+def _failure(
+    source: Request,
+    error: httpx.RequestError | httpx.InvalidURL,
+    started: float,
+) -> Response:
     """将 HTTPX 传输失败转换为领域失败响应。
 
     Args:
@@ -91,12 +107,12 @@ def _failure(source: Request, error: httpx.RequestError, started: float) -> Resp
         状态为 -1 的响应，保留异常身份与关联请求，不表示请求未被服务器接收。
     """
 
-    return Response(
-        status_code=-1,
-        error=error,
-        cost=monotonic() - started,
-        request=_sent_request(source, error.request),
+    request = (
+        source
+        if isinstance(error, (httpx.InvalidURL, httpx.UnsupportedProtocol))
+        else _sent_request(source, error.request)
     )
+    return _failed_response(source, error, started).copy(request=request)
 
 
 class HttpxDownloader(TransportOptions):
@@ -210,6 +226,7 @@ class AsyncHttpxDownloader(TransportOptions):
             asyncio.CancelledError: 清理被取消，调用方应确保后续完成关闭。
         """
 
+        session._check_owner()
         await session.client.aclose()
 
     async def fetch(self, request: Request) -> Response:
@@ -270,6 +287,10 @@ def _prepare_session(
 
     if source.proxy is not None:
         raise ValueError("session proxy must be configured on the HTTPX client")
+    if "cookie" in source.headers and client.cookies:
+        raise ValueError(
+            "HTTPX cannot combine an explicit Cookie header with a populated session jar"
+        )
     return client.build_request(
         source.method,
         source.real_url,
@@ -327,6 +348,18 @@ class AsyncHttpxSessionDownloader:
 
     client: httpx.AsyncClient  # 外部拥有的会话，不跨事件循环或账号共享。
 
+    _owner_loop: asyncio.AbstractEventLoop = field(
+        default_factory=asyncio.get_running_loop, init=False, repr=False
+    )  # 创建会话的事件循环。
+
+    def _check_owner(self) -> None:
+        """拒绝在创建会话的事件循环之外使用客户端。"""
+
+        if asyncio.get_running_loop() is not self._owner_loop:
+            raise RuntimeError(
+                "HTTPX async session used outside its creating event loop"
+            )
+
     async def fetch(self, request: Request) -> Response:
         """使用 Slot 所属异步会话下载，不在请求结束时关闭会话。
 
@@ -344,6 +377,7 @@ class AsyncHttpxSessionDownloader:
         """
 
         source = request.copy()
+        self._check_owner()
         started = monotonic()
         prepared = _prepare_session(self.client, source)
         try:

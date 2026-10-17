@@ -9,7 +9,6 @@ from dataclasses import dataclass, replace
 from threading import Event as ThreadEvent
 from threading import RLock
 from typing import Any, cast
-from uuid import uuid4
 
 from interlace import Context as EngineContext
 from interlace import (
@@ -19,13 +18,11 @@ from interlace import (
     Graph,
     Runtime,
     Slot,
-    SlotPool,
 )
 from interlace.engine.errors import (
     ExecutionCancelledError,
     ExecutionControlError,
 )
-from interlace.runtime import EventRouter, GraphWorker
 from interlace.spi import Delivery, DeliveryResult, SlotProvider, Work
 
 from bricks import (
@@ -38,9 +35,9 @@ from bricks import (
     signals,
 )
 from bricks import hooks as hook_api
-from bricks.downloaders.curl_cffi import CurlCffiDownloader
 from bricks.downloaders import SessionDownloader
-from bricks.hooks import Task, _Binding
+from bricks.downloaders.curl_cffi import CurlCffiDownloader
+from bricks.hooks import Binding, Task
 from bricks.plugins import on_request
 from bricks.proxies import Manager, ProxyProvider, format_proxy
 from bricks.queues import (
@@ -56,13 +53,15 @@ from bricks.queues.models import seconds, text
 
 from . import context as domain
 from ._calls import external
+from ._graphs import GraphAssembly
 from ._hooks import run_hooks
-from ._nodes import CrawlNode, HookNode, InitNode
+from ._initialization import run_initialization
+from ._nodes import HookNode
+from ._resources import close_preserving, open_resources, release_slot_resources
 from .context import (
     Context,
     HookContext,
     InitContext,
-    _Initialization,
 )
 
 __all__ = ["Context", "InitContext", "HookContext", "RunReport", "Spider"]
@@ -79,6 +78,22 @@ class RunReport:
 
     initialization: InitRecord | None
     counts: dict[str, int]
+
+
+def _extract_attribute(context: Context, name: str) -> Any:
+    """读取 survey 字段；提前成功时尚未生成的领域数据记为 None。
+
+    Args:
+        context: 已完成任务的上下文。
+        name: 要读取的属性名。
+
+    Returns:
+        属性值，或尚不可用时的 None。
+    """
+    try:
+        return getattr(context, name)
+    except RuntimeError:
+        return None
 
 
 class Spider:
@@ -107,6 +122,7 @@ class Spider:
         _runtime: 自有 Runtime，尚未打开时为 None。
         _backend: 自有队列消费适配器，存储由调用方管理。
         _auto_session: 是否由框架为每个自建 Slot 装配同步下载会话。
+        _poll_interval: QueueBackend 领取循环的轮询间隔秒数。
         _owned_sessions: 框架创建并在执行停止后关闭的会话及其工厂。
         _init_execution: 当前初始化执行，便于 close 协作式取消。
         _operation: 串行化公开运行入口，不限制各种子执行并发。
@@ -137,6 +153,8 @@ class Spider:
         retry_delay: float = 0,
         lease_seconds: float = 30,
         init_timeout: float | None = None,
+        poll_interval: float = 0.05,
+        slot_session_reuse: bool = True,
     ) -> None:
         """沿用业务参数命名，构造时不启动消费者或生成种子。
 
@@ -153,7 +171,8 @@ class Spider:
             max_retry: 首次下载后的额外尝试上限，默认 2。
             retry_delay: 下载重试等待秒数，默认 0。
             lease_seconds: 初始化和交付租约秒数，默认 30。
-            init_timeout: 初始化图超时秒数，默认不限制。
+            poll_interval: 队列轮询间隔秒数，默认 0.05。
+            slot_session_reuse: 是否为自建 Slot 自动复用同步会话，默认 True。
 
         Raises:
             TypeError: 参数不符合公开协议。
@@ -175,6 +194,8 @@ class Spider:
             raise ValueError("max_retry must be a nonnegative integer")
         if type(forever) is not bool:
             raise TypeError("forever must be boolean")
+        if type(slot_session_reuse) is not bool:
+            raise TypeError("slot_session_reuse must be boolean")
         if isinstance(proxy, str):
             proxy = format_proxy(proxy)
         elif proxy is not None and not isinstance(proxy, Manager):
@@ -201,6 +222,7 @@ class Spider:
         self._own_slots = slots is None
         self._auto_session = (
             slots is None
+            and slot_session_reuse
             and not inspect.iscoroutinefunction(self.downloader.fetch)
             and isinstance(self.downloader, SessionDownloader)
             and getattr(self.downloader, "slot_session_reuse", True) is True
@@ -213,7 +235,8 @@ class Spider:
         self._ttl = seconds(lease_seconds)
         self._max_retries = max_retry
         self._retry_delay = seconds(retry_delay, positive=False)
-        self._hooks: list[_Binding] = []
+        self._poll_interval = seconds(poll_interval)
+        self._hooks: list[Binding] = []
         self._installed = False
         self._hook_tasks: dict[str, tuple[Task, ...]] = {}
         self._start_allowed = True
@@ -465,24 +488,8 @@ class Spider:
         state.produced += len(batch)
 
     def build_graphs(self) -> tuple[Graph, Graph]:
-        """构造显式业务节点与 HookNode 组成的初始化、消费两张图。
-
-        Returns:
-            初始化图和消费图；signals 仅沿已声明的端口路由。
-        """
-
-        plan = self.build_crawl_plan(survey=self._survey_results is not None)
-        crawl = Graph.compose(
-            nodes={
-                name: node
-                for name, node in plan.graph.nodes.items()
-                if name in plan.nodes
-            },
-            entrypoint=plan.entrypoint,
-            edges=plan.edges,
-            context_factory=plan.graph.context_factory,
-        )
-        return self.build_init_graph(), crawl
+        """构造初始化图和消费图。"""
+        return GraphAssembly(self).build_graphs()
 
     def _hook_node(self, form: str, **options: Any) -> HookNode:
         """按装配时固定的声明创建独立业务插槽。
@@ -497,153 +504,19 @@ class Spider:
         return HookNode(self, form, self._hook_tasks.get(form, ()), **options)
 
     def build_init_graph(self) -> Graph:
-        """装配种子生产、入队与恢复记录流程。
-
-        Returns:
-            独立的初始化 Graph，手动消费不会启动此图。
-        """
-        hook = self._hook_node
-        initial_nodes = {
-            "before_make_seeds": hook(
-                hook_api.BEFORE_MAKE_SEEDS, initial=True, skip=True
-            ),
-            "make_seeds": InitNode(self, "make_seeds", self._make_seeds),
-            "after_make_seeds": hook(hook_api.AFTER_MAKE_SEEDS, initial=True),
-            "next_seed": InitNode(self, "next_seed"),
-            "before_put_seeds": hook(
-                hook_api.BEFORE_PUT_SEEDS, initial=True, skip=True
-            ),
-            "submit": InitNode(self, "submit", self._put_initial),
-            "after_put_seeds": hook(hook_api.AFTER_PUT_SEEDS, initial=True),
-            "checkpoint": InitNode(self, "checkpoint"),
-            "complete": InitNode(self, "complete"),
-        }
-        initial = Graph(
-            entrypoint="before_make_seeds", context_factory=self._init_context
-        ).add(**initial_nodes)
-        for source, target in (
-            ("before_make_seeds", "make_seeds"),
-            ("make_seeds", "after_make_seeds"),
-            ("after_make_seeds", "next_seed"),
-            ("before_put_seeds", "submit"),
-            ("submit", "after_put_seeds"),
-            ("after_put_seeds", "checkpoint"),
-            ("checkpoint", "next_seed"),
-        ):
-            initial.connect(
-                source, target, source_port="initial", target_port="initial"
-            )
-        initial.connect(
-            "next_seed", "before_put_seeds", source_port="seed", target_port="initial"
-        )
-        for name in initial_nodes:
-            if name != "complete":
-                initial.connect(
-                    name, "complete", source_port="complete", target_port="initial"
-                )
-        for source, target in (
-            ("before_make_seeds", "after_make_seeds"),
-            ("before_put_seeds", "after_put_seeds"),
-        ):
-            initial.connect(source, target, source_port="skip", target_port="initial")
-
-        return initial
+        """构造种子初始化图。"""
+        return GraphAssembly(self).build_init_graph()
 
     def build_crawl_plan(self, *, survey: bool = False) -> ExecutionPlan:
-        """从共享消费定义选择正式存储或手动消费分支。
+        """选择正式消费或手动 survey 的执行计划。
 
         Args:
-            survey: True 选择无默认存储的手动分支，前后插件与提交行为照常执行。
+            survey: 是否选择无默认存储的手动分支。
 
         Returns:
-            校验完整出口的消费计划；可从 plan.graph 继续派生任意入口计划。
+            校验完整出口的消费计划。
         """
-        if type(survey) is not bool:
-            raise TypeError("survey must be boolean")
-        hook = self._hook_node
-
-        crawl_nodes = {
-            "before_make_request": hook(
-                hook_api.BEFORE_MAKE_REQUEST, entry=True, skip=True
-            ),
-            "make_request": CrawlNode(self, "make_request", self.make_request),
-            "after_make_request": hook(hook_api.AFTER_MAKE_REQUEST, retry=True),
-            "before_request": hook(hook_api.BEFORE_REQUEST, retry=True, skip=True),
-            "download": CrawlNode(
-                self, "download", download=self.build_download_node()
-            ),
-            "after_request": hook(hook_api.AFTER_REQUEST, retry=True),
-            "before_parse": hook(hook_api.BEFORE_PARSE, skip=True),
-            "parse": CrawlNode(self, "parse", self.parse),
-            "after_parse": hook(hook_api.AFTER_PARSE),
-            "before_pipeline": hook(hook_api.BEFORE_PIPELINE, skip=True),
-            "pipeline": CrawlNode(self, "pipeline", self.item_pipeline),
-            "survey_pipeline": CrawlNode(self, "pipeline", self._survey_pipeline),
-            "after_pipeline": hook(hook_api.AFTER_PIPELINE),
-            "retry": CrawlNode(self, "retry", max_retries=self._max_retries),
-            "before_retry": hook(hook_api.BEFORE_RETRY),
-            "retry_prepare": CrawlNode(self, "retry_prepare", self.on_retry),
-            "after_retry": hook(hook_api.AFTER_RETRY),
-            "retry_wait": CrawlNode(self, "retry_wait", retry_delay=self._retry_delay),
-            "complete": CrawlNode(
-                self, "complete", self._collect_survey if survey else None
-            ),
-        }
-        crawl = Graph(
-            entrypoint="before_make_request", context_factory=self._crawl_context
-        ).add(**crawl_nodes)
-        normal = (
-            "before_make_request",
-            "make_request",
-            "after_make_request",
-            "before_request",
-            "download",
-            "after_request",
-            "before_parse",
-            "parse",
-            "after_parse",
-            "before_pipeline",
-            "pipeline",
-            "after_pipeline",
-            "complete",
-        )
-        for source, target in zip(normal, normal[1:]):
-            crawl.connect(source, target, source_port="task", target_port="task")
-        crawl.connect(
-            "before_pipeline", "survey_pipeline", source_port="task", target_port="task"
-        )
-        crawl.connect(
-            "survey_pipeline", "after_pipeline", source_port="task", target_port="task"
-        )
-        retry_chain = (
-            "retry",
-            "before_retry",
-            "retry_prepare",
-            "after_retry",
-            "retry_wait",
-            "before_request",
-        )
-        for source, target in zip(retry_chain, retry_chain[1:]):
-            crawl.connect(source, target, source_port="task", target_port="task")
-        for name, node in crawl_nodes.items():
-            if name != "complete":
-                crawl.connect(
-                    name, "complete", source_port="complete", target_port="task"
-                )
-            if "retry" in node.output_ports:
-                crawl.connect(name, "retry", source_port="retry", target_port="task")
-        for source, target in (
-            ("before_make_request", "after_make_request"),
-            ("before_request", "after_request"),
-            ("before_parse", "after_parse"),
-            ("before_pipeline", "after_pipeline"),
-        ):
-            crawl.connect(source, target, source_port="skip", target_port="task")
-        excluded = "pipeline" if survey else "survey_pipeline"
-        return crawl.plan(
-            include=set(crawl_nodes) - {excluded},
-            outputs={("complete", "summary")},
-        )
+        return GraphAssembly(self).build_crawl_plan(survey=survey)
 
     @staticmethod
     def _survey_pipeline(context: domain.Context) -> None:
@@ -679,21 +552,6 @@ class Spider:
                 isolated_downloaders={"default": cast(Downloader, self.downloader)},
             )
         return DownloadNode({"default": cast(Downloader, self.downloader)})
-
-    def _close_owned_sessions(self) -> list[BaseException]:
-        """逆序关闭框架按 Slot 创建的同步下载会话。
-
-        Returns:
-            未吞掉的资源关闭错误列表。
-        """
-        failures = []
-        while self._owned_sessions:
-            factory, session = self._owned_sessions.pop()
-            try:
-                factory.close_session(session)
-            except BaseException as exc:
-                failures.append(exc)
-        return failures
 
     def _make_seeds(self, context: domain.InitContext) -> Any:
         """把恢复记录按 make_seeds(context, **kwargs) 契约传给业务方法。
@@ -733,12 +591,35 @@ class Spider:
             if self._state != "new":
                 raise RuntimeError("plugins must be registered before opening")
             form = text(form, "form")
+            supported = {
+                hook_api.BEFORE_MAKE_SEEDS,
+                hook_api.AFTER_MAKE_SEEDS,
+                hook_api.BEFORE_PUT_SEEDS,
+                hook_api.AFTER_PUT_SEEDS,
+                hook_api.BEFORE_MAKE_REQUEST,
+                hook_api.AFTER_MAKE_REQUEST,
+                hook_api.BEFORE_REQUEST,
+                hook_api.AFTER_REQUEST,
+                hook_api.BEFORE_RETRY,
+                hook_api.AFTER_RETRY,
+                hook_api.BEFORE_PARSE,
+                hook_api.AFTER_PARSE,
+                hook_api.BEFORE_PIPELINE,
+                hook_api.AFTER_PIPELINE,
+                hook_api.BEFORE_START,
+                hook_api.BEFORE_CLOSE,
+                hook_api.ERROR_OCCURRED,
+                hook_api.BEFORE_GET_SEEDS,
+                hook_api.AFTER_GET_SEEDS,
+            }
+            if form not in supported:
+                raise ValueError(f"unsupported Air hook stage: {form}")
             registrations = []
             for event in events:
                 task = Task(**event) if isinstance(event, dict) else event
                 if not isinstance(task, Task):
                     raise TypeError("events must be Task or plugin dictionaries")
-                registrations.append(_Binding(form, task))
+                registrations.append(Binding(form, task))
             self._hooks.extend(registrations)
 
     def install(self) -> None:
@@ -792,7 +673,8 @@ class Spider:
             callback = binding.task.func
             if binding.form in boundary_forms and any(
                 inspect.iscoroutinefunction(value) or inspect.isasyncgenfunction(value)
-                for value in (callback, getattr(callback, "__call__", None))
+                # 可调用实例的异步 __call__ 不被 iscoroutinefunction 识别，需单独检查。
+                for value in (callback, getattr(callback, "__call__", None))  # noqa: B004
             ):
                 raise TypeError(f"{binding.form} requires synchronous hooks")
             groups.setdefault(binding.form, []).append(binding.task)
@@ -827,8 +709,12 @@ class Spider:
                 context,
                 allow_await=False,
             )
+        except signals.Pass:
+            return
         except BaseException as secondary:
-            raise error from secondary
+            # 原错误已有 cause 时保留，否则以错误回调的二次异常作为 cause。
+            cause = secondary if error.__cause__ is None else error.__cause__
+            raise error from cause
 
     def _boundary(self, context: HookContext) -> None:
         """在真实生命周期或领取边界运行同步插槽。
@@ -949,84 +835,7 @@ class Spider:
                 ) from signal
             initial, crawl = self.build_graphs()
 
-            def make_slot() -> Slot:
-                """创建自建槽并按需自动装配同步下载会话。
-
-                Returns:
-                    包含框架托管会话和业务资源命名空间的新 Slot。
-                """
-                slot = Slot()
-                self._owned_proxy_slots.append(slot)
-                if self._auto_session:
-                    factory = cast(SessionDownloader[Any], self.downloader)
-                    proxy = (
-                        self.proxy.get(slot).proxy
-                        if isinstance(self.proxy, Manager)
-                        else self.proxy
-                    )
-                    try:
-                        session = factory.prepare_session(proxy=proxy)
-                    except BaseException:
-                        if isinstance(self.proxy, Manager):
-                            self.proxy.recover(slot)
-                        self._owned_proxy_slots.remove(slot)
-                        raise
-                    slot["crawler.downloaders"] = {"default": session}
-                    slot["crawler.session.proxy"] = proxy
-                    self._owned_sessions.append((factory, session))
-                return slot
-
-            try:
-                slots = (
-                    SlotPool(self.concurrency, factory=make_slot)
-                    if self._slots is None
-                    else self._slots
-                )
-            except BaseException:
-                self._close_owned_sessions()
-                if isinstance(self.proxy, Manager):
-                    for slot in self._owned_proxy_slots:
-                        self.proxy.recover(slot)
-                self._owned_proxy_slots.clear()
-                raise
-            backend = QueueBackend(
-                {self.task_queue.name: self.task_queue},
-                lease_seconds=self._ttl,
-                before_claim=self._before_claim,
-                before_execute=self._after_claim,
-            )
-            runtime: Runtime | None = None
-            try:
-                router = EventRouter(publisher=backend)
-                worker = GraphWorker(
-                    consumer=backend,
-                    emit=router.publish,
-                    emit_local=router.publish_local,
-                )
-                runtime = Runtime(router=router, worker=worker)
-                runtime.register(self.init_graph_name, initial)
-                runtime.register(self.crawl_graph_name, crawl)
-                runtime.route(
-                    self.local_submission_event_name,
-                    graph=self.crawl_graph_name,
-                    queue=self.task_queue.name,
-                )
-            except BaseException:
-                if runtime is not None:
-                    runtime.close()
-                backend.close()
-                if self._own_slots:
-                    slots.close()
-                self._close_owned_sessions()
-                if isinstance(self.proxy, Manager):
-                    for slot in self._owned_proxy_slots:
-                        self.proxy.recover(slot)
-                self._owned_proxy_slots.clear()
-                raise
-            self._slots = slots
-            self._backend = backend
-            self._runtime = runtime
-            self._state = "open"
+            open_resources(self, initial, crawl)
         return self
 
     def _consume(self) -> None:
@@ -1037,71 +846,8 @@ class Spider:
             )
 
     def _run_init(self) -> InitRecord | None:
-        """申请生产权并驱动初始化图，在调用线程定期续租。
-
-        Returns:
-            当前初始化记录，其他生产者运行时返回其快照。
-
-        Raises:
-            BaseException: 生产、续租、取消或断点写入失败。
-        """
-        lease = self.task_queue.acquire_init(uuid4().hex, lease_seconds=self._ttl)
-        if lease is None:
-            return self.task_queue.initialization()
-        previous = self.task_queue.initialization()
-        state = _Initialization(
-            lease,
-            {} if previous is None or previous.progress is None else previous.progress,
-        )
-        execution: Execution | None = None
-        failure: BaseException | None = None
-        try:
-            with self._lifecycle:
-                if self._stopping.is_set():
-                    raise ExecutionCancelledError("spider is stopping")
-                execution = self.runtime.start(
-                    self.init_graph_name,
-                    state,
-                    timeout=self._init_timeout,
-                    options=self._options,
-                )
-                self._init_execution = execution
-            heartbeat = time.monotonic() + self._ttl / 3
-            while not execution.wait(min(0.05, max(0, heartbeat - time.monotonic()))):
-                if self._stopping.is_set():
-                    execution.cancel()
-                if time.monotonic() >= heartbeat:
-                    lease = self.task_queue.renew_init(lease, lease_seconds=self._ttl)
-                    heartbeat = time.monotonic() + self._ttl / 3
-            execution.result()
-        except BaseException as exc:
-            failure = exc
-            if execution is not None:
-                execution.cancel()
-                execution.wait()
-        finally:
-            with self._lifecycle:
-                self._init_execution = None
-            if state.iterator is not None:
-                close = getattr(state.iterator, "close", None)
-                if close is not None:
-                    try:
-                        close()
-                    except BaseException as exc:
-                        failure = failure or exc
-        try:
-            if failure is None:
-                self.task_queue.save_init(lease, state.progress)
-                self.task_queue.finish_init(lease, success=True)
-            else:
-                self.task_queue.finish_init(lease, success=False, error=str(failure))
-        except BaseException as cleanup:
-            if failure is not None:
-                raise failure from cleanup
-            raise
-        if failure is not None:
-            raise failure
-        return self.task_queue.initialization()
+        """申请生产权并驱动初始化图。"""
+        return run_initialization(self)
 
     def run_init(self) -> InitRecord | None:
         """只运行初始化；资源保留供后续消费或上下文退出关闭。
@@ -1208,15 +954,10 @@ class Spider:
                 primary = exc
                 raise
             finally:
-                try:
-                    self.close()
-                except BaseException as cleanup:
-                    if primary is not None and primary is not cleanup:
-                        raise primary from cleanup
-                    raise
+                close_preserving(self, primary)
             return (
                 [
-                    {name: getattr(context, name) for name in fields}
+                    {name: _extract_attribute(context, name) for name in fields}
                     for context in results
                 ]
                 if fields
@@ -1296,12 +1037,7 @@ class Spider:
             primary = exc
             raise
         finally:
-            try:
-                self.close()
-            except BaseException as cleanup:
-                if primary is not None and primary is not cleanup:
-                    raise primary from cleanup
-                raise
+            close_preserving(self, primary)
 
     def run_all(self, *, timeout: float | None = None) -> RunReport:
         """先启动消费，再生产种子，排空后关闭本实例资源。
@@ -1357,12 +1093,7 @@ class Spider:
                 primary = exc
                 raise
             finally:
-                try:
-                    self.close()
-                except BaseException as cleanup:
-                    if primary is not None and primary is not cleanup:
-                        raise primary from cleanup
-                    raise
+                close_preserving(self, primary)
 
     def close(self) -> None:
         """停止领取，协作式取消初始化，等待已接受工作并关闭自有资源。
@@ -1424,19 +1155,7 @@ class Spider:
                     )
                 except BaseException as exc:
                     failures.append(exc)
-            failures.extend(self._close_owned_sessions())
-            if isinstance(self.proxy, Manager):
-                for slot in self._owned_proxy_slots:
-                    try:
-                        self.proxy.recover(slot)
-                    except BaseException as exc:
-                        failures.append(exc)
-            self._owned_proxy_slots.clear()
-            if self._own_slots and self._slots is not None:
-                try:
-                    self._slots.close()
-                except BaseException as exc:
-                    failures.append(exc)
+            failures.extend(release_slot_resources(self))
             with self._lifecycle:
                 self._state = "closed"
             if failures:

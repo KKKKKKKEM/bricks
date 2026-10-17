@@ -148,6 +148,16 @@ def test_unsupported_commands_fail(command):
         Request.from_curl(command)
 
 
+def test_compressed_option_and_quoted_cookie_values():
+    """验证浏览器复制的压缩选项和 RFC 引号 Cookie 可导入。"""
+
+    request = Request.from_curl(
+        "curl --compressed -b 'session=\"quoted-value\"' https://example.test"
+    )
+    assert request.headers["Accept-Encoding"] == "gzip, deflate, br, zstd"
+    assert request.cookies["session"] == '"quoted-value"'
+
+
 def test_exported_command_against_real_curl():
     """用真实 cURL 验证导出命令的请求内容。"""
 

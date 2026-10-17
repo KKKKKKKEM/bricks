@@ -9,12 +9,19 @@
 from bricks import Request, UploadFile
 
 form = Request(
-    "https://example.com/submit", method="POST",
-    body={"name": "Alice", "tag": ["a", "b"]}, body_type="form",
+    "https://example.com/submit",
+    method="POST",
+    body={"name": "Alice", "tag": ["a", "b"]},
+    body_type="form",
 )
 upload = Request(
-    "https://example.com/upload", method="POST", body_type="multipart",
-    body={"description": "report", "file": UploadFile("report.txt", b"contents", "text/plain")},
+    "https://example.com/upload",
+    method="POST",
+    body_type="multipart",
+    body={
+        "description": "report",
+        "file": UploadFile("report.txt", b"contents", "text/plain"),
+    },
 )
 ```
 
@@ -55,9 +62,8 @@ Request 可以在请求前 Hook 中原地修改 headers、params、cookies 和 b
 headers 和 params 的 `update()` 遵循普通映射语义；传入另一个多值容器时，只读取每个名称的最后一个值。
 需要保留全部重复值时，使用 `source.raw` 逐项调用 `add(name, value)`，或直接赋值整个容器以构造独立副本。
 
-请求 cookies 是受校验的可变映射，构造、整体赋值和逐项修改均校验名称和值。值使用未加引号的 HTTP cookie-octet
-字符集合：允许空值，不接受空白、控制字符、非 ASCII 字符、双引号、逗号、分号和反斜杠；模型不自动转义或编码。
-批量 `update()` 按普通映射语义逐项执行，后续项失败不会撤销此前成功的项。
+请求 cookies 是受校验的可变映射，构造、整体赋值和逐项修改均校验名称和值。值允许为空或符合 HTTP cookie-octet 的未引号形式，
+也可使用一对双引号包围 cookie-octet；模型不自动转义或编码。批量 `update()` 按普通映射语义逐项执行，后续项失败不会撤销此前成功的项。
 
 ## cURL 导入与导出
 
@@ -69,10 +75,11 @@ command = request.to_curl()
 ```
 
 导入只解析单条 POSIX cURL 命令，不执行 shell、不展开变量、不读取文件。支持 URL、`-X`、重复 `-H`、
-`-b` 内联 Cookie、`-A`、`-e`、`-u user:password`、`-x`、`-m`、`-L`、`-G`、`-I`、
+`-b` 内联 Cookie、`-A`、`-e`、`-u user:password`、`-x`、`-m`、`-L`、`-G`、`-I`、`--compressed`、
 `-d`、`--data-raw`、`--data-binary`、`--data-urlencode`、`--json`、`-F` 和 `--form-string`。
 可忽略的输出控制选项包括 `-s`、`-S`、`-i`、`-v`。不同请求体选项族混用、多个 URL 和未支持的选项会报错，
-包括模型无法表达的 `--insecure` 和 `--compressed`。不支持 Bash 的 `$'...'` 转义字符串或 PowerShell 语法。
+包括模型无法表达的 `--insecure`。`--compressed` 设置 `Accept-Encoding`；curl 运行时仍负责解压，Bricks 的模型不模拟其他 curl 编码配置。
+不支持 Bash 的 `$'...'` 转义字符串或 PowerShell 语法。
 
 导入遵循 cURL 的默认设置：GET、不跟随重定向、不限时；存在 body 时默认 POST。已编码请求体保留为字节，
 不重新解析 JSON。HTTP 方法限定为 GET、HEAD、POST、PUT、DELETE、CONNECT、OPTIONS、TRACE、PATCH。
@@ -91,7 +98,7 @@ command = upload.to_curl(body_file="request-body.bin")
 
 ## Response 与 Cookie
 
-Response 保存服务器响应或未获得正常响应时的内部错误。`status_code` 为 100–599 时表示服务器返回了 HTTP
+Response 保存服务器响应或未获得正常响应时的内部错误。`status_code` 为 100–999 时表示服务器返回了 HTTP
 状态，`error` 必须为 None；`status_code=-1` 时必须提供 Exception 对象，`reason` 缺省时取异常消息或类名。
 异常身份及原始异常链会保留，方便按类型处理。引擎控制异常和取消信号继续传播，不转换为内部失败响应。
 `-1` 不保证服务器没有收到请求，不能据此判断重复发送是否安全。
@@ -100,7 +107,9 @@ Response 保存服务器响应或未获得正常响应时的内部错误。`stat
 from bricks import Response
 
 failed = Response(status_code=-1, error=ConnectionError("proxy unavailable"))
-response = Response(b"text", url="https://example.com", headers={"Set-Cookie": "session=abc; Path=/"})
+response = Response(
+    b"text", url="https://example.com", headers={"Set-Cookie": "session=abc; Path=/"}
+)
 response.encoding = "utf-8"
 response.content = b"updated by hook"
 cookies = response.cookies.to_string()
@@ -137,7 +146,9 @@ from bricks import Items
 
 items = Items([{"title": "News", "url": "/1"}, {"title": "Other", "url": "/1"}])
 titles = items.values("title")
-result = items.filter(lambda row: row.get("url")).unique("url").rename({"title": "name"})
+result = (
+    items.filter(lambda row: row.get("url")).unique("url").rename({"title": "name"})
+)
 records = result.to_list()
 ```
 

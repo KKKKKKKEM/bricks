@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from time import monotonic
 from typing import Any
 
-from curl_cffi import CurlECode
+from curl_cffi import CurlECode, CurlOpt
 from curl_cffi import requests as curl_requests
 from curl_cffi.requests.exceptions import RequestException
 
 from ..models import Request, Response
-from ._options import TransportOptions
+from ._options import (
+    TransportOptions,
+    _async_ephemeral_session,
+    _ephemeral_session,
+    _failed_response,
+    _redirect_failure,
+)
 
 _TRANSPORT_ERRORS = frozenset(
     {
@@ -19,7 +26,7 @@ _TRANSPORT_ERRORS = frozenset(
         CurlECode.COULDNT_RESOLVE_HOST,
         CurlECode.COULDNT_CONNECT,
         CurlECode.WEIRD_SERVER_REPLY,
-        CurlECode.PARTIAL_FILE,
+        CurlECode.UNSUPPORTED_PROTOCOL,
         CurlECode.OPERATION_TIMEDOUT,
         CurlECode.SSL_CONNECT_ERROR,
         CurlECode.TOO_MANY_REDIRECTS,
@@ -50,12 +57,23 @@ def _response(
     Returns:
         最终响应及仅含 URL、状态、响应头的重定向历史。
     """
-
+    response_headers = [
+        (name, value or "") for name, value in received.headers.multi_items()
+    ]
+    for item in (*received.history, received):
+        item_headers = [
+            (name, value or "") for name, value in item.headers.multi_items()
+        ]
+        failure = _redirect_failure(
+            source, item.status_code, item.url, item_headers, started
+        )
+        if failure is not None:
+            return failure
     return Response(
         received.content,
         status_code=received.status_code,
         url=received.url,
-        headers=[(name, value or "") for name, value in received.headers.multi_items()],
+        headers=response_headers,
         reason=received.reason,
         cost=monotonic() - started,
         request=source,
@@ -88,11 +106,12 @@ def _failure(source: Request, error: RequestException, started: float) -> Respon
         RequestException: 配置、资源或未知错误，不作为网络失败恢复。
     """
 
-    if error.code not in _TRANSPORT_ERRORS:
+    if error.code not in _TRANSPORT_ERRORS and not (
+        source.allow_redirects
+        and "redirect target url could not be parsed" in str(error).casefold()
+    ):
         raise error
-    return Response(
-        status_code=-1, error=error, request=source, cost=monotonic() - started
-    )
+    return _failed_response(source, error, started)
 
 
 def _parameters(source: Request, *, impersonate: str | None = None) -> dict[str, Any]:
@@ -118,6 +137,15 @@ def _parameters(source: Request, *, impersonate: str | None = None) -> dict[str,
     }
 
 
+def _check_cookie_header(client: Any, source: Request) -> None:
+    """拒绝无法阻止会话 Jar 合并的显式 Cookie 请求头。"""
+
+    if "cookie" in source.headers and len(client.cookies):
+        raise ValueError(
+            "curl_cffi cannot send an explicit Cookie header with a populated session jar"
+        )
+
+
 def _fetch(
     client: curl_requests.Session, source: Request, *, impersonate: str | None = None
 ) -> Response:
@@ -135,6 +163,7 @@ def _fetch(
         Exception: 非传输异常继续传播。
     """
 
+    _check_cookie_header(client, source)
     started = monotonic()
     try:
         received = client.request(**_parameters(source, impersonate=impersonate))
@@ -164,6 +193,7 @@ async def _afetch(
         Exception: 非传输异常继续传播。
     """
 
+    _check_cookie_header(client, source)
     started = monotonic()
     try:
         received = await client.request(**_parameters(source, impersonate=impersonate))
@@ -210,7 +240,7 @@ class _CurlOptions(TransportOptions):
             "trust_env": self.trust_env,
             "max_redirects": self.max_redirects,
             "impersonate": self.impersonate,
-            "default_headers": False,
+            "curl_options": {CurlOpt.REDIR_PROTOCOLS_STR: b"http,https"},
             "proxies": {"all": proxy or ""}
             if proxy is not None or not self.trust_env
             else None,
@@ -271,11 +301,10 @@ class CurlCffiDownloader(_CurlOptions):
         """
 
         source = request.copy()
-        session = self.prepare_session(proxy=source.proxy)
-        try:
+        with _ephemeral_session(
+            self.prepare_session, self.close_session, source.proxy
+        ) as session:
             return _fetch(session.client, source, impersonate=impersonate)
-        finally:
-            self.close_session(session)
 
 
 class AsyncCurlCffiDownloader(_CurlOptions):
@@ -304,6 +333,7 @@ class AsyncCurlCffiDownloader(_CurlOptions):
             session: 已无在途请求的异步会话。
         """
 
+        session._check_owner()
         if not session._closed:
             await session.client.close()
             session._closed = True
@@ -340,11 +370,10 @@ class AsyncCurlCffiDownloader(_CurlOptions):
         """
 
         source = request.copy()
-        session = await self.prepare_session(proxy=source.proxy)
-        try:
+        async with _async_ephemeral_session(
+            self.prepare_session, self.close_session, source.proxy
+        ) as session:
             return await _afetch(session.client, source, impersonate=impersonate)
-        finally:
-            await self.close_session(session)
 
 
 @dataclass(frozen=True)
@@ -397,9 +426,21 @@ class AsyncCurlCffiSessionDownloader:
     """复用当前事件循环中的外部异步会话。"""
 
     client: curl_requests.AsyncSession  # 调用方拥有的独立会话，不跨事件循环或账号共享。
-    _closed: bool = field(
-        default=False, init=False, repr=False
-    )  # 成对关闭完成标记，确保重复关闭安全。
+
+    _owner_loop: asyncio.AbstractEventLoop = field(
+        default_factory=asyncio.get_running_loop, init=False, repr=False
+    )  # 创建会话的事件循环。
+
+    def _check_owner(self) -> None:
+        """拒绝在创建会话的事件循环之外使用客户端。"""
+
+        if asyncio.get_running_loop() is not self._owner_loop:
+            raise RuntimeError(
+                "curl_cffi async session used outside its creating event loop"
+            )
+
+    _closed: bool = field(default=False, init=False, repr=False)
+    # 成对关闭完成标记，确保重复关闭安全。
 
     async def fetch(self, request: Request) -> Response:
         """异步使用 Slot 会话，不在下载后关闭资源。
@@ -435,6 +476,7 @@ class AsyncCurlCffiSessionDownloader:
         """
 
         source = request.copy()
+        self._check_owner()
         if source.proxy is not None:
             raise ValueError(
                 "session proxy must be configured when preparing the session"

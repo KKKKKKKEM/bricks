@@ -14,6 +14,7 @@ Request 不保存下载器实例或注册名称。下载能力属于爬虫领域
 class Downloader(Protocol):
     def fetch(self, request: Request) -> Response: ...
 
+
 class AsyncDownloader(Protocol):
     async def fetch(self, request: Request) -> Response: ...
 ```
@@ -22,8 +23,10 @@ class AsyncDownloader(Protocol):
 下载器不把当前请求、响应保存在共享实例中。节点不关闭注入的实例，外部资源由调用方管理；
 需要跨 Work 延续的会话资源按 Slot 隔离，使用本章的会话下载器，不将业务登录态放入全局共享实例。
 
-网络传输失败由下载器转换为 `Response(status_code=-1, error=...)`。HTTP 4xx/5xx 保留正常 HTTP 响应；
+网络传输失败由下载器转换为 `Response(status_code=-1, error=...)`。允许自动跟随重定向时，无法解析或非 HTTP(S) 的目标也统一转换为该失败响应；HTTP 4xx/5xx 保留正常 HTTP 响应。
 配置错误、程序错误、取消和引擎控制异常必须继续传播。下载节点不通过捕获所有 Exception 将程序错误伪装成网络失败。
+Request 可用显式 `Cookie` 请求头发送原始 Cookie 字符串，此时不设置 `Request.cookies`；两者同时设置会在模型校验时拒绝。
+requests 保留该头原值且不合并 Jar；curl_cffi、HTTPX、wreq 与 primp 在会话 Jar 已有 Cookie 时明确拒绝，以避免静默合并或覆盖。
 
 ## 节点和动态选择
 
@@ -142,7 +145,7 @@ HTTPX 是可选依赖，先执行 `uv sync --extra httpx`。默认节点不会�
 `bricks.downloaders.httpx` 提供 HttpxDownloader 和 AsyncHttpxDownloader：
 
 - 每次 fetch 创建并关闭一个独立 Client/AsyncClient，重定向链内复用会话，调用之间不共享 Cookie 或连接池。
-- 发送 real_url 和已编码 body，保留重复请求头；显式 Cookie 与 Cookie 请求头的合并、重定向规则由 HTTPX 处理。
+  HTTPX 在客户端 CookieJar 为空时保留显式 Cookie 请求头原值；Jar 非空时明确拒绝。Request.cookies 与 Cookie 请求头不能同时设置。
 - 自动解压 HTTPX 支持的响应编码，保留原始响应头和重复 Set-Cookie。因此 size() 可以与 Content-Length 不同。
 - allow_redirects 决定是否跟随重定向；max_redirects 默认 20，超限返回内部失败。没有网络或状态码自动重试。
 - Cookie 在当前重定向链内按照 HTTPX 的 CookieJar 更新，包括 Set-Cookie 的删除操作；不同 fetch 不保留登录状态。
@@ -152,8 +155,8 @@ HTTPX 是可选依赖，先执行 `uv sync --extra httpx`。默认节点不会�
 - 最终 Response.cost 记录本次 fetch 从会话创建前至响应转换时的耗时；history 的 cost 使用 HTTPX 的单次请求耗时。
 - 成功响应的 request 保存最终实际请求的 URL、方法、请求头与 body；history 保存每次重定向响应及其对应请求。
   快照的 body_type 为 raw，查询参数已合入 URL，Cookie 位于实际请求头，便于检查实际发送内容。
-- 超时、连接、代理、远端协议、重定向超限和解码失败转换为内部失败；本地协议错误与不支持的协议继续抛出。
-  内部失败保留 HTTPX 异常及其关联请求；不保证保留失败之前的全部重定向历史，也不保证服务器没有收到请求。
+超时、连接、代理、远端协议、不支持的重定向协议、重定向超限、解码失败及远端给出的非法重定向 URL 转换为内部失败。
+请求构造和本地配置错误继续传播；内部失败保留 HTTPX 异常及其关联请求，不保证保留此前重定向历史或服务器未收到请求。
 
 HTTPX 下载适配器采用缓冲响应和内存上传，不承担流式传输、浏览器操作、业务重试或持久化。
 浏览器下载、Air 图内重试和存储插件分别见[浏览器下载](04-browser-download.md)、
@@ -275,8 +278,7 @@ Client 代理等设置由装配方分别配置，框架不从已有 Client 猜�
 ### 通过 Context 覆盖指纹
 
 `crawler.fingerprint.impersonate` 接受 curl_cffi 支持的浏览器指纹名称，
-例如 `"chrome"`、`"safari"`。缺省或显式 None 沿用下载器/Session 的 impersonate，
-与 curl_cffi requests-like 接口一致，None 不表示清除会话预设。
+例如 `"chrome"`、`"safari"`。显式 None 不执行指纹覆盖，也不要求所选下载器支持指纹请求；curl_cffi 沿用下载器或 Session 的原有 impersonate。
 空字符串、首尾空白或错误类型会在发请求前失败；不支持的浏览器名称由 curl_cffi 抛出配置异常。
 
 ```python

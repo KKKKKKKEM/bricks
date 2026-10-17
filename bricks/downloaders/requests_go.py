@@ -9,17 +9,22 @@ from time import monotonic
 from urllib.parse import urlsplit
 
 import requests
-import requests_go  # type: ignore[import-untyped]
-from requests_go import tls_config  # type: ignore[import-untyped]
-from requests_go.tls_client.exceptions import TLSClientExeption  # type: ignore[import-untyped]
+import requests_go
+from requests_go import tls_config
+from requests_go.tls_client.exceptions import TLSClientExeption
 
 from ..models import Request, Response
-from ._options import TransportOptions
+from ._options import (
+    TransportOptions,
+    _check_duplicate_headers,
+    _ephemeral_session,
+    _failed_response,
+)
 from ._requests_common import (
-    _StrictHostCookieSession,
     _request_cookies,
     _response,
     _sent_request,
+    _StrictHostCookieSession,
 )
 
 
@@ -161,11 +166,10 @@ class RequestsGoDownloader(TransportOptions):
         """
 
         source = request.copy()
-        session = self.prepare_session(proxy=source.proxy)
-        try:
+        with _ephemeral_session(
+            self.prepare_session, self.close_session, source.proxy
+        ) as session:
             return session._fetch(source, impersonate)
-        finally:
-            self.close_session(session)
 
 
 @dataclass
@@ -232,9 +236,7 @@ class RequestsGoSessionDownloader:
 
         if self._closed:
             raise RuntimeError("requests-go session is closed")
-        names = [name.lower() for name, _ in source.headers.raw]
-        if len(names) != len(set(names)):
-            raise ValueError("requests-go does not support duplicate request headers")
+        names = _check_duplicate_headers(source, "requests-go")
         url = urlsplit(source.real_url)
         if url.scheme == "https":
             if self.client.verify is not False:
@@ -285,14 +287,13 @@ class RequestsGoSessionDownloader:
         ) as error:
             if any(isinstance(item, TLSClientExeption) for item in error.args):
                 raise
-            return Response(
-                status_code=-1,
-                error=error,
-                request=_sent_request(source, error.request)
-                if isinstance(error.request, requests.PreparedRequest)
-                else source,
-                cost=monotonic() - started,
+            sent = error.request
+            request = (
+                _sent_request(source, sent)
+                if isinstance(sent, requests.PreparedRequest)
+                else source
             )
+            return _failed_response(source, error, started).copy(request=request)
         finally:
             if previous_adapter is not self.client.get_adapter("https://"):
                 previous_adapter.close()

@@ -145,9 +145,9 @@ class Response:
         if not isinstance(content, bytes):
             raise TypeError("response content must be bytes")
         if type(status_code) is not int or not (
-            status_code == -1 or 100 <= status_code <= 599
+            status_code == -1 or 100 <= status_code <= 999
         ):
-            raise ValueError("status_code must be -1 or an HTTP status from 100 to 599")
+            raise ValueError("status_code must be -1 or an HTTP status from 100 to 999")
         if not isinstance(url, str):
             raise TypeError("url must be a string")
         if url:
@@ -179,7 +179,7 @@ class Response:
         if cost is None:
             raise TypeError("cost must be a number")
         url = url or (request.real_url if request is not None else "")
-        response_headers = Headers(headers)
+        response_headers = Headers(headers, validate_values=False)
         if cookies is None:
             if response_headers.get_all("Set-Cookie"):
                 if not url:
@@ -325,3 +325,26 @@ class Response:
             values["cookies"] = None
         values.update(changes)
         return type(self)(**values)
+
+    def __copy__(self) -> Response:
+        """返回字段共享的浅复制响应。"""
+
+        values = {name: getattr(self, name) for name in self.__slots__}
+        instance = type(self).__new__(type(self))
+        for name, value in values.items():
+            object.__setattr__(instance, name, value)
+        return instance
+
+    def __reduce__(self) -> tuple[object, tuple[dict[str, Any]]]:
+        """通过响应构造器支持 pickle 与深复制。"""
+
+        values = {name: getattr(self, name) for name in self.__slots__}
+        values["request"] = self.request
+        values["history"] = self.history
+        return _restore_response, (values,)
+
+
+def _restore_response(values: dict[str, Any]) -> Response:
+    """从 pickle 字段快照重建响应。"""
+
+    return Response(**values)

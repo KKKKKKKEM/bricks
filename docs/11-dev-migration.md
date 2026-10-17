@@ -25,8 +25,7 @@
 | `BEFORE_PIPELINE` 中的 Skip | 跳过 pipeline，仍执行 AFTER_PIPELINE；其他 before 阶段按明确替代数据规则处理 |
 | 启停、领取和错误插槽 | 以 HookContext 在真实边界同步执行；物理线程启停和 ON_* 状态标记不作为 Air 插槽 |
 | `bricks.lib.proxies.*` | `bricks.proxies`；固定/API/Redis/Clash 供应源和 Manager 已迁入 |
-| 全局 manager、线程模式 | 显式 Manager，操作必须提供 Slot；不建立全局或线程局部代理缓存 |
-| `context.clear_proxy()` | 显式丢弃 Slot 中的请求代理并清除地址；不热切固定代理会话 |
+| `context.clear_proxy()` | 普通 Slot 显式丢弃请求代理；自动会话模式拒绝热切固定会话代理 |
 | 代理 `ref` 字符串配置 | 直接构造供应源对象并传给 Spider 或 Manager |
 | Clash 构造时改全局模式 | 改为显式 configure；拒绝占用期间切换共享出口 |
 | Clash 订阅工具 | 独立 extract_nodes/fetch_subscription/cfg_tpl/subscribe，解析与联网分开 |
@@ -42,6 +41,10 @@ Context.success/failure/retry、ResponseAction 和 action/stop 标志已移除�
 进程异常后通过持久租约恢复，但恢复任务不保证回到原 Slot。
 `raise signals.Retry()` 只在 after_make_request、before_request、download、after_request 有效，
 回边经过重试前后插槽返回 before_request；同次图执行保留 Slot，重新领取任务不保证原 Slot。
+
+`on_retry(context)` 可能运行在首次下载之前，因此 `context.response` 并非始终可用。
+有界重试耗尽会让 `run()` 在已接受任务排空后抛出失败；单个 Failure（例如 404）也会使本次运行失败。
+`survey(extract=...)` 对提前 Success 尚未产生的 request、response 或 items 返回 None。
 
 初始化断点不是消费图每个步骤的持久快照。种子读取的稳定排序、Mongo 业务唯一索引、外部写入幂等、
 CSV 并发锁和代理服务的出口稳定性由应用明确装配。

@@ -41,16 +41,16 @@ PyPI 与 TestPyPI 不接受包含直接 URL 依赖的发行包，构建成功不
 正式发布须先将经过验证的 Interlace 版本发布到包索引，再更新 Bricks 的依赖与锁文件并运行跨包验证。
 本地可执行 `uv run --locked python .github/scripts/check_distribution.py dist/*.whl` 检查构建产物。
 
-本地同时开发两个项目时，可显式覆盖当前环境：
+需要在两个项目间临时联调时，可对本地开发环境做显式覆盖。此流程仅用于开发者本机运行示例，测试与 CI 均须使用锁定的远端提交：
 
 ```bash
-uv sync --locked
+uv sync --locked --no-group browser
 uv pip install --editable ../interlace
-uv run --no-sync pytest -q
+uv run --no-sync python -m examples.crawler_download https://example.com
 ```
 
-正式验证与 CI 必须使用锁定的远端版本。修改核心契约时，先在 Interlace 完成契约测试并提交推送，
-再更新 Bricks 的依赖提交和锁文件，运行下载、模型和跨包集成测试。
+正式验证与 CI 必须使用锁定的远端版本，不得通过本地路径或可编辑安装使测试通过。修改核心契约时，
+先在 Interlace 完成契约测试并提交推送，再更新 Bricks 的依赖提交和锁文件，运行下载、模型和跨包集成测试。
 
 ## 可靠性边界
 

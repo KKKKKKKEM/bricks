@@ -2,8 +2,9 @@
 
 from importlib.util import find_spec
 
-import bricks
 from interlace import Node
+
+import bricks
 
 
 def test_crawler_api_uses_interlace_node_types() -> None:

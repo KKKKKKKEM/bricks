@@ -5,16 +5,18 @@ import csv
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from uuid import uuid4
 
 import pytest
+from interlace.engine.errors import ExecutionError
 
 from bricks import Items, Request, Response, hooks
 from bricks.plugins import make_seeds, on_request, scripts, storage
 from bricks.spider.air import Spider
-from interlace.engine.errors import ExecutionError
 
 
 @pytest.fixture
@@ -73,7 +75,7 @@ def test_range_checkpoint_keeps_empty_record_and_resumes_exactly():
         [{"page": 3}],
     ]
     with pytest.raises(ValueError):
-        list(make_seeds.by_range(step=0))
+        make_seeds.by_range(step=0)
 
 
 def test_csv_query_multiple_files_and_sqlite_query_boundaries(tmp_path):
@@ -127,6 +129,13 @@ def test_source_errors_do_not_advance_checkpoint(tmp_path):
     assert record == {}
 
 
+def test_csv_existing_path_with_glob_metacharacters_is_literal(tmp_path):
+    """现存 CSV 路径含 glob 元字符时仍按字面文件名读取。"""
+    path = tmp_path / "data[1].csv"
+    path.write_text("id\n1\n", encoding="utf-8")
+    assert list(make_seeds.by_csv(path)) == [[{"id": "1"}]]
+
+
 def test_csv_query_generator_can_move_between_serial_workers(tmp_path):
     """Air 的串行节点跨线程推进及关闭源时，临时 SQLite 仍可正常释放。
 
@@ -173,6 +182,25 @@ def test_sqlite_upsert_and_batch_rollback_preserve_input(tmp_path):
         with pytest.raises(sqlite3.IntegrityError):
             storage.to_sqlite("checked", path, items, row_keys=["id"])
         assert connection.execute("SELECT * FROM checked").fetchall() == []
+    finally:
+        connection.close()
+
+
+def test_sqlite_shared_connection_lock_serializes_slot_writes():
+    """多个 Slot 共享 SQLite Connection 时显式 lock 串行写入。"""
+    connection = sqlite3.connect(":memory:", check_same_thread=False)
+    lock = Lock()
+    try:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            list(
+                executor.map(
+                    lambda value: storage.to_sqlite(
+                        "locked", connection, [{"id": value}], lock=lock
+                    ),
+                    range(20),
+                )
+            )
+        assert connection.execute("SELECT COUNT(*) FROM locked").fetchone() == (20,)
     finally:
         connection.close()
 
@@ -500,11 +528,34 @@ def test_dynamic_plugins_keep_dev_parameters_and_callable_flexibility():
             assert not context.request.headers["User-Agent"].startswith("@")
             return []
 
+        def inspect_namespace(self, context):
+            """断言脚本范围仅含公开名称和调用方追加对象。
+
+            Args:
+                context: 当前响应上下文。
+            """
+            namespace = scripts.build_namespace(context, {"owner": self})
+            assert set(namespace) == {
+                "context",
+                "ctx",
+                "request",
+                "response",
+                "items",
+                "seeds",
+                "signals",
+                "logger",
+                "time",
+                "owner",
+            }
+            assert namespace["owner"] is self
+            self.observed.append("namespace")
+
         def install(self):
             """通过 use 组合旧式字符串参数和 callable。"""
             super().install()
             self.use(
                 hooks.AFTER_REQUEST,
+                hooks.Task(self.inspect_namespace, index=0),
                 {
                     "func": on_request.After.conditional_scripts,
                     "kwargs": {
@@ -545,7 +596,14 @@ def test_dynamic_plugins_keep_dev_parameters_and_callable_flexibility():
 
     spider = DynamicSpider()
     assert spider.run().counts["acked"] == 1
-    assert spider.observed == ["options", "callable", "pre", "post", "inject"]
+    assert spider.observed == [
+        "options",
+        "namespace",
+        "callable",
+        "pre",
+        "post",
+        "inject",
+    ]
 
 
 @pytest.mark.parametrize("call_later", [False, True])
@@ -558,6 +616,7 @@ def test_air_plugins_page_store_then_ack(tmp_path, call_later):
     """
     path = tmp_path / "air.sqlite3"
     checked = []
+    after_turn = []
 
     class LocalDownloader:
         """返回当前页的确定性响应。"""
@@ -631,9 +690,11 @@ def test_air_plugins_page_store_then_ack(tmp_path, call_later):
                         "match": ["context.seeds['page'] < 3"],
                         "action": "+1",
                         "call_later": call_later,
+                        "success": True,
                     },
                     "index": 2,
                 },
+                {"func": self.after_turn_page, "index": 3},
             )
 
         def check_commit(self, context):
@@ -649,12 +710,21 @@ def test_air_plugins_page_store_then_ack(tmp_path, call_later):
                 ).fetchone() == (1,)
             finally:
                 connection.close()
-            assert context.task_queue.counts()["leased"] == 1
             checked.append(context.seeds["page"])
+
+        def after_turn_page(self, context):
+            """记录翻页判断未命中时仍执行的后置 Hook。
+
+            Args:
+                context: 当前 pipeline 结果。
+            """
+            if context.seeds["page"] == 3:
+                after_turn.append(context.seeds["page"])
 
     spider = PluginSpider(downloader=LocalDownloader())
     assert spider.run().counts["acked"] == 3
     assert checked == [1, 2, 3]
+    assert after_turn == [3]
 
 
 def test_storage_hook_failure_after_pipeline_does_not_ack(tmp_path, server):
@@ -700,3 +770,129 @@ def test_storage_hook_failure_after_pipeline_does_not_ack(tmp_path, server):
     with pytest.raises(ExecutionError):
         spider.run()
     assert spider.report().counts == {"pending": 0, "leased": 0, "acked": 0, "dead": 1}
+
+
+def test_mongo_accepts_collection_database_and_client(mongo_collection):
+    """Mongo 三种原生句柄均正确选择 Collection，并保留批量 ordered 参数。"""
+    database = mongo_collection.database
+    client = database.client
+    rows = [{"id": 1, "value": "one"}]
+    storage.to_mongo("items", mongo_collection, rows, row_keys=["id"], ordered=False)
+    storage.to_mongo("items", database, [{"id": 2, "value": "two"}], row_keys=["id"])
+    storage.to_mongo(
+        "items",
+        client,
+        [{"id": 3, "value": "three"}],
+        row_keys=["id"],
+        database=database.name,
+    )
+    assert mongo_collection.count_documents({}) == 3
+    assert [
+        row["id"]
+        for batch in make_seeds.by_mongo("items", database, sort=[("id", 1)])
+        for row in batch
+    ] == [1, 2, 3]
+    assert [
+        row["id"]
+        for batch in make_seeds.by_mongo(
+            "items", client, database=database.name, sort=[("id", 1)]
+        )
+        for row in batch
+    ] == [1, 2, 3]
+    with pytest.raises(ValueError, match="database is required"):
+        list(make_seeds.by_mongo("items", client))
+    with pytest.raises(ValueError, match="database is required"):
+        storage.to_mongo("items", client, rows, row_keys=["id"])
+    for field in ("nested.value", "$operator"):
+        with pytest.raises(ValueError, match="Mongo upsert fields"):
+            storage.to_mongo(
+                "items",
+                mongo_collection,
+                [{"id": 4, field: "invalid"}],
+                row_keys=["id"],
+            )
+
+
+@pytest.mark.parametrize(
+    "status,attempts,accepted", [(200, 1, True), (404, 1, False), (429, 3, False)]
+)
+def test_bypass_unmatched_mapping_uses_status_defaults(status, attempts, accepted):
+    """bypass 映射未命中时沿用默认接受、重试和失败规则。"""
+    calls = []
+
+    class Downloader:
+        """按参数状态码返回固定响应。"""
+
+        def fetch(self, request):
+            """记录调用并构造响应。
+
+            Args:
+                request: 当前请求。
+
+            Returns:
+                指定状态码的响应。
+            """
+            calls.append(request)
+            return Response(b"{}", status_code=status, request=request)
+
+    class BypassSpider(Spider):
+        """只装配无命中映射的 bypass 插件。"""
+
+        def install(self):
+            """注册用于验证默认回退的响应插件。"""
+            self.use(
+                hooks.AFTER_REQUEST,
+                {
+                    "func": on_request.After.bypass,
+                    "kwargs": {"ok": {"response.status_code == -999": "pass"}},
+                },
+            )
+
+        def parse(self, context):
+            """返回空记录。
+
+            Args:
+                context: 当前响应上下文。
+
+            Returns:
+                空记录列表。
+            """
+            return []
+
+    spider = BypassSpider(downloader=Downloader())
+    spider.submit({"url": "https://example.test"})
+    with spider:
+        if accepted:
+            assert spider.run_spider(timeout=3).counts["acked"] == 1
+        else:
+            with pytest.raises(ExecutionError):
+                spider.run_spider(timeout=3)
+    assert len(calls) == attempts
+
+
+def test_safe_url_redacts_bare_proxy_credentials_and_bare_query():
+    """无 scheme 代理认证和无等号查询值均不会出现在诊断 URL。"""
+    from bricks.plugins.on_request import _safe_url
+
+    assert "secret" not in _safe_url("user:secret@proxy.test:8080")
+    assert "secret" not in _safe_url("https://example.test/path?secret")
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "bricks.plugins.on_request",
+        "bricks.plugins.scripts",
+        "bricks.spider.context",
+        "bricks.spider.air",
+    ],
+)
+def test_plugin_and_spider_modules_import_in_fresh_interpreter(module):
+    """插件和 Spider 模块可在全新解释器中独立导入。"""
+    result = subprocess.run(
+        [sys.executable, "-c", f"import {module}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr

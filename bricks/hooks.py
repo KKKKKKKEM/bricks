@@ -49,7 +49,8 @@ def current(callback: Any) -> Any:
     )
     if not inspect.isfunction(function):
         raise TypeError("hooks.current decorates functions")
-    setattr(function, "__bricks_current_context__", True)
+    # FunctionType 未声明自定义属性，setattr 避免静态类型检查误报。
+    setattr(function, "__bricks_current_context__", True)  # noqa: B010
     return callback
 
 
@@ -98,7 +99,8 @@ class Task:
             not callable(self.match)
             or any(
                 test(candidate)
-                for candidate in (self.match, getattr(self.match, "__call__", None))
+                # 可调用实例的异步 __call__ 不被 iscoroutinefunction 识别，需单独检查。
+                for candidate in (self.match, getattr(self.match, "__call__", None))  # noqa: B004
                 for test in (inspect.iscoroutinefunction, inspect.isasyncgenfunction)
             )
         ):
@@ -153,7 +155,7 @@ class Task:
 
 
 @dataclass(frozen=True)
-class _Binding:
+class Binding:
     """当前实例待绑定的一项阶段声明。
 
     Attributes:
@@ -206,17 +208,18 @@ def on(
         if not inspect.isfunction(function):
             raise TypeError("hooks.on decorates methods")
         task = Task(function, args, {} if kwargs is None else kwargs, index, match)
-        setattr(
+        # FunctionType 未声明自定义属性，setattr 避免静态类型检查误报。
+        setattr(  # noqa: B010
             function,
             "__bricks_hooks__",
-            (_Binding(form, task), *getattr(function, "__bricks_hooks__", ())),
+            (Binding(form, task), *getattr(function, "__bricks_hooks__", ())),
         )
         return callback
 
     return decorate
 
 
-def collect(instance: object) -> tuple[_Binding, ...]:
+def collect(instance: object) -> tuple[Binding, ...]:
     """收集绑定到当前实例的声明，子类同名方法替换父类声明。
 
     Args:
@@ -237,7 +240,7 @@ def collect(instance: object) -> tuple[_Binding, ...]:
             for declaration in getattr(function, "__bricks_hooks__", ()):
                 task = declaration.task
                 result.append(
-                    _Binding(
+                    Binding(
                         declaration.form,
                         Task(
                             getattr(instance, name),

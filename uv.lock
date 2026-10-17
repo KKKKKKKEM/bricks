@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.10, <3.14"
 resolution-markers = [
     "python_full_version >= '3.12'",
@@ -78,6 +78,7 @@ wheels = [
 name = "bricks-py"
 version = "1.0.0"
 source = { editable = "." }
+default-groups = ["browser", "dev"]
 dependencies = [
     { name = "cssselect" },
     { name = "curl-cffi" },
@@ -122,17 +123,17 @@ wreq = [
 ]
 
 [package.dev-dependencies]
-dev = [
+browser = [
     { name = "camoufox" },
-    { name = "httpx" },
-    { name = "mypy" },
     { name = "playwright" },
+]
+dev = [
+    { name = "mypy" },
     { name = "primp" },
     { name = "pymongo" },
     { name = "pytest" },
     { name = "pyyaml" },
     { name = "redis" },
-    { name = "requests" },
     { name = "requests-go" },
     { name = "ruff" },
     { name = "types-jmespath" },
@@ -166,23 +167,23 @@ requires-dist = [
 provides-extras = ["redis", "mongo", "clash", "httpx", "requests", "requests-go", "wreq", "primp", "playwright", "camoufox"]
 
 [package.metadata.requires-dev]
-dev = [
+browser = [
     { name = "camoufox", specifier = "==0.5.6" },
-    { name = "httpx", specifier = ">=0.28,<1" },
-    { name = "mypy", specifier = ">=1.15,<2" },
     { name = "playwright", specifier = "==1.62.0" },
+]
+dev = [
+    { name = "mypy", specifier = ">=1.15,<2" },
     { name = "primp", specifier = "==2.0.0" },
     { name = "pymongo", specifier = ">=4.10,<5" },
     { name = "pytest", specifier = ">=8,<10" },
     { name = "pyyaml", specifier = ">=6,<7" },
     { name = "redis", specifier = ">=6,<7" },
-    { name = "requests", specifier = ">=2.32,<3" },
     { name = "requests-go", specifier = "==1.0.9" },
     { name = "ruff", specifier = ">=0.11,<1" },
-    { name = "types-jmespath", specifier = ">=1.0" },
-    { name = "types-lxml", specifier = ">=2026" },
+    { name = "types-jmespath", specifier = ">=1.0,<2" },
+    { name = "types-lxml", specifier = ">=2026,<2027" },
     { name = "types-pyyaml", specifier = ">=6,<7" },
-    { name = "types-requests", specifier = ">=2.32" },
+    { name = "types-requests", specifier = ">=2.32,<3" },
     { name = "wreq", marker = "python_full_version >= '3.11'", specifier = ">=0.12.1,<0.13" },
 ]
 

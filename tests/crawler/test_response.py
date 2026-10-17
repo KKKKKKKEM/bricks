@@ -3,8 +3,8 @@ import codecs
 from http.cookiejar import CookieJar
 
 import pytest
-
 from interlace.engine.errors import ExecutionCancelledError, NodeTimeoutError
+
 from bricks import Cookies, Request, Response
 
 
@@ -67,7 +67,7 @@ def test_internal_failure_retains_exception_and_cause():
         {"status_code": 0},
         {"status_code": -2},
         {"status_code": True},
-        {"status_code": 600},
+        {"status_code": 1000},
         {"status_code": 200, "error": OSError()},
         {"status_code": -1, "error": "text"},
     ],
@@ -120,7 +120,7 @@ def test_encoding_and_content_hooks_always_refresh_decoding():
         response.encoding = "not-an-encoding"
     assert response.encoding is None
     with pytest.raises(TypeError):
-        setattr(response, "content", "text")  # 验证运行时拒绝非字节内容。
+        response.content = "text"  # 验证运行时拒绝非字节内容。
     with pytest.raises(AttributeError):
         response.status_code = -1
 
@@ -231,3 +231,31 @@ def test_http_statuses_are_responses(status, ok):
     response = Response(status_code=status)
     assert response.error is None
     assert response.ok is ok
+
+
+def test_peer_response_values_are_preserved_and_copyable():
+    """验证异常状态、响应头字节及 Cookie 名不会因对端数据拒绝响应。"""
+
+    import copy
+    import pickle
+
+    response = Response(
+        status_code=999,
+        url="http://example.test/",
+        headers=[("X-Peer", "a\x01\x7f"), ("Set-Cookie", "a[b]=1")],
+    )
+    assert response.headers["x-peer"] == "a\x01\x7f"
+    assert response.cookies.get("a[b]") == "1"
+    assert copy.copy(response).status_code == 999
+    assert pickle.loads(pickle.dumps(response)).headers.raw == response.headers.raw
+    assert copy.deepcopy(response).headers.raw == response.headers.raw
+
+
+@pytest.mark.parametrize(
+    "url", ["http://localhost/", "http://intranet:8080/", "http://[::1]:8000/"]
+)
+def test_cookie_mapping_domain_supports_local_hosts(url):
+    """验证简写 Cookie 可按 localhost、内网和 IPv6 主机匹配。"""
+
+    cookies = Cookies({"a": "b"}, url=url)
+    assert cookies.to_string(url=url) == "a=b"

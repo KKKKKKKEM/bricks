@@ -7,10 +7,10 @@ import multiprocessing
 import os
 import subprocess
 import sys
-import time
 import threading
-from contextlib import ExitStack
+import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import replace
 from threading import Event as ThreadEvent
 from typing import Any
@@ -21,6 +21,7 @@ from interlace import Event, ExecutionLimits, Graph, Node, Ports, Runtime, SlotP
 from interlace.runtime import EventRouter, GraphWorker
 from interlace.spi import Delivery, DeliveryResult, Work
 
+from bricks.parsers import MISSING
 from bricks.queues import (
     LeaseLostError,
     MemoryTaskQueue,
@@ -263,15 +264,15 @@ def test_retry_delay_exhaustion_and_terminal_retention(queue):
     first = queue.claim("worker")
     with pytest.raises(ValueError):
         queue.forget("one")
-    queue.retry(first, delay=0.2, error="temporary")
+    assert queue.retry(first, delay=0.2, error="temporary") == "pending"
     assert queue.claim("worker") is None
     time.sleep(0.3)
     second = queue.claim("worker")
     assert second.attempt == 2
-    queue.retry(second)
+    assert queue.retry(second) == "pending"
     third = queue.claim("worker")
     assert third.attempt == 3
-    queue.retry(third, error="exhausted")
+    assert queue.retry(third, error="exhausted") == "dead"
     assert queue.claim("worker") is None
     assert queue.get("one").status == "dead"
     assert queue.get("one").error == "exhausted"
@@ -346,6 +347,33 @@ def test_competing_claims_and_submission_are_atomic(queue):
     assert queue.get("shared").result == "success"
 
 
+def test_queue_encode_names_parser_missing_sentinel(queue):
+    """任务 JSON 编码在边界明确指出解析器缺失标记。"""
+    with pytest.raises(TypeError, match="MISSING"):
+        queue.put(Work("crawl", inputs={"value": MISSING}))
+
+
+def test_claim_rejects_poison_envelope_without_stopping_queue(queue):
+    """解码失败的已领取信封转为死信，后续任务仍可处理。"""
+    queue._call(
+        "put",
+        id="poison",
+        body='{"version":1,"id":"poison","graph":"crawl","inputs":{},'
+        '"options":{},"limits":{"max_steps":null,"timeout":null},'
+        '"trigger":null,"extra":true}',
+        maximum=3,
+        init=None,
+    )
+    assert queue.claim("worker") is None
+    poisoned = queue._call("get", id="poison")
+    assert poisoned["status"] == "dead"
+    assert "ValueError" in poisoned["error"]
+    work = Work("crawl", id="after-poison")
+    queue.put(work)
+    lease = queue.claim("worker")
+    assert lease is not None and lease.work.id == work.id
+
+
 def test_backend_retries_propagates_errors_and_preserves_unclaimed(queue):
     """适配器遵循 DeliveryResult，关闭保留未领取任务并拒绝新提交。
 
@@ -382,11 +410,51 @@ def test_backend_retries_propagates_errors_and_preserves_unclaimed(queue):
         backend.submit(queue.name, Work("crawl"))
 
 
-def test_backend_heartbeats_and_unbind_wait_for_slot_release(queue):
+def test_backend_wakeup_removes_fixed_polling_throughput_cap(queue):
+    """交付结束立即唤醒领取器，快速任务不受固定轮询间隔限速。"""
+    backend = QueueBackend({queue.name: queue}, poll_interval=0.05)
+    backend.bind(queue.name, lambda delivery: DeliveryResult.ack(), concurrency=1)
+    for index in range(40):
+        backend.submit(queue.name, Work("crawl", id=f"fast-{index}"))
+    started = time.monotonic()
+    try:
+        backend.wait_idle(4)
+        assert time.monotonic() - started < 1.5
+    finally:
+        backend.close()
+
+
+def test_handler_control_failure_is_retried_and_propagated(queue):
+    """处理器控制异常有界重投并传播，不直接 reject 为死信。"""
+    backend = QueueBackend({queue.name: queue}, poll_interval=0.005)
+    retry_started, release = ThreadEvent(), ThreadEvent()
+
+    def handler(delivery: Delivery) -> DeliveryResult:
+        """首次抛出控制异常，第二次等待测试释放后确认。"""
+        if delivery.attempt == 1:
+            raise KeyboardInterrupt()
+        retry_started.set()
+        assert release.wait(3)
+        return DeliveryResult.ack()
+
+    backend.bind(queue.name, handler, concurrency=1)
+    backend.submit(queue.name, Work("crawl", id="control"))
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            backend.wait_idle(3)
+        assert retry_started.wait(1)
+        assert queue._call("get", id="control")["status"] == "leased"
+    finally:
+        release.set()
+        backend.close()
+
+
+def test_backend_heartbeats_and_unbind_wait_for_slot_release(queue, renewals):
     """长执行持续续租，注销会等待执行结束和 Slot 引用释放。
 
     Args:
         queue: 隔离队列。
+        renewals: 续租观察器工厂。
     """
     started, release = ThreadEvent(), ThreadEvent()
     pool = SlotPool(1)
@@ -405,14 +473,16 @@ def test_backend_heartbeats_and_unbind_wait_for_slot_release(queue):
         assert release.wait(5)
         return DeliveryResult.ack()
 
-    backend = QueueBackend({queue.name: queue}, lease_seconds=0.3, poll_interval=0.01)
+    watch = renewals(queue)
+    backend = QueueBackend({queue.name: queue}, lease_seconds=0.6, poll_interval=0.01)
     unbind = backend.bind(queue.name, handler, concurrency=1, slots=pool)
     backend.submit(queue.name, Work("crawl", id="long"))
     try:
         assert started.wait(5)
+        expiry = time.monotonic() + 0.6
         with ThreadPoolExecutor(max_workers=1) as executor:
             closing = executor.submit(unbind)
-            time.sleep(0.6)
+            watch.wait_past(expiry)
             assert not closing.done()
             assert queue.claim("competitor") is None
             assert not backend.idle
@@ -578,6 +648,7 @@ def test_backend_failure_is_observable(queue, mode):
             backend.wait_idle(5)
         if mode != "invalid":
             assert caught.value is error
+            assert queue.get("broken").error == "ValueError: broken"
         assert queue.get("broken").status == "dead"
     finally:
         backend.close()
@@ -741,20 +812,23 @@ def test_queue_default_import_does_not_load_optional_redis():
     assert result.returncode == 0, result.stderr
 
 
-def test_scope_holds_existing_lease_and_defers_ack(queue):
+def test_scope_holds_existing_lease_and_defers_ack(queue, renewals):
     """已有租约在 with 内持续续租，显式确认直到退出才写入。
 
     Args:
         queue: 隔离队列。
+        renewals: 续租观察器工厂。
     """
+    watch = renewals(queue)
     queue.put(make_work("crawl", {"page": 1}, id="scoped"))
-    lease = queue.claim("worker", lease_seconds=0.3)
-    with queue.hold(lease, lease_seconds=0.3) as task:
+    lease = queue.claim("worker", lease_seconds=0.6)
+    with queue.hold(lease, lease_seconds=0.6) as task:
+        expiry = time.monotonic() + 0.6
         assert task.work.id == "scoped"
         work = task.work
         work.inputs["local_note"] = "kept during renewal"
         task.ack(result="success")
-        time.sleep(0.7)
+        watch.wait_past(expiry)
         task.check()
         assert task.work is work
         assert task.work.inputs["local_note"] == "kept during renewal"
@@ -767,12 +841,14 @@ def test_scope_holds_existing_lease_and_defers_ack(queue):
         task.check()
 
 
-def test_scopes_share_one_lazy_thread_and_stop_after_last_exit(queue):
+def test_scopes_share_one_lazy_thread_and_stop_after_last_exit(queue, renewals):
     """多个同时占用共享一个线程；空队列不启动，最后退出后线程停止。
 
     Args:
         queue: 隔离队列。
+        renewals: 续租观察器工厂。
     """
+    watch = renewals(queue)
     before = set(threading.enumerate())
     with queue.reserve("empty") as empty:
         assert empty is None
@@ -784,10 +860,11 @@ def test_scopes_share_one_lazy_thread_and_stop_after_last_exit(queue):
             task = stack.enter_context(queue.reserve("worker", lease_seconds=0.6))
             assert task is not None
             task.ack()
+        expiry = time.monotonic() + 0.6
         added = set(threading.enumerate()) - before
         assert len(added) == 1
         assert next(iter(added)).name == "bricks-queue-renewals"
-        time.sleep(1.3)
+        watch.wait_past(expiry, count=20)
         assert queue.claim("competitor") is None
         assert queue.counts()["leased"] == 20
     assert not next(iter(added)).is_alive()
@@ -931,8 +1008,12 @@ def test_scope_cannot_revive_expired_lease(queue):
     assert queue.get("stale-scope").status == "acked"
 
 
-def test_shared_scope_renewal_failure_does_not_stop_other_tasks():
-    """单项续租失败仍允许其他任务持续续租，并在退出时传播失败。"""
+def test_shared_scope_renewal_failure_does_not_stop_other_tasks(renewals):
+    """单项续租失败仍允许其他任务持续续租，并在退出时传播失败。
+
+    Args:
+        renewals: 续租观察器工厂。
+    """
     failure = ConnectionError("renewal unavailable")
     failed = ThreadEvent()
 
@@ -958,17 +1039,19 @@ def test_shared_scope_renewal_failure_does_not_stop_other_tasks():
             return super().renew(lease, lease_seconds=lease_seconds)
 
     queue = PartialFailureQueue("partial-renewal")
+    watch = renewals(queue)
     queue.put(make_work("crawl", id="bad"))
     queue.put(make_work("crawl", id="good"))
     with pytest.raises(ConnectionError) as caught:
-        with queue.reserve("worker", lease_seconds=0.3) as bad:
-            with queue.reserve("worker", lease_seconds=0.3) as good:
+        with queue.reserve("worker", lease_seconds=0.6) as bad:
+            with queue.reserve("worker", lease_seconds=0.6) as good:
+                expiry = time.monotonic() + 0.6
                 assert bad.work.id == "bad" and good.work.id == "good"
                 bad.ack()
                 assert failed.wait(2)
                 with pytest.raises(ConnectionError):
                     bad.check()
-                time.sleep(0.7)
+                watch.wait_past(expiry)
                 good.check()
                 good.ack()
     assert caught.value is failure
@@ -1191,7 +1274,7 @@ def test_background_storage_failure_reaches_wait_and_close_cleans_threads():
 
     queue = BrokenQueue("broken")
     queue.put(Work("crawl", id="waiting"))
-    backend = QueueBackend({queue.name: queue}, poll_interval=0.005)
+    backend = QueueBackend({queue.name: queue}, lease_seconds=0.08, poll_interval=0.005)
     backend.bind(queue.name, lambda delivery: DeliveryResult.ack(), concurrency=1)
     try:
         with pytest.raises(ConnectionError, match="storage unavailable"):
@@ -1225,6 +1308,7 @@ def test_real_redis_recovers_after_worker_process_exit():
     if not url:
         pytest.skip("set BRICKS_TEST_REDIS_URL for process recovery")
     from redis import Redis
+
     from bricks.queues import TaskLease
 
     name = uuid4().hex

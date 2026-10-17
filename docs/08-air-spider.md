@@ -46,6 +46,8 @@ spider.run()
 | max_retry / retry_delay | 额外重试预算（默认 2）和等待秒数（默认 0）；下载前的 Retry 也消耗预算 |
 | options / limits | 默认 JSON 执行配置及单种子 ExecutionLimits |
 | lease_seconds / init_timeout | 交付和初始化租约秒数，以及初始化图的执行超时 |
+| poll_interval | 队列空轮询间隔秒数，默认 0.05；任务完成会唤醒领取循环 |
+| slot_session_reuse | 是否自动装配并复用每 Slot 同步会话，默认 True；False 使用下载器的独立请求路径 |
 | slots | 借用的本地 SlotProvider，资源归调用方管理 |
 
 这些配置应在打开实例前确定，不在运行中修改。不同进程使用同一队列名称时，必须注册相同版本的业务流程和配置。
@@ -56,7 +58,9 @@ spider.run()
 | make_request(context) | 返回当前 Request；默认执行 Request(**context.seeds) |
 | parse(context) | 返回 Items 或 list[dict]；默认返回请求和响应快照 |
 | item_pipeline(context) | 执行存储并正常返回 None，继续后置插槽与确认收尾 |
-| on_retry(context) | 可选的业务重试准备，返回 None；预算和调度由图负责 |
+| on_retry(context) | 可选的业务重试准备，响应可能尚不存在；返回 None，预算和调度由图负责 |
+
+`on_retry(context)` 可能在首次下载前运行，因此 `response` 尚不存在；重试耗尽错误包含最后响应状态码，或无响应时的重试触发类型。
 
 业务方法支持普通 def 与 async def；异步 make_seeds 应返回同步种子集合，不使用异步生成器。
 同步方法由引擎的执行线程调用，Awaitable 交给引擎的异步运行器等待，不将全部同步业务放入异步循环。
@@ -127,7 +131,9 @@ survey 是手动消费，不是副作用沙箱。默认内存队列按实例隔�
 共享同一任务队列却期待仅处理本次种子。
 
 省略 extract 或传空序列返回完成节点的 Context 列表；指定字段时返回属性映射，均按完成顺序排列。
-提前 Success 会产生尚未经过下载或解析的结果，不要提取尚不存在的属性。
+提前 Success 产生的结果可能尚未经过下载或解析；提取缺失属性时对应值为 None，不影响批次中其他结果。
+run() 会在已接受任务排空后报告任务失败，单项 Failure（例如 404）也会使本次 run() 抛出错误。
+异步 Graph 路径的 ERROR_OCCURRED Hook 同步运行在共享事件循环线程；阻塞型回调会暂停其他 Slot 的异步任务。
 返回的 Context 仅用于读取结果，执行和自建资源已经结束；不是继续提交、发事件或复用已关闭会话的句柄。
 后置插件失败仍传播异常且不 ACK。forever=True 不适合一次性结果收集，survey 会明确拒绝。
 
@@ -143,7 +149,7 @@ seeds 的修改只影响当前交付，不回写原始队列任务或自动重�
 显式参数仍适合需要清楚依赖或复用测试的函数，当前 Context 适合直接 use 的简洁插件，两者可按场景混用。
 
 `context.install(name, value, nx=False)` 将进程内业务资源写入当前 Slot，`context.obtain(name, default=None)`
-先读取 Context 字段，再读取 Slot 资源。`concurrency=N` 时框架维护 N 个长期 Slot，作用类似 dev 的 N 份线程变量，
+只读取 Slot 业务命名空间。`concurrency=N` 时框架维护 N 个长期 Slot，作用类似 dev 的 N 份线程变量，
 但资源身份不绑定物理线程：同一 Slot 即共享，不同 Slot 即隔离。本地优先子任务继续使用原 Slot；Slot 归还池后，
 后续根任务若再次取得它，也能看到尚未清除的资源。
 
@@ -232,6 +238,9 @@ use(form, *events) 接受 Task 或包含 func、args、kwargs、index、match �
 混合回调链始终串行等待，不保证链内回调处于同一操作系统线程，不应依赖线程局部资源。
 Hook 自身的 match 不支持表达式字符串或动态函数路径；需要动态表达式时注册 `bricks.plugins.scripts`
 或 `After.conditional_scripts`。当前 Context 只在回调作用域内可见，不是事件或资源注册表。
+
+异步 Graph 路径的 `ERROR_OCCURRED` 同步运行在共享事件循环线程；阻塞型错误钩子会暂停所有 Slot 的异步工作。
+`run()` 在排空已接受的任务后报告失败；一项失败任务（例如 HTTP 404 被 bypass 判为 Failure）会使整体运行抛错。
 
 图内支持 BEFORE/AFTER_MAKE_SEEDS、BEFORE/AFTER_PUT_SEEDS、BEFORE/AFTER_MAKE_REQUEST、
 BEFORE/AFTER_REQUEST、BEFORE/AFTER_RETRY、BEFORE/AFTER_PARSE、BEFORE/AFTER_PIPELINE。

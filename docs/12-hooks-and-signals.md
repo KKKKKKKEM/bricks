@@ -92,9 +92,9 @@ Signal 继承 BaseException，因此业务代码中的 `except Exception` 不会
 普通业务完成应返回 None。`Success` 是提前结束，后续存储及后置插槽可能被跳过。
 例如在 pipeline 中正常返回会执行 AFTER_PIPELINE 存储插件；在同一位置抛出 Success 则直接进入 complete。
 
-默认 `After.bypass` 对 2xx 正常返回，-1/429/5xx 抛出 Retry，其余抛出 Failure。
+默认 `After.bypass` 对 2xx 正常返回，-1/429/5xx 抛出 Retry，其余抛出 Failure；映射未命中使用相同默认规则。
 显式 `ok(context)` 或可信字符串条件返回 True 时正常继续、False 时抛出 Retry。
-`scripts.is_success` 条件成功时正常继续、失败时缺省抛出 Retry；分页的 `success=True` 会提前结束当前任务。
+`scripts.is_success` 条件成功时正常继续、失败时缺省抛出 Retry；分页的 `success=True` 仅在下一页提交后提前结束任务。
 因此响应展示、计数等需要执行的插件应放在会中断插槽的校验之前。
 
 ## 实际插槽位置
@@ -118,11 +118,11 @@ Signal 继承 BaseException，因此业务代码中的 `except Exception` 不会
 它们的 `HookContext` 提供 target、form、task_queue、queue_name；领取后另有 lease、seeds 和 slot。
 错误插槽提供原异常 error 和原上下文 source。回调不可自行确认或续租 lease，也不能恢复原异常。
 
-非图插槽只接受同步回调，异步声明在启动时失败，运行中返回的 Awaitable 也明确拒绝。
-领取前的普通 Hook 应快速返回；需要等待使用 `raise signals.Wait(seconds)`，
+非图插槽只接受同步回调，异步声明在注册阶段失败，运行中返回的 Awaitable 也明确拒绝。
+领取前的普通 Hook 应快速返回；需要等待使用 `raise signals.Wait(seconds)`，Wait 的 duration 必须大于零。
 后端推迟下一次轮询并继续续租在途任务，不让 Hook 用 sleep 阻塞心跳。
 存储或 Hook 抛出的 TimeoutError 会原样交给调用方，不会被当成短轮询超时吞掉。
-外部关闭先停止新领取并排空本地交付，再等待运行入口退出，队列中留给其他实例的任务继续保留。
+异步 Graph 路径中的 ERROR_OCCURRED 同步运行在共享事件循环线程；阻塞型回调会暂停所有 Slot 的异步任务。
 
 | 非图插槽 | 允许的 signals |
 | --- | --- |
@@ -130,7 +130,7 @@ Signal 继承 BaseException，因此业务代码中的 `except Exception` 不会
 | BEFORE_CLOSE | Pass/Success 停止剩余关闭 Hook，资源清理继续；Failure 报错但仍清理资源 |
 | BEFORE_GET_SEEDS | Pass 放行；Skip 暂缓一轮；Wait 延迟领取 |
 | AFTER_GET_SEEDS | Pass 进入图；Success/Failure 明确终结当前交付，后端校验租约后写回 |
-| ERROR_OCCURRED | 只观察并正常返回；任何二次错误保留为原错误的原因链 |
+| ERROR_OCCURRED | 只观察并正常返回；Pass 停止剩余错误回调，其他二次错误不得覆盖原异常已有的 __cause__ |
 
 初始化 AFTER_PUT_SEEDS 运行时任务已经被存储接受，不能撤销此前入队。
 它正常完成后才保存恢复进度；若异常退出，下一次按旧进度重放并依靠稳定 Work ID 去重。

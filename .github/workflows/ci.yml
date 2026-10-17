@@ -1,9 +1,12 @@
 name: CI
 
 on:
-  push:
   pull_request:
   workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -38,6 +41,7 @@ jobs:
     env:
       BRICKS_TEST_REDIS_URL: redis://127.0.0.1:6379/0
       BRICKS_TEST_MONGO_URL: mongodb://127.0.0.1:27017
+      BRICKS_REQUIRE_SERVICES: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -48,16 +52,46 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: uv sync --locked --python "${{ matrix.python-version }}"
       - name: Install browser runtimes
+        if: matrix.python-version == '3.12'
         run: |
-          uv sync --locked --python "${{ matrix.python-version }}"
           uv run python -m playwright install --with-deps chromium firefox
           uv run python -m camoufox fetch official/stable/152.0.4-beta.30
-      - name: Run tests
+      - name: Run non-browser tests
+        if: matrix.python-version != '3.12'
+        run: uv run --locked --python "${{ matrix.python-version }}" pytest -q --ignore=tests/crawler/test_browsers.py
+      - name: Run full test suite
+        if: matrix.python-version == '3.12'
         run: uv run --locked --python "${{ matrix.python-version }}" pytest -q
 
   static:
-    name: Static checks and build
+    name: Static checks (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run Ruff
+        run: uv run --locked --python "${{ matrix.python-version }}" ruff check bricks tests examples .github/scripts
+      - name: Check formatting
+        run: uv run --locked --python "${{ matrix.python-version }}" ruff format --check bricks tests examples .github/scripts
+      - name: Run mypy
+        run: uv run --locked --python "${{ matrix.python-version }}" mypy bricks
+
+  build:
+    name: Build distributions
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,11 +103,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Run Ruff
-        run: uv run --locked ruff check bricks tests examples .github/scripts
-      - name: Run mypy
-        run: uv run --locked mypy bricks
-      - name: Check formatting
-        run: uv run --locked ruff format --check bricks .github/scripts
+      - name: Check lock file
+        run: uv lock --check
       - name: Build distributions
         run: uv build
+      - name: Check publish readiness
+        continue-on-error: true
+        run: uv run python .github/scripts/check_distribution.py dist/*.whl dist/*.tar.gz

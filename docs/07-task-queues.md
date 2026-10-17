@@ -12,11 +12,10 @@ uv run --locked python -m examples.crawler_queue
 uv sync --locked --extra redis
 ```
 
-Redis 实现使用同步 redis-py 客户端，支持 Redis 7.2 及以上的单实例服务；
-当前测试验证 Redis 7.2，不宣称已经验证 Redis Cluster、Sentinel 或故障切换。
-队列键带有同一 hash tag，不接受前缀中额外的 `{`、`}`。
-默认导入 `bricks` 或 `bricks.queues` 不加载 Redis 库。客户端由调用方创建和关闭，
-应显式配置连接和操作超时，保证后台续租及关闭不会无限等待网络。
+Redis 实现使用同步 redis-py `redis.Redis` 客户端，不支持 RedisCluster；支持 Redis 7.2 及以上单实例服务。
+队列键带有同一 hash tag，使一个 Lua 脚本涉及的多键位于相同 Redis Cluster hash slot；当前实现仍不支持 Cluster，
+不接受前缀中额外的 `{`、`}`。默认导入 `bricks` 或 `bricks.queues` 不加载 Redis 库。客户端由调用方创建和关闭，
+应显式配置连接和操作超时，保证后台续租及关闭不会无限等待。
 
 先启动专用 Redis，再投放任务。在不同终端启动消费命令即可竞争消费同一队列：
 
@@ -182,14 +181,16 @@ runtime = Runtime(router=router, worker=worker)
 ```
 
 `QueueBackend.bind` 返回独立、幂等的注销句柄；多个绑定或进程可以竞争同一存储。
-每个绑定最多预取 concurrency 项，由 Interlace 公开内存后端管理执行线程和 Slot，后台线程周期续租。
-存储故障会停止该绑定继续领取新任务，并向 wait_idle 传播；恢复服务后可注销旧绑定并显式重新装配。
+每个绑定最多预取 concurrency 项，由 Interlace 公开内存后端管理执行线程和 Slot，后台线程周期续租；交付结束时会唤醒领取循环。
+单次续租的暂时存储错误会在本地租约截止前按心跳重试；`LeaseLostError` 只终止对应交付。
+领取遇到暂时存储错误时会退避重试，连续失败约一个租约时长后才停止绑定并向等待方传播错误。
 后台续租不会续期初始化生产者，初始化循环必须自行调用 renew_init。
 
-handler 返回的 `DeliveryResult.ACK` 只确认交付，`RETRY` 要求有界重投，`REJECT` 保留 dead 状态。
+handler 返回的 `DeliveryResult.ACK` 只确认交付，`RETRY` 要求有界重投并直接返回存储结果状态，`REJECT` 保留 dead 状态。
 Interlace 当前 GraphWorker 对普通执行失败返回 REJECT，因此并不会自动重试解析、存储或编程错误。
 请求级重试应由业务 Graph 明确实现；使用底层 WorkHandler 时才由该处理器显式返回 RETRY。
-异常、取消、非法返回值以及存储写回失败会向等待方传播，不因本地执行结束而谎报存储已经确认。
+处理器的取消和 Interlace 执行控制异常先按任务次数限制重投，再向等待方传播；其他处理器异常按 REJECT 规则进入死信。
+非法返回值及存储写回失败会向等待方传播，不因本地执行结束而谎报存储已经确认。
 
 每次经过任务存储的交付都建立新的本地 Slot 链，包括使用 MemoryTaskQueue 时。
 QueueBackend 实现 Interlace 的 `LocalTaskPublisher.submit_local`：本地 Router 已为分支 retain SlotLease，

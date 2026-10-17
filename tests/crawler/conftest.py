@@ -1,4 +1,4 @@
-"""供不同下载器复用的本地 HTTP 服务。"""
+"""测试共享夹具：本地 HTTP 服务、必需服务检查与租约续租观察。"""
 
 import gzip
 import json
@@ -6,9 +6,116 @@ import ssl
 import subprocess
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Event, Thread
+from threading import Condition, Event, Thread
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def require_test_services():
+    """CI 标记必须服务时，缺少 Redis 或 Mongo 地址立即失败。"""
+    import os
+
+    if os.environ.get("BRICKS_REQUIRE_SERVICES") == "1":
+        missing = [
+            name
+            for name in ("BRICKS_TEST_REDIS_URL", "BRICKS_TEST_MONGO_URL")
+            if not os.environ.get(name)
+        ]
+        if missing:
+            pytest.fail(f"required test service URLs are missing: {', '.join(missing)}")
+
+
+class RenewalWatch:
+    """记录续租方法的成功完成时间，让租约测试等待真实续租而不是固定 sleep。
+
+    Attributes:
+        _condition: 保护续租记录并唤醒等待方。
+        _renewed: 凭据 token 到最近一次成功续租完成时间的映射，单位为 time.monotonic 秒。
+    """
+
+    def __init__(self) -> None:
+        """创建空记录。"""
+        self._condition = Condition()
+        self._renewed: dict[str, float] = {}
+
+    def wrap(self, renew):
+        """包装续租方法，成功返回后登记凭据的完成时间，失败原样传播。
+
+        Args:
+            renew: 原续租方法，第一个参数是带 token 的凭据。
+
+        Returns:
+            调用签名与原方法相同的记录包装。
+        """
+
+        def recorded(lease, *args, **kwargs):
+            """调用原续租方法并登记成功时间。
+
+            Args:
+                lease: 当前凭据。
+                *args: 原方法的其他位置参数。
+                **kwargs: 原方法的关键字参数。
+
+            Returns:
+                原方法返回的新凭据。
+            """
+            renewed = renew(lease, *args, **kwargs)
+            with self._condition:
+                self._renewed[lease.token] = time.monotonic()
+                self._condition.notify_all()
+            return renewed
+
+        return recorded
+
+    def wait_past(self, expiry, count=1, timeout=10):
+        """等待至少 count 个凭据在 expiry 之后成功续租。
+
+        expiry 应取进入等待前最后一次设定期限的上界，返回时这些凭据已跨过原期限且刚刚续租，
+        随后的断言拥有完整租约余量。
+
+        Args:
+            expiry: 原期限上界，time.monotonic 秒。
+            count: 需要跨期续租的不同凭据数量。
+            timeout: 最长等待秒数，只用于失败时结束测试。
+
+        Raises:
+            AssertionError: 截止时间内续租数量不足，通常表示租约已丢失或续租停止。
+        """
+        deadline = time.monotonic() + timeout
+        with self._condition:
+            while sum(moment > expiry for moment in self._renewed.values()) < count:
+                remaining = deadline - time.monotonic()
+                assert remaining > 0, "leases were not renewed past their expiry"
+                self._condition.wait(remaining)
+
+
+@pytest.fixture
+def renewals(monkeypatch):
+    """提供续租观察器工厂，测试结束时恢复被包装的方法。
+
+    Args:
+        monkeypatch: pytest 属性替换夹具。
+
+    Returns:
+        接收目标对象和续租方法名并返回 RenewalWatch 的函数。
+    """
+
+    def watch(target, method="renew"):
+        """在目标实例上包装续租方法。
+
+        Args:
+            target: 队列等提供续租方法的对象。
+            method: 续租方法名，默认 renew。
+
+        Returns:
+            记录该方法成功续租的观察器。
+        """
+        watcher = RenewalWatch()
+        monkeypatch.setattr(target, method, watcher.wrap(getattr(target, method)))
+        return watcher
+
+    return watch
 
 
 def _serve(tls_context=None):

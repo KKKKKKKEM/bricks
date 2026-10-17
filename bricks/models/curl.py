@@ -146,6 +146,7 @@ def parse_curl(
         parser.add_argument(*flags, dest=dest, action="append", default=[])
     parser.add_argument("-L", "--location", dest="redirects", action="store_true")
     parser.add_argument("--no-location", dest="redirects", action="store_false")
+    parser.add_argument("--compressed", action="store_true")
     parser.add_argument("-G", "--get", action="store_true")
     parser.add_argument("-I", "--head", action="store_true")
     for flags in [
@@ -179,6 +180,8 @@ def parse_curl(
             headers.add(header[:-1], "")
         else:
             raise ValueError("headers must be inline name:value pairs")
+    if args.compressed:
+        headers.setdefault("Accept-Encoding", "gzip, deflate, br, zstd")
     for name, value in [("User-Agent", args.agent), ("Referer", args.referer)]:
         if value is not None:
             headers.setdefault(name, value)

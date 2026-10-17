@@ -6,6 +6,7 @@ import inspect
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from threading import RLock
 from typing import Protocol, TypedDict, runtime_checkable
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -99,10 +100,20 @@ class Proxy:
         ttl: 占用最长秒数；None 不按时间轮换。不会中断在途重试。
     """
 
-    proxy: str
+    proxy: str = dataclass_field(repr=False)
     auth: Callable[[Request], None] | None = None
     threshold: int | None = None
     ttl: float | None = None
+
+    def __repr__(self) -> str:
+        """返回不含代理认证信息的表示。"""
+        parsed = urlsplit(self.proxy)
+        host = parsed.hostname or ""
+        if parsed.port is not None:
+            host = f"[{host}]:{parsed.port}" if ":" in host else f"{host}:{parsed.port}"
+        authority = f"***@{host}" if parsed.username is not None else host
+        redacted = urlunsplit((parsed.scheme, authority, "", "", ""))
+        return f"Proxy(proxy={redacted!r}, auth={self.auth!r}, threshold={self.threshold!r}, ttl={self.ttl!r})"
 
     def __post_init__(self) -> None:
         """规范地址并校验计数和时长。
@@ -249,7 +260,7 @@ class BaseProxy:
         """
 
 
-@dataclass
+@dataclass(repr=False)
 class _Holding:
     """保存在 Slot 中的一项管理器占用。
 
@@ -266,6 +277,10 @@ class _Holding:
     proxy: Proxy
     acquired: float
     uses: int = 0
+
+    def __repr__(self) -> str:
+        """返回不暴露代理凭据的占用表示。"""
+        return f"_Holding(owner={self.owner!r}, provider={self.provider!r}, proxy={self.proxy!r}, acquired={self.acquired!r}, uses={self.uses!r})"
 
 
 class Manager:
@@ -345,31 +360,32 @@ class Manager:
                 proxy = holding.proxy
                 expired = (
                     proxy.threshold is not None and holding.uses >= proxy.threshold
-                )
-                expired |= (
+                ) or (
                     proxy.ttl is not None
                     and time.monotonic() - holding.acquired >= proxy.ttl
                 )
                 if not expired:
                     return proxy
-                self.recover(slot)
-            last: TimeoutError | None = None
-            for provider in self.providers:
-                remaining = (
-                    None if deadline is None else max(0, deadline - time.monotonic())
-                )
-                try:
-                    proxy = provider.get(timeout=remaining)
-                except TimeoutError as exc:
-                    last = exc
-                    continue
-                if not isinstance(proxy, Proxy):
-                    if inspect.iscoroutine(proxy):
-                        proxy.close()
-                    raise TypeError("ProxyProvider.get must return Proxy")
+        if holding is not None:
+            self.recover(slot)
+        last: TimeoutError | None = None
+        for provider in self.providers:
+            remaining = (
+                None if deadline is None else max(0, deadline - time.monotonic())
+            )
+            try:
+                proxy = provider.get(timeout=remaining)
+            except TimeoutError as exc:
+                last = exc
+                continue
+            if not isinstance(proxy, Proxy):
+                if inspect.iscoroutine(proxy):
+                    proxy.close()
+                raise TypeError("ProxyProvider.get must return Proxy")
+            with self._lock:
                 slot[self.namespace] = _Holding(self, provider, proxy, time.monotonic())
-                return proxy
-            raise TimeoutError("no proxy is available") from last
+            return proxy
+        raise TimeoutError("no proxy is available") from last
 
     def now(self, slot: Slot) -> Proxy | None:
         """查看当前代理，不获取或轮换。
@@ -407,9 +423,11 @@ class Manager:
         """
         with self._lock:
             holding = self._holding(slot)
-            if holding is not None:
-                _completed(holding.provider.recover, holding.proxy)
-                del slot[self.namespace]
+        if holding is not None:
+            _completed(holding.provider.recover, holding.proxy)
+            with self._lock:
+                if slot.get(self.namespace) is holding:
+                    del slot[self.namespace]
 
     def clear(self, slot: Slot) -> None:
         """丢弃失效代理，不将它放回供应池。
@@ -419,9 +437,11 @@ class Manager:
         """
         with self._lock:
             holding = self._holding(slot)
-            if holding is not None:
-                _completed(holding.provider.clear, holding.proxy)
-                del slot[self.namespace]
+        if holding is not None:
+            _completed(holding.provider.clear, holding.proxy)
+            with self._lock:
+                if slot.get(self.namespace) is holding:
+                    del slot[self.namespace]
 
     def fresh(self, slot: Slot, *, timeout: float | None = 30) -> Proxy:
         """显式丢弃后重新获取，供业务决定切换代理时调用。
@@ -433,6 +453,5 @@ class Manager:
         Returns:
             新取得的代理；固定供应源可能返回相同地址。
         """
-        with self._lock:
-            self.clear(slot)
-            return self.get(slot, timeout=timeout)
+        self.clear(slot)
+        return self.get(slot, timeout=timeout)

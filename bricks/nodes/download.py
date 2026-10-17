@@ -290,7 +290,8 @@ class DownloadNode(Node):
             isolated=self._isolated_downloaders,
         )
         downloader = _select(downloaders, self._default, request, self._select)
-        if _IMPERSONATE_OPTION in context.options:
+        impersonate = context.options.get(_IMPERSONATE_OPTION)
+        if impersonate is not None:
             if not isinstance(
                 downloader, FingerprintDownloader
             ) or inspect.iscoroutinefunction(downloader.fetch_with_fingerprint):
@@ -298,7 +299,7 @@ class DownloadNode(Node):
                     "selected downloader does not support synchronous fingerprint requests"
                 )
             response = downloader.fetch_with_fingerprint(
-                request, impersonate=context.options[_IMPERSONATE_OPTION]
+                request, impersonate=impersonate
             )
         else:
             response = downloader.fetch(request)
@@ -388,7 +389,8 @@ class AsyncDownloadNode(Node):
             isolated=self._isolated_downloaders,
         )
         downloader = _select(downloaders, self._default, request, self._select)
-        if _IMPERSONATE_OPTION in context.options:
+        impersonate = context.options.get(_IMPERSONATE_OPTION)
+        if impersonate is not None:
             if not isinstance(
                 downloader, AsyncFingerprintDownloader
             ) or not inspect.iscoroutinefunction(downloader.fetch_with_fingerprint):
@@ -396,7 +398,7 @@ class AsyncDownloadNode(Node):
                     "selected downloader does not support asynchronous fingerprint requests"
                 )
             response = await downloader.fetch_with_fingerprint(
-                request, impersonate=context.options[_IMPERSONATE_OPTION]
+                request, impersonate=impersonate
             )
         else:
             response = await downloader.fetch(request)

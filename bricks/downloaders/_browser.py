@@ -19,6 +19,12 @@ from playwright import async_api as asynchronous
 from playwright import sync_api as synchronous
 
 from ..models import Request, Response
+from ._options import (
+    _async_ephemeral_session,
+    _check_duplicate_headers,
+    _ephemeral_session,
+    _failed_response,
+)
 
 Mode = Literal["page", "api"]
 ContentMode = Literal["html", "response"]
@@ -143,9 +149,7 @@ def validate_request(source: Request, mode: Mode) -> dict[str, str]:
         ValueError: 请求方法、请求体、重定向或头不受当前模式支持。
     """
 
-    names = [name.lower() for name, _ in source.headers.raw]
-    if len(names) != len(set(names)):
-        raise ValueError("browser downloaders do not support duplicate request headers")
+    names = _check_duplicate_headers(source, "browser downloaders")
     if mode == "page":
         if source.method != "GET" or source.body is not None:
             raise ValueError("page mode supports bodyless GET navigation; use api mode")
@@ -186,6 +190,73 @@ def _html_headers(headers: list[tuple[str, str]]) -> list[tuple[str, str]]:
     return [(name, value) for name, value in headers if name.lower() not in stale] + [
         ("Content-Type", "text/html; charset=utf-8")
     ]
+
+
+def _known_network_error(error: Exception) -> bool:
+    """识别 Playwright 报告的网络错误和 API 请求超时。
+
+    Args:
+        error: Playwright 抛出的异常。
+
+    Returns:
+        异常属于已知网络错误时为 True。
+    """
+
+    if not isinstance(error, (synchronous.Error, asynchronous.Error)):
+        return False
+    message = str(error).casefold()
+    markers = (
+        "net::err_",
+        "econnrefused",
+        "econnreset",
+        "econnaborted",
+        "enotfound",
+        "eai_again",
+        "etimedout",
+        "socket hang up",
+        "timed out",
+        "timeout",
+    )
+    return any(marker in message for marker in markers)
+
+
+def _response(
+    source: Request,
+    content: bytes,
+    status_code: int,
+    url: str,
+    headers: list[tuple[str, str]],
+    reason: str,
+    cost: float,
+    *,
+    html: bool = False,
+) -> Response:
+    """以无 I/O 逻辑构造 API 或页面响应。
+
+    Args:
+        source: 本次请求的独立副本。
+        content: 完整缓冲的响应体。
+        status_code: HTTP 响应状态。
+        url: 最终响应 URL。
+        headers: 响应头列表。
+        reason: 状态原因短语。
+        cost: 本次下载耗时秒数。
+        html: 是否将内容标记为 UTF-8 HTML DOM 快照。
+
+    Returns:
+        根据模式创建的领域响应。
+    """
+
+    return Response(
+        content,
+        status_code=status_code,
+        url=url,
+        headers=_html_headers(headers) if html else headers,
+        encoding="utf-8" if html else None,
+        reason=reason,
+        request=source,
+        cost=cost,
+    )
 
 
 @dataclass
@@ -347,7 +418,7 @@ class BrowserSessionDownloader:
                 if mode == "api"
                 else self._navigate(source, headers, started)
             )
-            if result.status_code == -1:
+            if mode == "page" and isinstance(result.error, synchronous.TimeoutError):
                 self.close()
             return result
         except BaseException:
@@ -371,28 +442,33 @@ class BrowserSessionDownloader:
             原始响应体和头，原生接口不提供逐跳历史或实际请求快照。
         """
 
-        received = self.context.request.fetch(
-            source.real_url,
-            method=source.method,
-            headers=headers,
-            data=source.body,
-            timeout=0 if source.timeout is None else source.timeout * 1000,
-            fail_on_status_code=False,
-            ignore_https_errors=not self.options.verify,
-            max_redirects=self.options.max_redirects if source.allow_redirects else 0,
-            max_retries=0,
-        )
         try:
-            return Response(
+            received = self.context.request.fetch(
+                source.real_url,
+                method=source.method,
+                headers=headers,
+                data=source.body,
+                timeout=0 if source.timeout is None else source.timeout * 1000,
+                fail_on_status_code=False,
+                ignore_https_errors=not self.options.verify,
+                max_redirects=self.options.max_redirects
+                if source.allow_redirects
+                else 0,
+                max_retries=0,
+            )
+        except synchronous.Error as error:
+            if not _known_network_error(error):
+                raise
+            return _failed_response(source, error, started)
+        try:
+            return _response(
+                source,
                 received.body(),
-                status_code=received.status,
-                url=received.url,
-                headers=[
-                    (item["name"], item["value"]) for item in received.headers_array
-                ],
-                reason=received.status_text,
-                request=source,
-                cost=monotonic() - started,
+                received.status,
+                received.url,
+                [(item["name"], item["value"]) for item in received.headers_array],
+                received.status_text,
+                monotonic() - started,
             )
         finally:
             received.dispose()
@@ -423,14 +499,17 @@ class BrowserSessionDownloader:
         timeout = 0 if source.timeout is None else source.timeout * 1000
         page.set_default_timeout(timeout)
         page.set_extra_http_headers(headers)
+        self._document = None
         try:
             page.goto(
                 source.real_url, timeout=timeout, wait_until=self.options.wait_until
             )
         except synchronous.TimeoutError as error:
-            return Response(
-                status_code=-1, error=error, request=source, cost=monotonic() - started
-            )
+            return _failed_response(source, error, started)
+        except synchronous.Error as error:
+            if not _known_network_error(error):
+                raise
+            return _failed_response(source, error, started)
         if self.after_load is not None:
             self.after_load(page)
         received = self._document
@@ -443,15 +522,15 @@ class BrowserSessionDownloader:
         ]
         html = self.options.content_mode == "html"
         content = page.content().encode("utf-8") if html else received.body()
-        return Response(
+        return _response(
+            source,
             content,
-            status_code=received.status,
-            url=page.url if html else received.url,
-            headers=_html_headers(response_headers) if html else response_headers,
-            encoding="utf-8" if html else None,
-            reason=received.status_text,
-            request=source,
-            cost=monotonic() - started,
+            received.status,
+            page.url if html else received.url,
+            response_headers,
+            received.status_text,
+            monotonic() - started,
+            html=html,
         )
 
 
@@ -621,7 +700,7 @@ class AsyncBrowserSessionDownloader:
                 if mode == "api"
                 else await self._navigate(source, headers, started)
             )
-            if result.status_code == -1:
+            if mode == "page" and isinstance(result.error, asynchronous.TimeoutError):
                 await self.close()
             return result
         except BaseException:
@@ -645,28 +724,33 @@ class AsyncBrowserSessionDownloader:
             原始 API 响应，不伪造重定向历史。
         """
 
-        received = await self.context.request.fetch(
-            source.real_url,
-            method=source.method,
-            headers=headers,
-            data=source.body,
-            timeout=0 if source.timeout is None else source.timeout * 1000,
-            fail_on_status_code=False,
-            ignore_https_errors=not self.options.verify,
-            max_redirects=self.options.max_redirects if source.allow_redirects else 0,
-            max_retries=0,
-        )
         try:
-            return Response(
+            received = await self.context.request.fetch(
+                source.real_url,
+                method=source.method,
+                headers=headers,
+                data=source.body,
+                timeout=0 if source.timeout is None else source.timeout * 1000,
+                fail_on_status_code=False,
+                ignore_https_errors=not self.options.verify,
+                max_redirects=self.options.max_redirects
+                if source.allow_redirects
+                else 0,
+                max_retries=0,
+            )
+        except asynchronous.Error as error:
+            if not _known_network_error(error):
+                raise
+            return _failed_response(source, error, started)
+        try:
+            return _response(
+                source,
                 await received.body(),
-                status_code=received.status,
-                url=received.url,
-                headers=[
-                    (item["name"], item["value"]) for item in received.headers_array
-                ],
-                reason=received.status_text,
-                request=source,
-                cost=monotonic() - started,
+                received.status,
+                received.url,
+                [(item["name"], item["value"]) for item in received.headers_array],
+                received.status_text,
+                monotonic() - started,
             )
         finally:
             await received.dispose()
@@ -697,14 +781,17 @@ class AsyncBrowserSessionDownloader:
         timeout = 0 if source.timeout is None else source.timeout * 1000
         page.set_default_timeout(timeout)
         await page.set_extra_http_headers(headers)
+        self._document = None
         try:
             await page.goto(
                 source.real_url, timeout=timeout, wait_until=self.options.wait_until
             )
         except asynchronous.TimeoutError as error:
-            return Response(
-                status_code=-1, error=error, request=source, cost=monotonic() - started
-            )
+            return _failed_response(source, error, started)
+        except asynchronous.Error as error:
+            if not _known_network_error(error):
+                raise
+            return _failed_response(source, error, started)
         if self.after_load is not None:
             await self.after_load(page)
         received = self._document
@@ -719,15 +806,15 @@ class AsyncBrowserSessionDownloader:
         content = (
             (await page.content()).encode("utf-8") if html else await received.body()
         )
-        return Response(
+        return _response(
+            source,
             content,
-            status_code=received.status,
-            url=page.url if html else received.url,
-            headers=_html_headers(response_headers) if html else response_headers,
-            encoding="utf-8" if html else None,
-            reason=received.status_text,
-            request=source,
-            cost=monotonic() - started,
+            received.status,
+            page.url if html else received.url,
+            response_headers,
+            received.status_text,
+            monotonic() - started,
+            html=html,
         )
 
 
@@ -815,11 +902,10 @@ class SyncBrowserDownloader(BrowserOptions, ABC):
 
         source = request.copy()
         validate_request(source, self.mode)
-        session = self.prepare_session(proxy=source.proxy)
-        try:
+        with _ephemeral_session(
+            self.prepare_session, self.close_session, source.proxy
+        ) as session:
             return session._fetch(source, self.mode)
-        finally:
-            self.close_session(session)
 
 
 @dataclass(frozen=True)
@@ -919,8 +1005,7 @@ class AsyncBrowserDownloader(BrowserOptions, ABC):
 
         source = request.copy()
         validate_request(source, self.mode)
-        session = await self.prepare_session(proxy=source.proxy)
-        try:
+        async with _async_ephemeral_session(
+            self.prepare_session, self.close_session, source.proxy
+        ) as session:
             return await session._fetch(source, self.mode)
-        finally:
-            await self.close_session(session)

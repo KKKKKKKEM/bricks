@@ -1,17 +1,17 @@
 """验证独立解析器、批量规则和第三方结构化替换契约。"""
 
+import json
+import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
 from io import BytesIO, StringIO
-import json
-import re
 from typing import Any
 
+import pytest
 from cssselect import SelectorError
 from jmespath.exceptions import JMESPathError
 from jsonpath.exceptions import JSONPathError
 from lxml import etree
-import pytest
 
 from bricks.parsers import (
     MISSING,
@@ -70,6 +70,8 @@ def test_markup_encoding_and_explicit_xml_namespaces(tmp_path) -> None:
     assert CssParser(format="xml").extract(
         xml, "x|item", namespaces={"x": "urn:items"}, attribute="id"
     ) == ["1"]
+    declared = '<?xml version="1.0" encoding="UTF-8"?><root><item>值</item></root>'
+    assert XPathParser(format="xml").extract(declared, "//item/text()") == ["值"]
     secret = tmp_path / "secret.txt"
     secret.write_text("never-expand-this", encoding="utf-8")
     document = f'<!DOCTYPE r [<!ENTITY x SYSTEM "{secret.as_uri()}">]><r>&x;</r>'
@@ -311,6 +313,21 @@ def test_css_match_multiple_batches_nested_rows_and_mixed_parsers() -> None:
     ]
 
 
+def test_rows_css_selects_descendants_without_matching_row_itself() -> None:
+    """CSS 字段查询在 Rows 的行元素范围内只选择其后代。"""
+    source = (
+        '<div class="item"><div class="title">A</div></div>'
+        '<div class="item"><div class="title">B</div></div>'
+    )
+    assert CssParser().match(
+        source,
+        Rows(
+            "div.item",
+            {"titles": Rule("div", options={"output": "text"})},
+        ),
+    ) == [{"titles": ["A"]}, {"titles": ["B"]}]
+
+
 def test_match_json_rows_preserve_arrays_and_explicit_null_policy() -> None:
     """记录展开显式进行，数组字段和假值保留，null 回退由规则声明。"""
     parser = JmesPathParser()
@@ -443,6 +460,8 @@ def test_protocol_only_parser_supports_complete_match_and_reuse() -> None:
         {"value": [], "constant": []},
     ]
     rule = Rule("value")
+    assert isinstance(hash(rule), int)
+    assert rule != Rule("value")
     sources = [{"value": i} for i in range(20)]
 
     def run(source: dict[str, int]) -> list[dict[str, Any]]:
@@ -506,28 +525,36 @@ def test_invalid_expressions_propagate_through_groups(
         parser.match(source, {"x": Group((Rule(expression),), default="unused")})
 
 
-def test_callback_errors_and_cancellation_propagate_by_identity() -> None:
-    """转换失败及控制类异常原样传播，不尝试后续候选或默认值。"""
-    for error in (ValueError("conversion failed"), KeyboardInterrupt()):
+@pytest.mark.parametrize(
+    "error", [ValueError("conversion failed"), KeyboardInterrupt()]
+)
+def test_callback_errors_and_cancellation_propagate_by_identity(
+    error: BaseException,
+) -> None:
+    """转换失败及控制类异常原样传播，不尝试后续候选或默认值。
 
-        def fail(value: Any) -> Any:
-            """抛出当前测试的原始异常。
+    Args:
+        error: 转换函数抛出的原始异常。
+    """
 
-            Args:
-                value: 已取得的值。
+    def fail(value: Any) -> Any:
+        """抛出当前测试的原始异常。
 
-            Raises:
-                BaseException: 当前测试指定的异常。
-            """
-            raise error
+        Args:
+            value: 已取得的值。
 
-        with pytest.raises(type(error)) as caught:
-            match(
-                {"x": 1},
-                {"x": Group((Rule("x", transform=fail),), default=2)},
-                parser=MappingParser(),
-            )
-        assert caught.value is error
+        Raises:
+            BaseException: 当前测试指定的异常。
+        """
+        raise error
+
+    with pytest.raises(type(error)) as caught:
+        match(
+            {"x": 1},
+            {"x": Group((Rule("x", transform=fail),), default=2)},
+            parser=MappingParser(),
+        )
+    assert caught.value is error
 
 
 @pytest.mark.parametrize(

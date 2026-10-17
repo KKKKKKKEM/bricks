@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
-from types import MappingProxyType
 
 from ._validation import entries, token
 
@@ -21,15 +20,14 @@ class Headers(Mapping[str, str]):
 
     __slots__ = ("_pairs", "_index")
 
-    def __init__(self, values: HeaderInput | None = None) -> None:
-        """校验请求头并建立保留重复值的有序快照和大小写无关索引。
+    def __init__(
+        self, values: HeaderInput | None = None, *, validate_values: bool = True
+    ) -> None:
+        """构造保留顺序和重复字段的头快照。
 
         Args:
             values: 请求头映射或有序键值对，None 表示空请求头。
-
-        Raises:
-            TypeError: 参数类型或接口实现不符合当前契约。
-            ValueError: 参数值或字段组合不合法。
+            validate_values: 是否拒绝响应侧原样保留的控制字符。
         """
 
         source = values.raw if isinstance(values, Headers) else values
@@ -40,14 +38,19 @@ class Headers(Mapping[str, str]):
             token(name, "header name")
             if not isinstance(value, str):
                 raise TypeError("header values must be strings")
-            if any(
+            if validate_values and any(
                 ord(char) < 32 and char != "\t" or ord(char) == 127 for char in value
             ):
                 raise ValueError("header values must not contain control characters")
             pairs.append((name, value))
             index[name.lower()] = (name, value)
         self._pairs = tuple(pairs)
-        self._index = MappingProxyType(index)
+        self._index = index
+
+    def __reduce__(self) -> tuple[object, tuple[tuple[tuple[str, str], ...]]]:
+        """为复制和 pickle 提供可重建的字段快照。"""
+
+        return _restore_headers, (self.raw,)
 
     @property
     def raw(self) -> tuple[tuple[str, str], ...]:
@@ -119,6 +122,12 @@ class Headers(Mapping[str, str]):
                 return False
             return own == {name.lower(): (value,) for name, value in other.items()}
         return NotImplemented
+
+
+def _restore_headers(values: tuple[tuple[str, str], ...]) -> Headers:
+    """从头字段快照恢复容器，保留响应侧控制字符。"""
+
+    return Headers(values, validate_values=False)
 
 
 class MutableHeaders(Headers, MutableMapping[str, str]):

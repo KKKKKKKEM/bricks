@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 from interlace import Context as EngineContext
 from interlace import Event, Slot
@@ -14,14 +14,14 @@ from interlace.spi import Work
 from bricks import Items, Request, Response
 from bricks.proxies import Manager
 from bricks.queues import InitLease, TaskLease, TaskQueue
-from bricks.queues.models import _LocalSubmission
+from bricks.queues.models import LocalSubmission
 
 if TYPE_CHECKING:
     from .air import Spider
 
 
-_ContextT = TypeVar("_ContextT", bound="_CurrentContext")
-_CURRENT_CONTEXT: ContextVar[_CurrentContext | None] = ContextVar(
+_ContextT = TypeVar("_ContextT", bound="CurrentContext")
+_CURRENT_CONTEXT: ContextVar[CurrentContext | None] = ContextVar(
     "bricks.spider.current_context", default=None
 )  # 当前同步调用链或异步任务的领域 Context，不跨回调保留。
 _RESOURCES = "bricks.context.resources"  # Slot 内由业务按名称共享的资源映射。
@@ -45,7 +45,7 @@ def _affinity(value: Affinity) -> Affinity:
     return value
 
 
-class _CurrentContext:
+class CurrentContext:
     """提供按线程及异步任务隔离的当前领域 Context。"""
 
     @classmethod
@@ -65,10 +65,10 @@ class _CurrentContext:
             raise RuntimeError(
                 f"current domain Context is {type(current).__name__}, not {cls.__name__}"
             )
-        return cast(_ContextT, current)
+        return current
 
 
-def _activate_context(context: _CurrentContext) -> Token[_CurrentContext | None]:
+def activate_context(context: CurrentContext) -> Token[CurrentContext | None]:
     """为当前调用链绑定领域 Context。
 
     Args:
@@ -80,11 +80,11 @@ def _activate_context(context: _CurrentContext) -> Token[_CurrentContext | None]
     return _CURRENT_CONTEXT.set(context)
 
 
-def _reset_context(token: Token[_CurrentContext | None]) -> None:
+def reset_context(token: Token[CurrentContext | None]) -> None:
     """恢复进入当前回调之前的领域 Context。
 
     Args:
-        token: `_activate_context` 返回的绑定凭据。
+        token: activate_context 返回的绑定凭据。
     """
     _CURRENT_CONTEXT.reset(token)
 
@@ -114,10 +114,11 @@ class _Task:
     attempt: int = 0
     retries: int = 0
     retry_delay: float | None = None
+    retry_reason: str | None = None  # 最近一次重试触发原因，耗尽时用于诊断。
 
 
 @dataclass
-class _Initialization:
+class Initialization:
     """仅在本进程初始化图中传递的生产状态。
 
     Attributes:
@@ -136,7 +137,7 @@ class _Initialization:
 
 
 @dataclass
-class HookContext(_CurrentContext):
+class HookContext(CurrentContext):
     """启停、领取和错误插槽的上下文，不伪造 Graph execution。
 
     Attributes:
@@ -191,7 +192,7 @@ class HookContext(_CurrentContext):
         return self.lease.work.inputs
 
 
-class Context(_CurrentContext, EngineContext):
+class Context(CurrentContext, EngineContext):
     """沿用 seeds/request/response/items/target 的消费上下文。
 
     Attributes:
@@ -310,15 +311,17 @@ class Context(_CurrentContext, EngineContext):
         return self.target.queue_name
 
     def clear_proxy(self) -> None:
-        """显式丢弃当前请求代理，使下一次请求准备重新选择地址。
-
-        只管理请求级代理，不关闭或热切调用方装配的固定代理会话。
-        可在 on_retry 中按业务判断调用，默认重试不会调用此方法。
+        """显式丢弃当前请求代理，使下次请求重新选择地址。
 
         Raises:
-            RuntimeError: 托管代理缺少当前 Slot。
-            Exception: 供应源清理失败，原地址与占用继续保留。
+            RuntimeError: 自动会话固定了代理，或托管代理缺少 Slot。
         """
+        if (
+            self.options.get("crawler.session.reuse", True) is True
+            and self.slot is not None
+            and "crawler.session.proxy" in self.slot
+        ):
+            raise RuntimeError("session proxy cannot be hot-switched")
         manager = self.target.proxy
         if isinstance(manager, Manager):
             if self.slot is None:
@@ -382,24 +385,20 @@ class Context(_CurrentContext, EngineContext):
         return value
 
     def obtain(self, name: str, default: Any = None) -> Any:
-        """读取 Context 字段或当前 Slot 中的具名业务资源。
+        """读取当前 Slot 中的具名业务资源。
 
         Args:
-            name: Context 属性或业务资源名称。
-            default: 两处均不存在时的返回值。
+            name: 业务资源名称。
+            default: 资源不存在时的返回值。
 
         Returns:
-            Context 属性、Slot 资源或 default。
+            Slot 资源或 default。
 
         Raises:
             ValueError: 名称非法。
         """
         if not isinstance(name, str) or not name:
             raise ValueError("resource name must be a non-empty string")
-        try:
-            return getattr(self, name)
-        except (AttributeError, RuntimeError):
-            pass
         if self.slot is None:
             return default
         resources = self.slot.get(_RESOURCES, {})
@@ -541,7 +540,7 @@ class Context(_CurrentContext, EngineContext):
             if affinity == "current":
                 self.emit(
                     self.target.local_submission_event_name,
-                    _LocalSubmission(work),
+                    LocalSubmission(work),
                     affinity="current",
                 )
             else:
@@ -549,7 +548,7 @@ class Context(_CurrentContext, EngineContext):
         return works
 
 
-class InitContext(_CurrentContext, EngineContext):
+class InitContext(CurrentContext, EngineContext):
     """初始化上下文，提供 target、seeds、task_queue、queue_name 和 record。
 
     Attributes:
@@ -563,7 +562,7 @@ class InitContext(_CurrentContext, EngineContext):
         target: Spider,
         *,
         base: EngineContext,
-        initial: _Initialization,
+        initial: Initialization,
         form: str = "ON_INIT",
     ) -> None:
         """组合执行能力与本轮生产状态。

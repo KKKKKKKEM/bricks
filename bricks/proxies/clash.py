@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import time
 from collections.abc import Callable, Mapping
-from threading import Condition, RLock
+from threading import RLock
 from typing import Any
 from urllib.parse import quote, urlsplit
 
@@ -32,7 +32,9 @@ class ClashProxy(BaseProxy):
         _names: 缓存的候选节点。
         _next: 下次轮换的位置。
         _active: 当前唯一交付，None 表示可轮换。
-        _condition: 保护占用、节点轮换与等待。
+        _lock: 保护缓存、占用状态与节点轮换。
+        _changing: 正在进行网络控制配置修改。
+        _getting: 正在读取控制器并切换节点。
     """
 
     def __init__(
@@ -78,7 +80,9 @@ class ClashProxy(BaseProxy):
         self._names: list[str] = []
         self._next = 0
         self._active: Proxy | None = None
-        self._condition = Condition(RLock())
+        self._lock = RLock()
+        self._changing = False
+        self._getting = False
 
     def _command(
         self,
@@ -154,10 +158,16 @@ class ClashProxy(BaseProxy):
         Raises:
             RuntimeError: 已有在途占用。
         """
-        with self._condition:
-            if self._active is not None:
+        with self._lock:
+            if self._active is not None or self._changing or self._getting:
                 raise RuntimeError("cannot configure a leased Clash controller")
+            self._changing = True
+        try:
             self._command("/configs", method="PATCH", body=dict(values))
+        finally:
+            with self._lock:
+                self._changing = False
+        with self._lock:
             self._cache_time = float("-inf")
 
     def switch(self, name: str, *, selector: str | None = None) -> None:
@@ -170,15 +180,20 @@ class ClashProxy(BaseProxy):
         Raises:
             RuntimeError: 当前控制器已被占用。
         """
-        with self._condition:
-            if self._active is not None:
+        with self._lock:
+            if self._active is not None or self._changing or self._getting:
                 raise RuntimeError("cannot switch a leased Clash controller")
+            self._changing = True
+        try:
             self._command(
                 "/proxies/"
                 + quote(self.selector if selector is None else selector, safe=""),
                 method="PUT",
                 body={"name": name},
             )
+        finally:
+            with self._lock:
+                self._changing = False
 
     def delay(self, name: str, *, url: str, timeout: int = 5000) -> dict[str, Any]:
         """测量节点延迟，按控制器协议使用毫秒。
@@ -207,6 +222,71 @@ class ClashProxy(BaseProxy):
         """
         return self._command("/rules").json()
 
+    def _select_proxy(self, budget: Callable[[], float | None]) -> Proxy:
+        """查询、过滤并切换到下一个候选代理。
+
+        Args:
+            budget: 返回当前控制请求可用秒数的回调。
+
+        Returns:
+            即将交付的代理值。
+
+        Raises:
+            TimeoutError: 没有符合条件的节点。
+            TypeError: 控制器数据或筛选回调格式非法。
+        """
+        if not self._names or time.monotonic() - self._cache_time >= self._cache_ttl:
+            group = self._command(
+                "/proxies/" + quote(self.selector, safe=""), timeout=budget()
+            ).json()
+            values = group.get("all")
+            if not isinstance(values, list) or any(
+                not isinstance(name, str) for name in values
+            ):
+                raise TypeError("Clash selector must expose an all array")
+            names = []
+            for name in values:
+                accepted = (
+                    name not in {"DIRECT", "REJECT"}
+                    if self._match is None
+                    else self._match(name)
+                )
+                if type(accepted) is not bool:
+                    if inspect.iscoroutine(accepted):
+                        accepted.close()
+                    raise TypeError("Clash node match must return bool synchronously")
+                if accepted:
+                    names.append(name)
+            self._names = names
+            self._cache_time = time.monotonic()
+        if not self._names:
+            raise TimeoutError("Clash selector has no matching nodes")
+        address = self._address
+        if address is None:
+            configs = self._command("/configs", timeout=budget()).json()
+            port = configs.get("mixed-port") or configs.get(
+                "port" if self._options["scheme"] in {"http", "https"} else "socks-port"
+            )
+            if type(port) is not int or not 0 < port < 65536:
+                raise ValueError(
+                    "Clash proxy port is unavailable; provide proxy explicitly"
+                )
+            host = urlsplit(self.key).hostname
+            address = (
+                f"[{host}]:{port}"
+                if host is not None and ":" in host
+                else f"{host}:{port}"
+            )
+        proxy = self._make(address)
+        name = self._names[self._next % len(self._names)]
+        self._command(
+            "/proxies/" + quote(self.selector, safe=""),
+            method="PUT",
+            body={"name": name},
+            timeout=budget(),
+        )
+        return proxy
+
     def get(self, timeout: float | None = 30) -> Proxy:
         """取得独占后轮换节点；已有占用时立即失败，不并发切换同一控制器。
 
@@ -224,84 +304,29 @@ class ClashProxy(BaseProxy):
         deadline = None if timeout is None else time.monotonic() + timeout
 
         def budget() -> float | None:
-            """取得控制请求的剩余秒数。
-
-            Returns:
-                剩余秒数或 None。
-
-            Raises:
-                TimeoutError: 等待预算已经耗尽。
-            """
+            """取得控制请求的剩余秒数。"""
             remaining = None if deadline is None else deadline - time.monotonic()
             if remaining is not None and remaining <= 0:
                 raise TimeoutError("Clash proxy acquisition timed out")
             return remaining
 
-        with self._condition:
-            if self._active is not None:
+        with self._lock:
+            if self._active is not None or self._changing or self._getting:
                 raise TimeoutError(
-                    "Clash controller is already leased; use separate controllers for concurrent slots"
+                    "Clash controller is already leased or changing; use separate controllers for concurrent slots"
                 )
-            if (
-                not self._names
-                or time.monotonic() - self._cache_time >= self._cache_ttl
-            ):
-                group = self._command(
-                    "/proxies/" + quote(self.selector, safe=""), timeout=budget()
-                ).json()
-                values = group.get("all")
-                if not isinstance(values, list) or any(
-                    not isinstance(name, str) for name in values
-                ):
-                    raise TypeError("Clash selector must expose an all array")
-                names = []
-                for name in values:
-                    accepted = (
-                        name not in {"DIRECT", "REJECT"}
-                        if self._match is None
-                        else self._match(name)
-                    )
-                    if type(accepted) is not bool:
-                        if inspect.iscoroutine(accepted):
-                            accepted.close()
-                        raise TypeError(
-                            "Clash node match must return bool synchronously"
-                        )
-                    if accepted:
-                        names.append(name)
-                self._names = names
-                self._cache_time = time.monotonic()
-            if not self._names:
-                raise TimeoutError("Clash selector has no matching nodes")
-            address = self._address
-            if address is None:
-                configs = self._command("/configs", timeout=budget()).json()
-                port = configs.get("mixed-port") or configs.get(
-                    "port"
-                    if self._options["scheme"] in {"http", "https"}
-                    else "socks-port"
-                )
-                if type(port) is not int or not 0 < port < 65536:
-                    raise ValueError(
-                        "Clash proxy port is unavailable; provide proxy explicitly"
-                    )
-                host = urlsplit(self.key).hostname
-                address = (
-                    f"[{host}]:{port}"
-                    if host is not None and ":" in host
-                    else f"{host}:{port}"
-                )
-            proxy = self._make(address)
-            name = self._names[self._next % len(self._names)]
-            self._command(
-                "/proxies/" + quote(self.selector, safe=""),
-                method="PUT",
-                body={"name": name},
-                timeout=budget(),
-            )
+            self._getting = True
+        try:
+            proxy = self._select_proxy(budget)
+        except BaseException:
+            with self._lock:
+                self._getting = False
+            raise
+        with self._lock:
             self._next += 1
             self._active = proxy
-            return proxy
+            self._getting = False
+        return proxy
 
     def recover(self, proxy: Proxy) -> None:
         """释放本实例的控制器占用，让下一次获取可以轮换。
@@ -312,11 +337,10 @@ class ClashProxy(BaseProxy):
         Raises:
             ValueError: 凭据不是本实例当前交付。
         """
-        with self._condition:
+        with self._lock:
             if self._active is not proxy:
                 raise ValueError("proxy is not the active Clash delivery")
             self._active = None
-            self._condition.notify_all()
 
     def clear(self, proxy: Proxy) -> None:
         """释放失败占用，下一次 get 选择后续节点。

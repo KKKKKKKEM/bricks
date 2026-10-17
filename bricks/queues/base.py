@@ -115,13 +115,16 @@ class TaskQueue(Protocol):
         """
         ...
 
-    def retry(self, lease: TaskLease, *, delay: float = 0, error: str = "") -> None:
-        """有界重投，耗尽次数时进入 dead。
+    def retry(self, lease: TaskLease, *, delay: float = 0, error: str = "") -> str:
+        """有界重投并返回 pending 或 dead 状态。
 
         Args:
-            lease: 当前交付凭据。
-            delay: 再次可领取之前的秒数。
-            error: 当前失败的文本说明。
+            lease: 当前凭据。
+            delay: 延迟秒数。
+            error: 原因文本。
+
+        Returns:
+            重投后的状态。
         """
         ...
 
@@ -409,22 +412,33 @@ class _Queue:
         )
         return None if data is None else self._task_lease(data)
 
-    def _task_lease(self, data: dict[str, Any]) -> TaskLease:
-        """从内部快照重建交付凭据。
+    def _task_lease(self, data: dict[str, Any]) -> TaskLease | None:
+        """重建租约；已领取的格式错误信封直接隔离为死信。
 
         Args:
-            data: 存储返回的数据。
+            data: 存储返回的交付快照，含内部任务 ID。
 
         Returns:
-            调用方独立拥有的凭据与 Work。
+            可执行租约；毒消息拒绝后返回 None。
         """
+        try:
+            work = decode_work(data["body"])
+        except Exception as exc:
+            self._execute(
+                "reject",
+                id=data["_id"],
+                token=data["token"],
+                owner=data["owner"],
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return None
         return TaskLease(
             self.name,
-            decode_work(data["body"]),
+            work,
             data["token"],
             data["owner"],
             data["attempt"],
-            data["deadline"],
+            float(data["deadline"]),
         )
 
     def renew(self, lease: TaskLease, *, lease_seconds: float = 30) -> TaskLease:
@@ -437,11 +451,13 @@ class _Queue:
         Returns:
             新截止时间的凭据。
         """
-        return self._task_lease(
+        renewed = self._task_lease(
             self._execute(
                 "renew", **self._credentials(lease), ttl=seconds(lease_seconds)
             )
         )
+        assert renewed is not None
+        return renewed
 
     def ack(self, lease: TaskLease, *, result: str | None = None) -> None:
         """确认交付，并可原子登记业务结果。
@@ -457,15 +473,18 @@ class _Queue:
             raise ValueError("result must be success, failure or None")
         self._execute("ack", **self._credentials(lease), result=result)
 
-    def retry(self, lease: TaskLease, *, delay: float = 0, error: str = "") -> None:
-        """结束当前租约并按最大次数重新入队。
+    def retry(self, lease: TaskLease, *, delay: float = 0, error: str = "") -> str:
+        """结束当前租约并返回 pending 或 dead 状态。
 
         Args:
             lease: 当前凭据。
             delay: 延迟秒数。
             error: 原因文本。
+
+        Returns:
+            重投后的状态。
         """
-        self._execute(
+        return self._execute(
             "retry",
             **self._credentials(lease),
             delay=seconds(delay, positive=False),

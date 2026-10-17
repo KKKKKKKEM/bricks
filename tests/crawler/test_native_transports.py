@@ -2,19 +2,102 @@
 
 import asyncio
 import inspect
+import socket
+import struct
 import sys
+from threading import Thread
 
 import pytest
 from interlace import Context, Graph, Runtime, Slot
 
 from bricks import AsyncDownloadNode, DownloadNode, Request, UploadFile
+from bricks.downloaders.curl_cffi import AsyncCurlCffiDownloader, CurlCffiDownloader
+from bricks.downloaders.httpx import AsyncHttpxDownloader, HttpxDownloader
 from bricks.downloaders.primp import AsyncPrimpDownloader, PrimpDownloader
+from bricks.downloaders.requests import RequestsDownloader
+
+_FAILURE_TRANSPORTS = [
+    CurlCffiDownloader,
+    HttpxDownloader,
+    RequestsDownloader,
+    PrimpDownloader,
+]
+if sys.version_info >= (3, 11):
+    from bricks.downloaders.wreq import WreqDownloader
+
+    _FAILURE_TRANSPORTS.append(WreqDownloader)
+
 
 _TRANSPORTS = [PrimpDownloader, AsyncPrimpDownloader]  # 当前解释器可验证的下载器集合。
 if sys.version_info >= (3, 11):
     from bricks.downloaders.wreq import AsyncWreqDownloader, WreqDownloader
 
     _TRANSPORTS.extend([WreqDownloader, AsyncWreqDownloader])
+
+
+def _closed_socket_response(kind):
+    """启动返回 EOF、RST 或非 HTTP 字节的单次本地 TCP 服务。"""
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    address = listener.getsockname()
+
+    def serve():
+        connection, _ = listener.accept()
+        if kind == "rst":
+            connection.setsockopt(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+            )
+        elif kind == "ftp_redirect":
+            connection.sendall(
+                b"HTTP/1.1 302 Found\r\nLocation: ftp://127.0.0.1:1/file\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+        elif kind == "bad_redirect":
+            connection.sendall(
+                b"HTTP/1.1 302 Found\r\nLocation: http://\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+        connection.close()
+        listener.close()
+
+    Thread(target=serve, daemon=True).start()
+    return f"http://127.0.0.1:{address[1]}/"
+
+
+@pytest.mark.parametrize(
+    "failure", ["eof", "rst", "garbage", "tls", "ftp_redirect", "bad_redirect"]
+)
+@pytest.mark.parametrize("downloader_type", _FAILURE_TRANSPORTS)
+def test_common_transport_failures_return_failed_responses(
+    downloader_type, failure, https_server
+):
+    """验证各传输后端把 EOF、RST、TLS 和垃圾响应转换为 -1。"""
+
+    url = https_server[0] if failure == "tls" else _closed_socket_response(failure)
+    response = downloader_type(verify=True).fetch(Request(url, timeout=3))
+    assert response.status_code == -1
+    assert response.error is not None
+
+
+@pytest.mark.parametrize(
+    "downloader_type",
+    [AsyncCurlCffiDownloader, AsyncHttpxDownloader]
+    + ([AsyncWreqDownloader] if sys.version_info >= (3, 11) else []),
+)
+def test_async_sessions_reject_foreign_event_loops(downloader_type):
+    """验证原生异步会话拒绝在创建事件循环之外使用。"""
+
+    owner_loop = asyncio.new_event_loop()
+    other_loop = asyncio.new_event_loop()
+    downloader = downloader_type()
+    session = owner_loop.run_until_complete(downloader.prepare_session())
+    try:
+        with pytest.raises(RuntimeError, match="event loop"):
+            other_loop.run_until_complete(session.fetch(Request("http://127.0.0.1/")))
+    finally:
+        owner_loop.run_until_complete(downloader.close_session(session))
+        owner_loop.close()
+        other_loop.close()
 
 
 async def resolve(value):
@@ -28,6 +111,25 @@ async def resolve(value):
     """
 
     return await value if inspect.isawaitable(value) else value
+
+
+@pytest.mark.parametrize(
+    "downloader_type",
+    [CurlCffiDownloader, HttpxDownloader, PrimpDownloader]
+    + ([WreqDownloader] if sys.version_info >= (3, 11) else []),
+)
+def test_explicit_cookie_header_rejects_populated_native_jar(downloader_type, server):
+    """验证无法保留显式 Cookie 头的后端对非空会话 Jar 明确失败。"""
+
+    base, _, _ = server
+    downloader = downloader_type()
+    session = downloader.prepare_session()
+    try:
+        session.fetch(Request(base + "/cookies"))
+        with pytest.raises(ValueError, match="explicit Cookie header"):
+            session.fetch(Request(base + "/echo", headers={"Cookie": "manual=1"}))
+    finally:
+        downloader.close_session(session)
 
 
 @pytest.fixture(params=_TRANSPORTS)
@@ -193,7 +295,9 @@ def test_sessions_and_context_fingerprints(server, transport):
             assert before.json()["cookie"] == "account=original"
             repeated = await download("/echo", {})
             assert repeated.json()["peer_port"] == before.json()["peer_port"]
-            profiled = await download("/echo", {"crawler.fingerprint.impersonate": first})
+            profiled = await download(
+                "/echo", {"crawler.fingerprint.impersonate": first}
+            )
             assert profiled.json()["cookie"] == "account=original"
             assert (await resolve(sessions[1].fetch(Request(base + "/echo")))).json()[
                 "cookie"

@@ -6,13 +6,12 @@ import csv
 import hashlib
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
-from typing import Any, ContextManager
+from typing import Any
 
 from bricks import hooks
 from bricks.queues.models import encode
-from bricks.spider.context import Context
 
 from ._utils import identifier, integer, records
 
@@ -26,8 +25,11 @@ def _rows(items: Iterable[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
     Returns:
         不修改来源对象的独立外层字典列表。
     """
-    source = Context.get_context().items if items is None else items
-    return records(source)
+    if items is None:
+        from bricks.spider.context import Context
+
+        return records(Context.get_context().items)
+    return records(items)
 
 
 def _keys(rows: list[dict[str, Any]], names: Sequence[str] | None) -> tuple[str, ...]:
@@ -127,6 +129,7 @@ def to_sqlite(
     with_lock: bool = True,
     *,
     timeout: float = 30,
+    lock: AbstractContextManager[Any] | None = None,
 ) -> None:
     """写入 SQLite，沿用 dev 的 path/conn/items/row_keys 参数角色。
 
@@ -137,6 +140,7 @@ def to_sqlite(
         row_keys: 可选业务主键，用于 upsert。
         with_lock: 是否在写入前取得 SQLite 写锁，默认 True。
         timeout: 本函数创建连接时的锁等待秒数。
+        lock: 多 Slot 共用连接时由调用方提供的共享互斥锁。
 
     Raises:
         ValueError: 表、数据库目标、字段或主键不合法。
@@ -146,8 +150,10 @@ def to_sqlite(
         raise TypeError("with_lock must be boolean")
     rows = _rows(items)
     keys = _keys(rows, row_keys)
+    context = nullcontext() if lock is None else lock
     if isinstance(conn, sqlite3.Connection):
-        _sqlite_write(conn, path, rows, keys, with_lock=with_lock)
+        with context:
+            _sqlite_write(conn, path, rows, keys, with_lock=with_lock)
         return
     if str(conn) == ":memory:":
         raise ValueError("to_sqlite requires a persistent path or Connection")
@@ -175,7 +181,7 @@ def to_mongo(
         items: 显式记录；None 读取当前 Context。
         row_keys: 可选业务身份字段；Mongo 仅接受不含点号且不以 `$` 开头的字段名。
         database: conn 为 MongoClient 时选择的数据库。
-        kwargs: insert_many 或 update_one 的原生参数。
+        kwargs: insert_many 或 bulk_write 的原生参数。
 
     Raises:
         ValueError: Collection、数据库、写关注或身份字段不合法。
@@ -187,25 +193,42 @@ def to_mongo(
         raise ValueError(
             "Mongo row_keys must be plain field names without dots or dollar prefixes"
         )
+    from pymongo import MongoClient
+    from pymongo.collection import Collection
+    from pymongo.database import Database
+
+    if isinstance(conn, Collection):
+        collection = conn
+        if collection.name != path:
+            raise ValueError("path must match the injected Mongo Collection name")
+    elif isinstance(conn, Database):
+        collection = conn[path]
+    elif isinstance(conn, MongoClient):
+        if database is None:
+            raise ValueError("database is required when conn is a MongoClient")
+        collection = conn[database][path]
+    else:
+        raise TypeError("conn must be a Mongo Collection, Database or MongoClient")
     if not rows:
         return
-    if hasattr(conn, "insert_many") and hasattr(conn, "update_one"):
-        collection = conn
-        if getattr(collection, "name", path) != path:
-            raise ValueError("path must match the injected Mongo Collection name")
-    elif database is None:
-        collection = conn[path]
-    else:
-        collection = conn[database][path]
     if not collection.write_concern.acknowledged:
         raise ValueError("Mongo storage requires acknowledged writes")
     if not keys:
         collection.insert_many(rows, **kwargs)
     else:
-        kwargs.pop("ordered", None)
+        from pymongo import UpdateOne
+
+        operations = []
         for row in rows:
             identity_filter = {key: {"$eq": row[key]} for key in keys}
-            collection.update_one(identity_filter, {"$set": row}, upsert=True, **kwargs)
+            values = {name: value for name, value in row.items() if name not in keys}
+            if any("." in name or name.startswith("$") for name in values):
+                raise ValueError(
+                    "Mongo upsert fields cannot contain dots or start with $"
+                )
+            operations.append(UpdateOne(identity_filter, {"$set": values}, upsert=True))
+        ordered = kwargs.pop("ordered", True)
+        collection.bulk_write(operations, ordered=ordered, **kwargs)
 
 
 @hooks.current
@@ -216,7 +239,7 @@ def to_csv(
     encoding: str = "utf-8-sig",
     *,
     header: Sequence[str] | None = None,
-    lock: ContextManager[Any] | None = None,
+    lock: AbstractContextManager[Any] | None = None,
     **kwargs: Any,
 ) -> None:
     """追加 CSV，沿用 dev 的 path/items/conn/encoding 参数顺序。
@@ -307,7 +330,7 @@ def to_redis(
     encoded = [encode(row) for row in rows]
     with conn.pipeline(transaction=True) as pipeline:
         if key_type == "string":
-            for row, value in zip(rows, encoded):
+            for row, value in zip(rows, encoded, strict=True):
                 identity = encode([row[key] for key in keys]).encode()
                 name = path + splice + hashlib.sha256(identity).hexdigest()
                 pipeline.set(name, value, ex=ttl or None)

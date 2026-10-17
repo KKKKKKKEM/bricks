@@ -287,9 +287,11 @@ def test_retry_is_rejected_once_parsing_phase_begins(phase):
     assert len(spider.downloader.calls) == 1 and spider.report().counts["acked"] == 0
 
 
-def test_error_hook_observes_original_failure_and_cannot_recover_it():
-    """错误插槽收到原异常，即使企图发出成功信号也不能恢复任务。"""
+def test_error_hook_pass_stops_callbacks_without_replacing_original_cause():
+    """ERROR_OCCURRED 中 Pass 只终止插槽，原异常及原因保留。"""
     original = ValueError("original failure")
+    cause = RuntimeError("original cause")
+    original.__cause__ = cause
     seen = []
     spider = Example()
 
@@ -301,21 +303,25 @@ def test_error_hook_observes_original_failure_and_cannot_recover_it():
         """
         raise original
 
-    def observe(context):
-        """记录原异常并尝试非法恢复。
+    def stop(context):
+        """记录错误后停止当前插槽。
 
         Args:
             context: 错误边界上下文。
         """
-        seen.append((context.error, context.source.form))
-        raise signals.Success()
+        seen.append(context.error)
+        raise signals.Pass()
 
     spider.use(hooks.BEFORE_REQUEST, {"func": fail})
-    spider.use(hooks.ERROR_OCCURRED, {"func": observe})
+    spider.use(
+        hooks.ERROR_OCCURRED,
+        {"func": stop},
+        {"func": lambda ctx: seen.append("late")},
+    )
     with pytest.raises(ExecutionError, match="original failure"):
         spider.run()
-    assert seen == [(original, hooks.BEFORE_REQUEST)]
-    assert spider.report().counts["dead"] == 1
+    assert seen == [original]
+    assert original.__cause__ is cause
 
 
 def test_cancellation_does_not_enter_business_error_hooks():
@@ -388,7 +394,8 @@ def test_claim_hooks_have_real_boundaries_and_local_seed_copy():
         """
         assert context.slot is None
         with pytest.raises(RuntimeError):
-            context.seeds
+            # 属性访问本身就是被测操作：领取前读取种子必须失败。
+            context.seeds  # noqa: B018
 
     def after(context):
         """改变当前交付种子，不修改持久任务。
@@ -615,3 +622,12 @@ def test_slot_sessions_cookies_and_fixed_proxy_survive_signal_retries(server):
             len(values) == 3 and len(set(values)) == 1 for values in trace.values()
         )
         assert {values[0][2] for values in trace.values()} == {"account=A", "account=B"}
+
+
+def test_unsupported_hook_and_wait_are_rejected_eagerly():
+    """不支持的阶段在 use 时拒绝，Wait(None) 不作为有效延迟。"""
+    spider = Example()
+    with pytest.raises(ValueError, match="unsupported Air hook stage"):
+        spider.use("BEFORE_WORKER_START", {"func": lambda context: None})
+    with pytest.raises(ValueError):
+        signals.Wait(None)

@@ -3,24 +3,130 @@
 import asyncio
 import json
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
 import pytest
-from playwright.sync_api import Error as SyncError
 from interlace import Context, Graph, Runtime, Slot
+from playwright.async_api import Error as AsyncError
+from playwright.sync_api import Error as SyncError
 
 from bricks import AsyncDownloadNode, DownloadNode, Request, UploadFile
-from bricks.downloaders._browser import AsyncBrowserSessionDownloader, BrowserOptions
+from bricks.downloaders._browser import (
+    AsyncBrowserSessionDownloader,
+    BrowserOptions,
+    BrowserSessionDownloader,
+)
+from bricks.downloaders.camoufox import AsyncCamoufoxDownloader, CamoufoxDownloader
 from bricks.downloaders.playwright import (
     AsyncPlaywrightDownloader,
     PlaywrightDownloader,
 )
-from bricks.downloaders.camoufox import AsyncCamoufoxDownloader, CamoufoxDownloader
 
 _SYNC = [PlaywrightDownloader, CamoufoxDownloader]  # 两个真实同步浏览器后端。
 _ASYNC = [AsyncPlaywrightDownloader, AsyncCamoufoxDownloader]  # 同样的原生异步后端。
+
+
+@pytest.mark.parametrize("mode", ["page", "api"])
+def test_sync_network_errors_keep_browser_session_open(mode):
+    """验证可恢复的同步网络错误不关闭浏览器会话。
+
+    Args:
+        mode: 页面导航或 API 请求模式。
+    """
+
+    class Page:
+        def is_closed(self):
+            return False
+
+        def set_default_timeout(self, timeout):
+            pass
+
+        def set_extra_http_headers(self, headers):
+            pass
+
+        def on(self, name, callback):
+            pass
+
+        def goto(self, *args, **kwargs):
+            raise SyncError("net::ERR_CONNECTION_RESET")
+
+    class RequestContext:
+        def fetch(self, *args, **kwargs):
+            raise SyncError("connect ECONNREFUSED")
+
+    class Context:
+        request = RequestContext()
+
+        def new_page(self):
+            return Page()
+
+    session = BrowserSessionDownloader(
+        Context(), BrowserOptions(mode=mode), ExitStack()
+    )
+    response = (
+        session.fetch_page(Request("http://example.test"))
+        if mode == "page"
+        else session.fetch_api(Request("http://example.test"))
+    )
+
+    assert response.status_code == -1
+    assert not session._closed
+
+
+@pytest.mark.parametrize("mode", ["page", "api"])
+def test_async_network_errors_keep_browser_session_open(mode):
+    """验证可恢复的异步网络错误不关闭浏览器会话。
+
+    Args:
+        mode: 页面导航或 API 请求模式。
+    """
+
+    class Page:
+        def is_closed(self):
+            return False
+
+        def set_default_timeout(self, timeout):
+            pass
+
+        async def set_extra_http_headers(self, headers):
+            pass
+
+        def on(self, name, callback):
+            pass
+
+        async def goto(self, *args, **kwargs):
+            raise AsyncError("net::ERR_CONNECTION_RESET")
+
+    class RequestContext:
+        async def fetch(self, *args, **kwargs):
+            raise AsyncError("connect ECONNREFUSED")
+
+    class Context:
+        request = RequestContext()
+
+        async def new_page(self):
+            return Page()
+
+        async def add_cookies(self, cookies):
+            pass
+
+    async def run():
+        """在创建会话的事件循环内执行失败请求。"""
+
+        session = AsyncBrowserSessionDownloader(
+            Context(), BrowserOptions(mode=mode), AsyncExitStack()
+        )
+        response = (
+            await session.fetch_page(Request("http://example.test"))
+            if mode == "page"
+            else await session.fetch_api(Request("http://example.test"))
+        )
+        assert response.status_code == -1
+        assert not session._closed
+
+    asyncio.run(run())
 
 
 def test_async_close_finishes_cleanup_before_propagating_cancellation():
@@ -264,7 +370,7 @@ def test_sync_single_browser_tabs_have_independent_proxies(proxies, factory):
     sessions = []
     try:
         sessions = [downloader.prepare_session(proxy=proxy) for proxy in proxies]
-        for session, label in zip(sessions, ("first", "second")):
+        for session, label in zip(sessions, ("first", "second"), strict=True):
             assert (
                 session.fetch_page(Request("http://target.invalid/page")).json()[
                     "proxy"

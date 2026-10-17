@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
-import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -87,6 +87,10 @@ def encode(value: Any) -> str:
         if item is None or type(item) in (str, int, float, bool):
             return
         if type(item) not in (list, dict):
+            if type(item).__name__ == "_Missing" and type(item).__module__.startswith(
+                "bricks.parsers"
+            ):
+                raise TypeError("queue data cannot contain parser MISSING")
             raise TypeError("queue data must contain only JSON values")
         if id(item) in ancestors:
             raise ValueError("circular queue data")
@@ -145,7 +149,7 @@ def encode_work(work: Work) -> str:
 
 
 def decode_work(value: str) -> Work:
-    """重建独立 Work；不加载类路径或执行反序列化代码。
+    """按严格字段集合重建独立 Work，不执行动态反序列化。
 
     Args:
         value: 当前版本的任务信封。
@@ -158,9 +162,31 @@ def decode_work(value: str) -> Work:
         TypeError: Work 字段不符合公开契约。
     """
     data = json.loads(value)
-    if data.pop("version") != 1:
+    if type(data) is not dict or set(data) != {
+        "version",
+        "id",
+        "graph",
+        "inputs",
+        "options",
+        "limits",
+        "trigger",
+    }:
+        raise ValueError("invalid queue envelope keys")
+    if type(data["version"]) is not int or data["version"] != 1:
         raise ValueError("unsupported queue envelope version")
-    trigger = data.pop("trigger")
+    if type(data["id"]) is not str or type(data["graph"]) is not str:
+        raise TypeError("queue envelope id and graph must be strings")
+    text(data["id"], "work ID")
+    text(data["graph"], "work graph")
+    if type(data["options"]) is not dict or type(data["limits"]) is not dict:
+        raise TypeError("queue envelope options and limits must be objects")
+    if set(data["limits"]) != {"max_steps", "timeout"}:
+        raise ValueError("invalid queue execution limits")
+    trigger = data["trigger"]
+    if trigger is not None and (
+        type(trigger) is not dict or set(trigger) != {"type", "payload"}
+    ):
+        raise ValueError("invalid queue trigger")
     return Work(
         graph=data["graph"],
         inputs=data["inputs"],
@@ -217,7 +243,7 @@ def make_work(
 
 
 @dataclass(frozen=True)
-class _LocalSubmission:
+class LocalSubmission:
     """仅在当前进程 Event 中携带完整持久 Work 的内部信封。
 
     Attributes:

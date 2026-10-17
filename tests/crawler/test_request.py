@@ -55,8 +55,8 @@ def test_container_editing_and_whole_field_assignment():
     """验证容器原地编辑与整体字段赋值。"""
 
     request = Request("https://example.com")
-    setattr(request, "params", {"tag": ["a", "b"]})
-    setattr(request, "headers", {"X-Test": "one"})
+    request.params = {"tag": ["a", "b"]}
+    request.headers = {"X-Test": "one"}
     request.headers.add("x-test", "two")
     assert request.headers.get_all("X-Test") == ("one", "two")
     request.params.update({"page": "2"})
@@ -549,3 +549,21 @@ def test_upload_file_validation():
         UploadFile("name", b"data", "text/plain\r\nInjected: yes")
     with pytest.raises(TypeError):
         UploadFile("name", cast(Any, iter([b"data"])))  # 流输入应在运行时被拒绝。
+
+
+def test_request_header_and_cookie_mapping_conflict_is_rejected():
+    """验证显式 Cookie 头与结构化 Cookie 不可同时设置。"""
+
+    with pytest.raises(ValueError, match="Cookie header"):
+        Request("http://example.test", headers={"Cookie": "a=b"}, cookies={"c": "d"})
+
+
+def test_request_pickle_and_deepcopy():
+    """验证请求模型可深复制并 pickle 往返。"""
+
+    import copy
+    import pickle
+
+    request = Request("http://example.test", params=[("a", "1"), ("a", "2")])
+    assert copy.deepcopy(request).params.raw == request.params.raw
+    assert pickle.loads(pickle.dumps(request)).params.raw == request.params.raw

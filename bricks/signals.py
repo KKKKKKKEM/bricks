@@ -51,10 +51,14 @@ class Wait(Signal):
         """保存经过校验的等待秒数。
 
         Args:
-            duration: 非负秒数，默认一秒。
+            duration: 正数秒数，默认一秒。
+
+        Raises:
+            ValueError: duration 不是正数。
         """
-        super().__init__()
         from bricks.models._validation import duration as validate_duration
 
-        validate_duration(duration, "duration", allow_zero=True)
+        if duration is None:
+            raise ValueError("duration must be positive")
+        validate_duration(duration, "duration", allow_zero=False)
         self.duration = duration

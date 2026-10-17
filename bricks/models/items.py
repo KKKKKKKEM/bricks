@@ -9,6 +9,24 @@ from typing import Any, overload
 Record = Mapping[str, Any]
 
 
+def _normalized_key(value: Any) -> Any:
+    """把嵌套值转换为可哈希且保留类型和值语义的键。"""
+
+    if isinstance(value, dict):
+        return frozenset(
+            (_normalized_key(key), _normalized_key(item)) for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return (type(value), tuple(_normalized_key(item) for item in value))
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_normalized_key(item) for item in value)
+    try:
+        hash(value)
+    except TypeError:
+        return (type(value), repr(value))
+    return value
+
+
 def _record(value: object) -> dict[str, Any]:
     """校验记录结构并复制嵌套数据，拒绝非映射与非字符串字段名。
 
@@ -221,7 +239,7 @@ class Items(MutableSequence[dict[str, Any]]):
 
         template = _record(values)
         prepared = [deepcopy(template) for _ in self._records]
-        for record, update in zip(self._records, prepared):
+        for record, update in zip(self._records, prepared, strict=True):
             record.update(update)
 
     def copy(self) -> Items:
@@ -312,7 +330,7 @@ class Items(MutableSequence[dict[str, Any]]):
             names = [mapping.get(name, name) for name in row]
             if len(set(names)) != len(names):
                 raise ValueError("renamed fields conflict")
-            renamed.append(dict(zip(names, row.values())))
+            renamed.append(dict(zip(names, row.values(), strict=True)))
         return Items(renamed)
 
     def unique(self, *fields: str) -> Items:
@@ -330,22 +348,14 @@ class Items(MutableSequence[dict[str, Any]]):
         """
 
         self._validate_columns(fields)
-        hashed: set[Any] = set()
-        unhashable: list[Any] = []
+        seen: set[Any] = set()
         result = []
         for row in self._records:
             key = tuple(row[name] for name in fields) if fields else row
-            try:
-                hash(key)
-            except TypeError:
-                if key in unhashable or any(key == prior for prior in hashed):
-                    continue
-                unhashable.append(key)
-            else:
-                if key in hashed or key in unhashable:
-                    continue
-                hashed.add(key)
-            result.append(row)
+            normalized = _normalized_key(key)
+            if normalized not in seen:
+                seen.add(normalized)
+                result.append(row)
         return Items(result)
 
     @staticmethod

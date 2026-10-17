@@ -6,6 +6,8 @@ from urllib.parse import urlsplit
 import requests
 
 from ..models import Request, Response
+from ..models.cookies import cookie_domain
+from ._options import _redirect_failure
 
 
 def _request_cookies(source: Request) -> requests.cookies.RequestsCookieJar:
@@ -25,10 +27,7 @@ def _request_cookies(source: Request) -> requests.cookies.RequestsCookieJar:
     hostname = parsed.hostname
     if hostname is None:
         raise ValueError("request URL must include a host when sending cookies")
-    if ":" in hostname:
-        cookie_host = f"[{hostname}].local"
-    else:
-        cookie_host = hostname if "." in hostname else f"{hostname}.local"
+    cookie_host = cookie_domain(hostname)
     cookies = requests.cookies.RequestsCookieJar()
     for name, value in source.cookies.items():
         cookie = requests.cookies.create_cookie(
@@ -88,8 +87,8 @@ def _sent_request(source: Request, sent: requests.PreparedRequest) -> Request:
         URL、请求头和原始请求体快照。
     """
 
-    assert sent.url is not None
-    assert sent.method is not None
+    if sent.url is None or sent.method is None:
+        raise RuntimeError("prepared request is missing its URL or method")
     return Request(
         sent.url,
         method=sent.method,  # type: ignore[arg-type]
@@ -112,7 +111,15 @@ def _response(source: Request, received: requests.Response) -> Response:
     Returns:
         含实际请求快照的领域响应，不递归填充历史。
     """
-
+    for item in (*received.history, received):
+        failure = _redirect_failure(
+            source,
+            item.status_code,
+            item.url,
+            item.raw.headers.items(),
+        )
+        if failure is not None:
+            return failure
     return Response(
         received.content,
         status_code=received.status_code,

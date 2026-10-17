@@ -22,12 +22,12 @@ from interlace.engine.errors import (
 )
 from interlace.engine.hooks import NodeHook
 
-from bricks import DownloadNode, Items, Request, Response
-from bricks import hooks, signals
+from bricks import DownloadNode, Items, Request, Response, hooks, signals
 from bricks.downloaders.curl_cffi import AsyncCurlCffiDownloader, CurlCffiDownloader
+from bricks.plugins import on_request, scripts
+from bricks.proxies import CustomProxy, Manager
 from bricks.queues import MemoryTaskQueue
 from bricks.spider import Context, Spider
-from bricks.plugins import on_request, scripts
 
 
 class FakeDownloader:
@@ -618,12 +618,10 @@ def test_close_cancels_initialization_and_does_not_steal_borrowed_resources():
 
 
 def test_unsupported_hook_and_callback_lifecycle_reentry_fail_explicitly():
-    """不支持的模板阶段在启动时失败，回调不能阻塞关闭自身。"""
+    """不支持的模板阶段在 use 注册时失败，回调不能阻塞关闭自身。"""
     bad = SimpleSpider()
-    bad.use("template.before_render", {"func": lambda context: None})
     with pytest.raises(ValueError, match="unsupported Air"):
-        bad.open()
-    bad.close()
+        bad.use("template.before_render", {"func": lambda context: None})
 
     class Reentrant(SimpleSpider):
         """故意从存储回调关闭自身。"""
@@ -910,6 +908,7 @@ def _distributed_worker(redis_url, queue_name, prefix, barrier):
         barrier: 两个消费者的启动屏障。
     """
     from redis import Redis
+
     from bricks.queues.redis import RedisTaskQueue
 
     client = Redis.from_url(redis_url, socket_timeout=2, socket_connect_timeout=2)
@@ -965,6 +964,7 @@ def test_redis_two_process_spiders_consume_http_seeds(server):
     if not redis_url:
         pytest.skip("set BRICKS_TEST_REDIS_URL for distributed Air tests")
     from redis import Redis
+
     from bricks.queues.redis import RedisTaskQueue
 
     base, _, _ = server
@@ -1119,10 +1119,15 @@ def test_core_hook_replacement_rebinds_domain_inputs():
     )
 
 
-def test_initialization_lease_is_renewed_during_slow_seed_factory():
-    """同步种子工厂长时间未返回时，调用线程仍保持初始化租约。"""
+def test_initialization_lease_is_renewed_during_slow_seed_factory(renewals):
+    """同步种子工厂长时间未返回时，调用线程仍保持初始化租约。
+
+    Args:
+        renewals: 续租观察器工厂。
+    """
     started, release = threading.Event(), threading.Event()
     queue = MemoryTaskQueue("slow-producer")
+    watch = renewals(queue, "renew_init")
 
     class SlowFactory(SimpleSpider):
         """等待测试释放后才返回种子。"""
@@ -1141,13 +1146,14 @@ def test_initialization_lease_is_renewed_during_slow_seed_factory():
             assert release.wait(3)
             return {"url": "https://example.com/one"}
 
-    spider = SlowFactory(task_queue=queue, lease_seconds=0.3)
+    spider = SlowFactory(task_queue=queue, lease_seconds=0.6)
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
             running = executor.submit(spider.run_init)
             try:
                 assert started.wait(2)
-                time.sleep(0.6)
+                expiry = time.monotonic() + 0.6
+                watch.wait_past(expiry)
                 assert queue.acquire_init("competitor") is None
             finally:
                 release.set()
@@ -1667,8 +1673,16 @@ def test_survey_projection_early_success_and_existing_queue_are_explicit():
 
     early = Early()
     assert early.survey(
-        {"url": "https://example.com/early"}, extract=["seeds", "attempt"]
-    ) == [{"seeds": {"url": "https://example.com/early"}, "attempt": 0}]
+        {"url": "https://example.com/early"},
+        extract=["seeds", "attempt", "response", "items"],
+    ) == [
+        {
+            "seeds": {"url": "https://example.com/early"},
+            "attempt": 0,
+            "response": None,
+            "items": None,
+        }
+    ]
     assert early.downloader.calls == []
     assert early.report().counts["acked"] == 1
 
@@ -1762,3 +1776,22 @@ def test_survey_local_http_example_follows_pages_without_default_database(tmp_pa
     assert len(rows) == 4
     assert sum(len(row["items"]) for row in rows) == 2
     assert not database.exists()
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"auth": lambda request: None},
+        {"threshold": 1},
+        {"ttl": 1},
+    ],
+)
+def test_auto_session_rejects_request_proxy_policies(options):
+    """自动固定会话代理拒绝只适用于请求级代理的策略。"""
+    spider = SimpleSpider(
+        downloader=CurlCffiDownloader(),
+        proxy=Manager(CustomProxy("proxy.test:8080", **options)),
+    )
+    with pytest.raises(ValueError, match="slot_session_reuse=False"):
+        spider.open()
+    spider.close()

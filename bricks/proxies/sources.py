@@ -56,7 +56,16 @@ def extract_addresses(response: Response) -> list[str]:
     Returns:
         按出现顺序排列的地址列表。
     """
-    return re.findall(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}:\d{1,5}(?!\d)", response.text)
+    addresses = re.findall(
+        r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}:\d{1,5}(?!\d)", response.text
+    )
+    valid = []
+    for address in addresses:
+        host, port_text = address.rsplit(":", 1)
+        octets = host.split(".")
+        if all(int(octet) <= 255 for octet in octets) and 0 < int(port_text) < 65536:
+            valid.append(address)
+    return valid
 
 
 class ApiProxy(BaseProxy):
@@ -113,6 +122,7 @@ class ApiProxy(BaseProxy):
         self._lock = RLock()
         duration(poll_interval, "poll_interval")
         self._interval = poll_interval
+        self._last_error: BaseException | None = None
 
     def get(self, timeout: float | None = 30) -> Proxy:
         """获取缓存地址或在截止时间内请求 API。
@@ -130,47 +140,52 @@ class ApiProxy(BaseProxy):
         """
         duration(timeout, "timeout", allow_zero=True)
         deadline = None if timeout is None else time.monotonic() + timeout
-        with self._lock:
-            while True:
+        while True:
+            with self._lock:
                 if self._available:
                     return self._available.popleft()
-                remaining = None if deadline is None else deadline - time.monotonic()
-                if remaining is not None and remaining <= 0:
-                    raise TimeoutError("proxy API produced no available address")
-                budget = self._request.timeout
-                if remaining is not None:
-                    budget = remaining if budget is None else min(budget, remaining)
-                response = self._downloader.fetch(self._request.copy(timeout=budget))
-                if not isinstance(response, Response):
-                    if inspect.iscoroutine(response):
-                        response.close()
-                    raise TypeError("proxy downloader must return Response")
-                if 200 <= response.status_code < 300:
-                    values = self._extract(response)
-                    if inspect.isawaitable(values) or isinstance(values, (str, bytes)):
-                        if inspect.iscoroutine(values):
-                            values.close()
-                        raise TypeError(
-                            "proxy parser must return a synchronous address iterable"
-                        )
-                    batch = [self._make(value) for value in values]
-                    self._available.extend(batch)
-                    if batch:
-                        continue
-                elif (
-                    response.status_code != -1
-                    and response.status_code != 429
-                    and not 500 <= response.status_code < 600
-                ):
-                    raise RuntimeError(
-                        f"proxy API rejected request: status={response.status_code}"
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                raise TimeoutError(
+                    "proxy API produced no available address"
+                ) from self._last_error
+            budget = self._request.timeout
+            if remaining is not None:
+                budget = remaining if budget is None else min(budget, remaining)
+            response = self._downloader.fetch(self._request.copy(timeout=budget))
+            if not isinstance(response, Response):
+                if inspect.iscoroutine(response):
+                    response.close()
+                raise TypeError("proxy downloader must return Response")
+            if 200 <= response.status_code < 300:
+                values = self._extract(response)
+                if inspect.isawaitable(values) or isinstance(values, (str, bytes)):
+                    if inspect.iscoroutine(values):
+                        values.close()
+                    raise TypeError(
+                        "proxy parser must return a synchronous address iterable"
                     )
-                wait = (
-                    self._interval
-                    if deadline is None
-                    else min(self._interval, max(0, deadline - time.monotonic()))
+                batch = [self._make(value) for value in values]
+                with self._lock:
+                    self._available.extend(batch)
+                if batch:
+                    continue
+            elif (
+                response.status_code != -1
+                and response.status_code != 429
+                and not 500 <= response.status_code < 600
+            ):
+                raise RuntimeError(
+                    f"proxy API rejected request: status={response.status_code}"
                 )
-                time.sleep(wait)
+            if response.status_code == -1 and response.error is not None:
+                self._last_error = response.error
+            wait = (
+                self._interval
+                if deadline is None
+                else min(self._interval, max(0, deadline - time.monotonic()))
+            )
+            time.sleep(wait)
 
     def recover(self, proxy: Proxy) -> None:
         """将仍可用的地址放到本实例缓存尾部。
@@ -219,6 +234,7 @@ class RedisProxy(BaseProxy):
         self.key = key
         self.client = client
         self.key_type = key_type
+        self._original_values: dict[int, str] = {}
         duration(poll_interval, "poll_interval")
         self._interval = poll_interval
 
@@ -244,9 +260,10 @@ class RedisProxy(BaseProxy):
                 else self.client.lpop(self.key)
             )
             if value is not None:
-                return self._make(
-                    value.decode("utf-8") if isinstance(value, bytes) else value
-                )
+                raw = value.decode("utf-8") if isinstance(value, bytes) else value
+                proxy = self._make(raw)
+                self._original_values[id(proxy)] = raw
+                return proxy
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError("Redis proxy pool is empty")
             time.sleep(
@@ -261,7 +278,17 @@ class RedisProxy(BaseProxy):
         Args:
             proxy: 归还的代理值。
         """
+        value = self._original_values.get(id(proxy), proxy.proxy)
         if self.key_type == "set":
-            self.client.sadd(self.key, proxy.proxy)
+            self.client.sadd(self.key, value)
         else:
-            self.client.rpush(self.key, proxy.proxy)
+            self.client.rpush(self.key, value)
+        self._original_values.pop(id(proxy), None)
+
+    def clear(self, proxy: Proxy) -> None:
+        """丢弃已弹出的原地址而不写回 Redis。
+
+        Args:
+            proxy: 当前代理值。
+        """
+        self._original_values.pop(id(proxy), None)

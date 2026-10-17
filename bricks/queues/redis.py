@@ -33,7 +33,7 @@ end
 -- 凭据过期后即失去写入权，即使尚未被其他 Worker 领取。
 local function valid(r, c, initial)
     return r and r.status == (initial and 'running' or 'leased')
-        and r.deadline > now and r.token == c.token and r.owner == c.owner
+        and tonumber(r.deadline) > now and r.token == c.token and r.owner == c.owner
         and (not initial or r.fence == c.fence)
 end
 
@@ -50,10 +50,10 @@ if op == 'put' or op == 'put_claim' then
     if r then
         if r.body ~= a.body then return out({failure='conflict'}) end
         if op == 'put' then return out(false) end
-        if r.status == 'leased' and r.deadline <= now then
+        if r.status == 'leased' and tonumber(r.deadline) <= now then
             redis.call('ZREM', active, a.id)
-            r.token, r.owner, r.deadline = '', '', 0
-            r.error, r.ready = 'delivery lease expired', now
+            r.token, r.owner, r.deadline = '', '', '0'
+            r.error, r.ready = 'delivery lease expired', string.format('%.17g', now)
             if r.attempt >= r.maximum then
                 r.status = 'dead'
                 redis.call('HINCRBY', meta, 'dead', 1)
@@ -63,27 +63,28 @@ if op == 'put' or op == 'put_claim' then
             end
             save(a.id, r)
         end
-        if r.status ~= 'pending' or r.ready > now then return out(nil) end
+        if r.status ~= 'pending' or tonumber(r.ready) > now then return out(nil) end
     else
         r = {body=a.body, status='pending', attempt=0, maximum=a.maximum,
-             ready=now, deadline=0, token='', owner='', error='', result=null}
+             ready=string.format('%.17g', now), deadline='0', token='', owner='', error='', result=null}
         save(a.id, r)
         redis.call('ZADD', ready, now, a.id)
         if op == 'put' then return out(true) end
     end
     r.status, r.attempt, r.token, r.owner = 'leased', r.attempt + 1, a.token, a.owner
-    r.deadline = now + a.ttl
+    r.deadline = string.format('%.17g', now + a.ttl)
     save(a.id, r)
     redis.call('ZREM', ready, a.id)
-    redis.call('ZADD', active, r.deadline, a.id)
+    redis.call('ZADD', active, tonumber(r.deadline), a.id)
+    r._id = a.id
     return out(r)
 end
 if op == 'claim' then
     local expired = redis.call('ZRANGEBYSCORE', active, '-inf', now, 'LIMIT', 0, 100)
     for _, id in ipairs(expired) do
         local old = read(records, id)
-        old.token, old.owner, old.deadline = '', '', 0
-        old.error, old.ready = 'delivery lease expired', now
+        old.token, old.owner, old.deadline = '', '', '0'
+        old.error, old.ready = 'delivery lease expired', string.format('%.17g', now)
         redis.call('ZREM', active, id)
         if old.attempt >= old.maximum then
             old.status = 'dead'
@@ -99,10 +100,11 @@ if op == 'claim' then
     local id = ids[1]
     r = read(records, id)
     r.status, r.attempt, r.token, r.owner = 'leased', r.attempt + 1, a.token, a.owner
-    r.deadline = now + a.ttl
+    r.deadline = string.format('%.17g', now + a.ttl)
     save(id, r)
     redis.call('ZREM', ready, id)
-    redis.call('ZADD', active, r.deadline, id)
+    redis.call('ZADD', active, tonumber(r.deadline), id)
+    r._id = id
     return out(r)
 end
 if op == 'get' then return out(r) end
@@ -123,8 +125,8 @@ end
 if op == 'renew' or op == 'ack' or op == 'retry' or op == 'reject' then
     if not valid(r, a, false) then return out({failure='lease'}) end
     if op == 'renew' then
-        r.deadline = now + a.ttl
-        redis.call('ZADD', active, r.deadline, a.id)
+        r.deadline = string.format('%.17g', now + a.ttl)
+        redis.call('ZADD', active, tonumber(r.deadline), a.id)
         save(a.id, r)
         return out(r)
     end
@@ -132,22 +134,22 @@ if op == 'renew' or op == 'ack' or op == 'retry' or op == 'reject' then
     if op == 'ack' then
         r.status, r.result = 'acked', a.result
     elseif op == 'retry' and r.attempt < r.maximum then
-        r.status, r.ready, r.error = 'pending', now + a.delay, a.error
-        redis.call('ZADD', ready, r.ready, a.id)
+        r.status, r.ready, r.error = 'pending', string.format('%.17g', now + a.delay), a.error
+        redis.call('ZADD', ready, tonumber(r.ready), a.id)
     else
         r.status, r.error = 'dead', a.error
     end
     if r.status ~= 'pending' then redis.call('HINCRBY', meta, r.status, 1) end
-    r.token, r.owner, r.deadline = '', '', 0
+    r.token, r.owner, r.deadline = '', '', '0'
     save(a.id, r)
-    return out(nil)
+    return out(r.status)
 end
 local initial = read(meta, 'init')
 if op == 'initialization' then return out(initial) end
 if op == 'acquire_init' then
     if initial and (initial.status == 'succeeded' or
-        (initial.status == 'running' and initial.deadline > now)) then return out(nil) end
-    initial = {owner=a.owner, token=a.token, deadline=now + a.ttl,
+        (initial.status == 'running' and tonumber(initial.deadline) > now)) then return out(nil) end
+    initial = {owner=a.owner, token=a.token, deadline=string.format('%.17g', now + a.ttl),
         fence=initial and initial.fence + 1 or 1,
         progress=initial and initial.progress or 'null', status='running', error=''}
     redis.call('HSET', meta, 'init', cjson.encode(initial))
@@ -155,7 +157,7 @@ if op == 'acquire_init' then
 end
 if op == 'renew_init' or op == 'save_init' or op == 'finish_init' then
     if not valid(initial, a, true) then return out({failure='lease'}) end
-    if op == 'renew_init' then initial.deadline = now + a.ttl
+    if op == 'renew_init' then initial.deadline = string.format('%.17g', now + a.ttl)
     elseif op == 'save_init' then initial.progress = a.progress
     else initial.status, initial.error = a.success and 'succeeded' or 'failed', a.error end
     redis.call('HSET', meta, 'init', cjson.encode(initial))

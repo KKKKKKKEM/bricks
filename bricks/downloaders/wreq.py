@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import timedelta
 from time import monotonic
@@ -11,7 +12,13 @@ import wreq
 from wreq import blocking
 
 from ..models import Request, Response
-from ._options import TransportOptions
+from ._options import (
+    TransportOptions,
+    _async_ephemeral_session,
+    _ephemeral_session,
+    _failed_response,
+    _redirect_failure,
+)
 
 _NETWORK_ERRORS = (
     wreq.ConnectionError,
@@ -22,7 +29,8 @@ _NETWORK_ERRORS = (
     wreq.RedirectError,
     wreq.BodyError,
     wreq.DecodingError,
-)  # 只转换已识别的传输异常，BuilderError、RustPanic 和取消继续传播。
+    wreq.RequestError,
+)  # 通用请求错误转为失败响应，BuilderError、RustPanic 和取消继续传播。
 
 
 def _profile(impersonate: str | None) -> wreq.Profile | None:
@@ -122,12 +130,18 @@ def _response(
     Returns:
         领域响应，request 保存初始提交内容，不伪造实际发出的自动头。
     """
-
+    status_code = received.status.as_int()
+    response_headers = _headers(received.headers)
+    failure = _redirect_failure(
+        source, status_code, received.url, response_headers, started
+    )
+    if failure is not None:
+        return failure
     return Response(
         content,
-        status_code=received.status.as_int(),
+        status_code=status_code,
         url=received.url,
-        headers=_headers(received.headers),
+        headers=response_headers,
         request=source,
         cost=monotonic() - started,
         history=[
@@ -236,11 +250,10 @@ class WreqDownloader(_WreqOptions):
         """
 
         source = request.copy()
-        session = self.prepare_session(proxy=source.proxy)
-        try:
+        with _ephemeral_session(
+            self.prepare_session, self.close_session, source.proxy
+        ) as session:
             return session._fetch(source, impersonate)
-        finally:
-            self.close_session(session)
 
 
 class AsyncWreqDownloader(_WreqOptions):
@@ -269,6 +282,7 @@ class AsyncWreqDownloader(_WreqOptions):
             session: 本实现准备的异步会话。
         """
 
+        session._check_owner()
         if not session._closed:
             session.client.close()
             session._closed = True
@@ -305,11 +319,20 @@ class AsyncWreqDownloader(_WreqOptions):
         """
 
         source = request.copy()
-        session = await self.prepare_session(proxy=source.proxy)
-        try:
+        async with _async_ephemeral_session(
+            self.prepare_session, self.close_session, source.proxy
+        ) as session:
             return await session._fetch(source, impersonate)
-        finally:
-            await self.close_session(session)
+
+
+def _check_cookie_header(client: Any, source: Request) -> None:
+    """拒绝无法避免会话 Cookie Jar 合并的显式请求头。"""
+
+    jar = client.cookie_jar
+    if "cookie" in source.headers and jar is not None:
+        raise ValueError(
+            "wreq cannot combine an explicit Cookie header with a populated session jar"
+        )
 
 
 @dataclass
@@ -370,6 +393,7 @@ class WreqSessionDownloader:
 
         if self._closed:
             raise RuntimeError("wreq session is closed")
+        _check_cookie_header(self.client, source)
         parameters = _parameters(source, self.max_redirects, impersonate)
         started = monotonic()
         try:
@@ -381,9 +405,7 @@ class WreqSessionDownloader:
                 received.close()
                 raise
         except _NETWORK_ERRORS as error:
-            return Response(
-                status_code=-1, error=error, request=source, cost=monotonic() - started
-            )
+            return _failed_response(source, error, started)
 
 
 @dataclass
@@ -392,9 +414,20 @@ class AsyncWreqSessionDownloader:
 
     client: wreq.Client  # 调用方持有并负责关闭的会话。
     max_redirects: int = 20  # 单次请求的重定向上限。
+    _owner_loop: asyncio.AbstractEventLoop = field(
+        default_factory=asyncio.get_running_loop, init=False, repr=False
+    )  # 创建会话的事件循环。
     _closed: bool = field(
         default=False, init=False, repr=False
     )  # 关闭后的生命周期标记。
+
+    def _check_owner(self) -> None:
+        """拒绝在创建会话的事件循环之外使用客户端。"""
+
+        if asyncio.get_running_loop() is not self._owner_loop:
+            raise RuntimeError(
+                "wreq async session used outside its creating event loop"
+            )
 
     async def fetch(self, request: Request) -> Response:
         """使用会话原指纹异步下载。
@@ -446,9 +479,11 @@ class AsyncWreqSessionDownloader:
             asyncio.CancelledError: 取消继续传播。
         """
 
+        self._check_owner()
         if self._closed:
             raise RuntimeError("wreq session is closed")
         parameters = _parameters(source, self.max_redirects, impersonate)
+        _check_cookie_header(self.client, source)
         started = monotonic()
         try:
             received = await self.client.request(**parameters)
@@ -459,6 +494,4 @@ class AsyncWreqSessionDownloader:
                 await received.close()
                 raise
         except _NETWORK_ERRORS as error:
-            return Response(
-                status_code=-1, error=error, request=source, cost=monotonic() - started
-            )
+            return _failed_response(source, error, started)

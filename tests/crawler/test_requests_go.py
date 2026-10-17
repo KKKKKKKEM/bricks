@@ -7,8 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import requests_go
-from requests_go.tls_client.exceptions import TLSClientExeption
 from interlace import Context, Graph, Runtime, Slot
+from requests_go.tls_client.exceptions import TLSClientExeption
 
 from bricks import DownloadNode, Request, UploadFile
 from bricks.downloaders.requests import RequestsDownloader

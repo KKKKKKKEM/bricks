@@ -6,6 +6,7 @@ import argparse
 from urllib.parse import urlsplit
 
 from interlace import Graph, Runtime
+
 from bricks import DownloadNode, Request, Response
 from bricks.downloaders.curl_cffi import CurlCffiDownloader
 
@@ -38,7 +39,10 @@ def run(url: str) -> Response:
     """
 
     node = DownloadNode(
-        {"default": CurlCffiDownloader(), "strict": CurlCffiDownloader(max_redirects=0)},
+        {
+            "default": CurlCffiDownloader(),
+            "strict": CurlCffiDownloader(max_redirects=0),
+        },
         select=select_download,
     )
     graph = Graph(entrypoint="download").add(download=node)

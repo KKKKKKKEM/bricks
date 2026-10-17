@@ -159,6 +159,15 @@ def test_invalid_bulk_records_leave_original_unchanged():
     assert items == [{"a": 1}]
 
 
+def test_unique_normalizes_nested_unhashable_values():
+    """验证多层字典和列表使用哈希键去重且保留首次顺序。"""
+
+    items = Items(
+        [{"value": {"a": [1, 2]}}, {"value": {"a": [1, 2]}}, {"value": {"a": [2]}}]
+    )
+    assert items.unique() == [items[0], items[2]]
+
+
 def test_projection_missing_fields_and_empty_collections():
     """验证字段投影对缺失字段和空集合的行为。"""
 

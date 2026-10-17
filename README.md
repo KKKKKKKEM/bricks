@@ -6,7 +6,7 @@ Bricks 负责请求、响应、数据记录、下载器、独立解析器、下�
 ## 安装与开发
 
 ```bash
-uv sync --locked
+uv sync --locked --no-group browser
 uv run python -m examples.crawler_download https://example.com
 ```
 
@@ -34,6 +34,7 @@ with Runtime() as runtime:
 需要显式配置时使用 `bricks.downloaders.curl_cffi` 的 `CurlCffiDownloader` / `AsyncCurlCffiDownloader`。
 
 HTTPX 与 requests 为可选依赖，分别通过 `uv sync --extra httpx` 或 `uv sync --extra requests` 安装。
+Clash YAML 订阅工具通过 `uv sync --locked --extra clash` 安装。
 具体实现位于 `bricks.downloaders.httpx` 和 `bricks.downloaders.requests`，不会由默认节点导入。
 wreq 和 primp 也可通过 `uv sync --extra wreq --extra primp` 安装：
 `bricks.downloaders.wreq` 提供 WreqDownloader / AsyncWreqDownloader（Python ≥3.11），
@@ -100,7 +101,7 @@ HTTPS 契约测试需要本机提供 `openssl` 命令，用于生成临时测试
 uv run --locked pytest -q
 uv run --locked mypy bricks
 uv run --locked ruff check bricks tests examples .github/scripts
-uv run --locked ruff format --check bricks .github/scripts
+uv run --locked ruff format --check bricks tests examples .github/scripts
 uv build
 ```
 

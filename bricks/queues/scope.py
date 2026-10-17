@@ -8,7 +8,7 @@ from collections.abc import Callable
 from functools import partial
 from threading import Condition, RLock, Thread
 from types import TracebackType
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from interlace.spi import Work
 
@@ -172,7 +172,7 @@ class TaskScope:
         self._exit_lock = RLock()
         self._state = "new"
         self._failure: BaseException | None = None
-        self._decision: Callable[[TaskLease], None] | None = None
+        self._decision: Callable[[TaskLease], Any] | None = None
 
     def __enter__(self) -> TaskScope | None:
         """领取或续租已有凭据，然后加入队列的共享续租调度。
@@ -233,12 +233,27 @@ class TaskScope:
             if self._state != "entered" or self._failure is not None:
                 return False
             assert self._lease is not None
-            try:
-                self._lease = self._queue.renew(self._lease, lease_seconds=self._ttl)
-            except BaseException as exc:
-                self._failure = exc
-                return False
-            return True
+            lease = self._lease
+        try:
+            renewed = self._queue.renew(lease, lease_seconds=self._ttl)
+        except BaseException as exc:
+            with self._lock:
+                if (
+                    self._state == "entered"
+                    and self._lease is not None
+                    and self._lease.token == lease.token
+                ):
+                    self._failure = exc
+            return False
+        with self._lock:
+            if (
+                self._state == "entered"
+                and self._lease is not None
+                and self._lease.token == lease.token
+            ):
+                self._lease = renewed
+                return True
+            return False
 
     def check(self) -> None:
         """检查仍持有任务并传播已观察到的续租失败。
@@ -269,7 +284,7 @@ class TaskScope:
             assert self._work is not None
             return self._work
 
-    def _decide(self, action: Callable[[TaskLease], None]) -> None:
+    def _decide(self, action: Callable[[TaskLease], Any]) -> None:
         """登记唯一退出决定，块内保持占用。
 
         Args:

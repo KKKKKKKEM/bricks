@@ -254,6 +254,32 @@ def test_fingerprint_accepts_explicit_reuse(server, node_type):
     "node_type,downloader_type",
     [(DownloadNode, HttpxDownloader), (AsyncDownloadNode, AsyncHttpxDownloader)],
 )
+def test_none_fingerprint_uses_plain_fetch(server, node_type, downloader_type):
+    """验证空指纹不要求下载器实现指纹接口。
+
+    Args:
+        server: 本地 HTTP 服务。
+        node_type: 同步或异步下载节点。
+        downloader_type: 不提供请求指纹能力的下载器。
+    """
+
+    node = node_type(isolated_downloaders={"default": downloader_type()})
+    response = invoke(
+        node,
+        Request(server[0]),
+        {
+            "crawler.session.reuse": False,
+            "crawler.fingerprint.impersonate": None,
+        },
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "node_type,downloader_type",
+    [(DownloadNode, HttpxDownloader), (AsyncDownloadNode, AsyncHttpxDownloader)],
+)
 def test_unsupported_selected_downloader_is_rejected(
     server, node_type, downloader_type
 ):

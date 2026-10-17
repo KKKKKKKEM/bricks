@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Literal
 
 from lxml import etree
-from lxml.cssselect import CSSSelector
+from lxml.cssselect import CSSSelector, LxmlHTMLTranslator, LxmlTranslator
 
 from .base import BaseParser, check_expression
 from .rules import MISSING
@@ -56,8 +57,13 @@ class _MarkupParser(BaseParser):
         elif not isinstance(source, (str, bytes)):
             raise TypeError("markup source must be str, bytes, or an lxml element")
         elif self.format == "xml":
+            xml_source = (
+                source.encode("utf-8")
+                if isinstance(source, str) and "<?xml" in source[:256]
+                else source
+            )
             root = etree.fromstring(
-                source,
+                xml_source,
                 parser=etree.XMLParser(
                     encoding=self.encoding,
                     resolve_entities=False,
@@ -134,10 +140,10 @@ class CssParser(_MarkupParser):
                 raise ValueError(
                     "attribute requires a nonempty name and default output"
                 )
-        elements = CSSSelector(
-            expression,
-            translator=self.format,
-            namespaces=dict(namespaces) if namespaces is not None else None,
+        is_document_root = root is root.getroottree().getroot()
+        namespace_key = tuple(sorted((namespaces or {}).items()))
+        elements = _css_selector(
+            expression, self.format, namespace_key, is_document_root
         )(root)
         if attribute is not None:
             return [element.attrib.get(attribute, MISSING) for element in elements]
@@ -193,9 +199,44 @@ class XPathParser(_MarkupParser):
         Returns:
             XPath 原生求值结果。
         """
-        query = etree.XPath(
-            expression,
-            namespaces=dict(namespaces) if namespaces is not None else None,
-            smart_strings=False,
-        )
+        query = _xpath(expression, tuple(sorted((namespaces or {}).items())))
         return query(root, **dict(variables or {}))
+
+
+@lru_cache(maxsize=512)
+def _css_selector(
+    expression: str,
+    format: Literal["html", "xml"],
+    namespaces: tuple[tuple[str, str], ...],
+    document_root: bool,
+) -> Any:
+    """缓存有界的 CSS 编译结果，并区分文档与元素作用域。
+
+    Args:
+        expression: CSS 选择器。
+        format: HTML 或 XML 文档格式。
+        namespaces: 稳定排序的命名空间映射。
+        document_root: 是否从文档根开始查询。
+
+    Returns:
+        已编译查询。
+    """
+    if document_root:
+        return CSSSelector(expression, translator=format, namespaces=dict(namespaces))
+    translator = LxmlHTMLTranslator() if format == "html" else LxmlTranslator()
+    path = translator.css_to_xpath(expression, prefix="descendant::")
+    return etree.XPath(path, namespaces=dict(namespaces))
+
+
+@lru_cache(maxsize=512)
+def _xpath(expression: str, namespaces: tuple[tuple[str, str], ...]) -> etree.XPath:
+    """缓存有界的 XPath 编译结果。
+
+    Args:
+        expression: XPath 表达式。
+        namespaces: 稳定排序的命名空间映射。
+
+    Returns:
+        已编译 XPath。
+    """
+    return etree.XPath(expression, namespaces=dict(namespaces), smart_strings=False)

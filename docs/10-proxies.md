@@ -10,10 +10,9 @@ from bricks.proxies import ApiProxy
 
 provider = ApiProxy(
     "https://proxy-provider.example/api",
-    threshold=10,
     handle_response=lambda response: response.json()["addresses"],
 )
-spider = MySpider(proxy=provider)
+spider = MySpider(proxy=provider, slot_session_reuse=False)
 spider.run()
 ```
 
@@ -21,9 +20,9 @@ spider.run()
 缓存保存在当前 Slot。`Request.proxy` 的显式地址优先；已选地址在同一请求重试时保留。
 `threshold` 是允许的新请求次数，`ttl` 是最大占用秒数，两者都可以为 None。
 达到阈值不会中断正在重试的请求，下一次获取代理时才轮换。
-业务明确判定代理失效时，可在 `on_retry(context)` 中调用 `context.clear_proxy()`；
-它先丢弃管理器占用，再清除请求地址，下一次下载前重新选择。默认重试不会调用它。
-此方法不关闭或热切调用方装配的固定代理会话。
+Air 自动会话在创建时固定代理；该模式拒绝带 `auth`、`threshold` 或 `ttl` 的代理值。需要按请求轮换时，
+设置 `slot_session_reuse=False` 使用独立请求下载器。业务明确判定代理失效时，可在 `on_retry(context)` 中
+调用 `context.clear_proxy()`；默认重试不会调用它。此方法不关闭或热切调用方装配的固定代理会话。
 
 | 供应源 | 行为 |
 | --- | --- |
@@ -103,7 +102,8 @@ provider.configure({"mode": "rule"})
 并发账号应装配独立控制器或独立出口，不能用多个 Slot 包装同一全局选择组来宣称隔离。
 本实例无法阻止外部应用或其他进程切换该控制器。框架固定的是代理配置，不承诺供应商出口 IP 不轮换。
 
-YAML 工具通过 `uv sync --locked --extra clash` 安装。
+YAML 工具通过 `uv sync --locked --extra clash` 安装；`cfg_tpl()` 默认使用 `GLOBAL` 选择组并生成随机控制器 secret，
+也可显式传入 secret 后配置 `ClashProxy(secret=...)`。
 
 ```python
 from bricks import Request

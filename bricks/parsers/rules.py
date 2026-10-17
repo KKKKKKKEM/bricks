@@ -66,7 +66,7 @@ def _sync_result(value: Any, label: str) -> Any:
     return value
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Rule:
     """描述一个字段的显式取值与处理顺序，可在不同解析器间复用。
 
@@ -124,7 +124,7 @@ class Rule:
         object.__setattr__(self, "default", deepcopy(self.default))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Constant:
     """为每条记录提供独立的常量值。
 
@@ -139,7 +139,7 @@ class Constant:
         object.__setattr__(self, "value", deepcopy(self.value))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Group:
     """按顺序选择第一个非缺失候选，不捕获候选执行中的异常。
 
@@ -172,7 +172,7 @@ class Group:
         object.__setattr__(self, "default", deepcopy(self.default))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Pipeline:
     """依次执行值规则或同步转换函数，将上一步结果作为下一步输入。
 
@@ -207,7 +207,7 @@ class Pipeline:
         object.__setattr__(self, "steps", steps)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Collect:
     """在同一当前源上按序执行所有值规则，收集非缺失结果。
 
@@ -234,7 +234,7 @@ class Collect:
         object.__setattr__(self, "rules", _freeze_values(self.rules))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Rows:
     """将显式选中的列表逐项映射成记录，不执行隐式笛卡尔积。
 
@@ -263,7 +263,7 @@ class Rows:
         object.__setattr__(self, "fields", _freeze_rules(self.fields))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Product:
     """在同一当前源上执行各分支，将结果按笛卡尔积合并成记录。
 
@@ -346,7 +346,7 @@ def _freeze_rules(rules: RuleSet) -> RuleSet:
     Raises:
         TypeError: 不是支持的记录规则，即使源中没有数据也必须报错。
     """
-    if isinstance(rules, (Rows, Product)):
+    if isinstance(rules, (Rows, Product, MappingProxyType)):
         return rules
     if isinstance(rules, Mapping):
         return _freeze_fields(rules)
@@ -367,6 +367,8 @@ def _freeze_fields(fields: Mapping[str, Any]) -> Mapping[str, Any]:
     Raises:
         TypeError: 字段名或规则类型不合法。
     """
+    if isinstance(fields, MappingProxyType):
+        return fields
     if not isinstance(fields, Mapping):
         raise TypeError("fields must be a mapping")
     result: dict[str, Any] = {}

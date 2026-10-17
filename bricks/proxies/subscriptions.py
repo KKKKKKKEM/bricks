@@ -6,6 +6,7 @@ import base64
 import copy
 import inspect
 import json
+import secrets
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -48,11 +49,17 @@ def extract_nodes(content: str, *, form: str = "clash") -> list[dict[str, Any]]:
     if not isinstance(content, str):
         raise TypeError("subscription content must be text")
     if form == "clash":
-        import yaml
-
+        try:
+            import yaml
+        except ModuleNotFoundError as exc:
+            raise ImportError(
+                "Clash YAML support requires `pip install bricks-py[clash]`"
+            ) from exc
         data = yaml.safe_load(content)
-        nodes = data.get("proxies", []) if isinstance(data, dict) else None
-        if not isinstance(nodes, list) or any(
+        nodes = data.get("proxies") if isinstance(data, dict) else None
+        if not isinstance(nodes, list) or not nodes:
+            raise ValueError("Clash subscription must contain a non-empty proxies list")
+        if any(
             not isinstance(node, dict)
             or not isinstance(node.get("name"), str)
             or not node["name"]
@@ -66,17 +73,31 @@ def extract_nodes(content: str, *, form: str = "clash") -> list[dict[str, Any]]:
     for link in _decode(content).split():
         if not link.startswith("vmess://"):
             raise ValueError("v2ray subscriptions currently support vmess links")
-        value = json.loads(_decode(link[len("vmess://") :]))
+        try:
+            value = json.loads(_decode(link[len("vmess://") :]))
+        except (ValueError, TypeError) as exc:
+            raise ValueError("malformed VMess JSON") from exc
+        if not isinstance(value, dict):
+            raise ValueError("VMess payload must be a JSON object")
+        if any(name not in value for name in ("ps", "add", "port", "id")):
+            raise ValueError("VMess payload is missing required fields")
+        if value.get("type", "") not in ("none", ""):
+            raise ValueError("VMess header types other than none are unsupported")
+        try:
+            aid = int(value.get("aid") or 0)
+            port = int(value["port"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("VMess port and alterId must be integers") from exc
         tls = value.get("tls", "")
         if tls not in ("", "tls", False, True):
             raise ValueError("unsupported VMess TLS mode")
         node = {
             "name": value["ps"],
             "server": value["add"],
-            "port": int(value["port"]),
+            "port": port,
             "type": "vmess",
             "uuid": value["id"],
-            "alterId": int(value.get("aid", 0)),
+            "alterId": aid,
             "cipher": value.get("scy", "auto"),
             "tls": tls in ("tls", True),
             "skip-cert-verify": False,
@@ -130,12 +151,15 @@ def fetch_subscription(
     return extract_nodes(response.text, form=form)
 
 
-def cfg_tpl(*, http_port: int = 7890, socks_port: int = 7891) -> dict[str, Any]:
-    """生成仅监听本机的独立 Clash 配置模板。
+def cfg_tpl(
+    *, http_port: int = 7890, socks_port: int = 7891, secret: str | None = None
+) -> dict[str, Any]:
+    """生成仅监听本机并启用控制器认证的 Clash 配置模板。
 
     Args:
         http_port: HTTP 代理端口。
         socks_port: SOCKS 代理端口。
+        secret: 控制器 Bearer token；缺省时生成随机值。
 
     Returns:
         可由调用方继续修改的配置字典。
@@ -145,21 +169,29 @@ def cfg_tpl(*, http_port: int = 7890, socks_port: int = 7891) -> dict[str, Any]:
         for port in (http_port, socks_port)
     ):
         raise ValueError("proxy ports must be in 1..65535")
+    if secret is None:
+        secret = secrets.token_urlsafe(32)
+    if not isinstance(secret, str) or not secret:
+        raise ValueError("controller secret must be non-empty")
     return {
         "port": http_port,
         "socks-port": socks_port,
         "allow-lan": False,
         "bind-address": "127.0.0.1",
-        "mode": "rule",
+        "mode": "global",
         "external-controller": "127.0.0.1:9090",
+        "secret": secret,
         "proxies": [],
-        "proxy-groups": [{"name": "Proxy", "type": "select", "proxies": []}],
-        "rules": ["MATCH,Proxy"],
+        "proxy-groups": [{"name": "GLOBAL", "type": "select", "proxies": []}],
+        "rules": ["MATCH,GLOBAL"],
     }
 
 
 def subscribe(
-    *groups: Sequence[Mapping[str, Any]], http_port: int = 7890, socks_port: int = 7891
+    *groups: Sequence[Mapping[str, Any]],
+    http_port: int = 7890,
+    socks_port: int = 7891,
+    secret: str | None = None,
 ) -> str:
     """合并已解析的订阅节点并生成 YAML，不隐式联网或忽略失败来源。
 
@@ -167,6 +199,7 @@ def subscribe(
         groups: extract_nodes 或 fetch_subscription 得到的节点集合。
         http_port: HTTP 代理端口。
         socks_port: SOCKS 代理端口。
+        secret: 控制器 Bearer token；缺省时生成随机值。
 
     Returns:
         独立配置的 YAML 文本；重名节点获得稳定数字后缀。
@@ -174,9 +207,14 @@ def subscribe(
     Raises:
         ValueError: 没有节点或节点名称非法。
     """
-    import yaml
+    try:
+        import yaml
+    except ModuleNotFoundError as exc:
+        raise ImportError(
+            "Clash YAML support requires `pip install bricks-py[clash]`"
+        ) from exc
 
-    config = cfg_tpl(http_port=http_port, socks_port=socks_port)
+    config = cfg_tpl(http_port=http_port, socks_port=socks_port, secret=secret)
     used: set[str] = set()
     for group in groups:
         for original in group:

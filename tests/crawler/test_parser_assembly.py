@@ -436,34 +436,42 @@ def test_empty_factor_does_not_hide_errors_in_other_branches(keep_empty: bool) -
         parser.match({}, Product(([], Rows("missing", {})), keep_empty=keep_empty))
 
 
-def test_cancellation_and_callback_errors_propagate_from_nested_product() -> None:
-    """多层组装仍原样传播取消及回调异常，不通过保留空分支吞掉失败。"""
-    for error in (asyncio.CancelledError(), ValueError("callback failed")):
+@pytest.mark.parametrize(
+    "error", [asyncio.CancelledError(), ValueError("callback failed")]
+)
+def test_cancellation_and_callback_errors_propagate_from_nested_product(
+    error: BaseException,
+) -> None:
+    """多层组装仍原样传播取消及回调异常，不通过保留空分支吞掉失败。
 
-        def fail(value: Any) -> Any:
-            """抛出当前测试的原始异常。
+    Args:
+        error: 回调抛出的原始异常。
+    """
 
-            Args:
-                value: 当前字段值。
+    def fail(value: Any) -> Any:
+        """抛出当前测试的原始异常。
 
-            Raises:
-                BaseException: 当前测试指定的异常。
-            """
-            raise error
+        Args:
+            value: 当前字段值。
 
-        rules = Rows(
-            "items",
-            Product(
-                (
-                    {"parent": Constant("parent")},
-                    {"x": Rule("@", transform=fail)},
-                ),
-                keep_empty=True,
+        Raises:
+            BaseException: 当前测试指定的异常。
+        """
+        raise error
+
+    rules = Rows(
+        "items",
+        Product(
+            (
+                {"parent": Constant("parent")},
+                {"x": Rule("@", transform=fail)},
             ),
-        )
-        with pytest.raises(type(error)) as caught:
-            JmesPathParser().match({"items": [1]}, rules)
-        assert caught.value is error
+            keep_empty=True,
+        ),
+    )
+    with pytest.raises(type(error)) as caught:
+        JmesPathParser().match({"items": [1]}, rules)
+    assert caught.value is error
 
 
 class KeyParser:

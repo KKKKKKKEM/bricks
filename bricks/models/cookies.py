@@ -16,6 +16,21 @@ from ._validation import http_url, request_cookies
 from .headers import Headers
 
 
+def cookie_domain(hostname: str) -> str:
+    """按 CookieJar 约定规范化 Cookie 来源主机。
+
+    Args:
+        hostname: URL 解析得到的主机名，不含 IPv6 方括号。
+
+    Returns:
+        可用于 host-only Cookie 的域名。
+    """
+
+    if ":" in hostname:
+        return f"[{hostname}].local"
+    return hostname if "." in hostname else f"{hostname}.local"
+
+
 class RequestCookies(MutableMapping[str, str]):
     """每次写入均执行校验的可变请求 Cookie 映射。
 
@@ -140,7 +155,8 @@ class Cookies:
         if url is not None:
             http_url(url)
         if isinstance(values, Mapping):
-            domain = urlsplit(url).hostname if url else ""
+            hostname = urlsplit(url).hostname if url else None
+            domain = cookie_domain(hostname) if hostname else ""
             records = [
                 Cookie(
                     version=0,
@@ -148,7 +164,7 @@ class Cookies:
                     value=value,
                     port=None,
                     port_specified=False,
-                    domain=domain or "",
+                    domain=domain,
                     domain_specified=False,
                     domain_initial_dot=False,
                     path="/",
@@ -170,9 +186,43 @@ class Cookies:
         for cookie in records:
             if not isinstance(cookie, Cookie):
                 raise TypeError("cookies must contain http.cookiejar.Cookie objects")
-            validate_cookies({cookie.name: cookie.value or ""})
+            if isinstance(values, Mapping):
+                validate_cookies({cookie.name: cookie.value or ""})
             jar.set_cookie(deepcopy(cookie))
         self._records = tuple(jar)
+
+    @classmethod
+    def _from_transport(cls, values: Mapping[str, str], *, url: str) -> Cookies:
+        """接收传输库返回的 Cookie 映射，不按用户输入重新校验名称。"""
+
+        http_url(url)
+        hostname = urlsplit(url).hostname
+        if hostname is None:
+            raise ValueError("cookie URL must include a host")
+        domain = cookie_domain(hostname)
+        records = [
+            Cookie(
+                version=0,
+                name=name,
+                value=value,
+                port=None,
+                port_specified=False,
+                domain=domain,
+                domain_specified=False,
+                domain_initial_dot=False,
+                path="/",
+                path_specified=True,
+                secure=False,
+                expires=None,
+                discard=True,
+                comment=None,
+                comment_url=None,
+                rest={},
+            )
+            for name, value in values.items()
+        ]
+
+        return cls(records)
 
     @classmethod
     def from_headers(cls, headers: Headers, *, url: str) -> Cookies:

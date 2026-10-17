@@ -129,8 +129,8 @@ Request.timeout 以秒输入，转换为 Playwright 毫秒；None 使用 0 禁�
 page 模式作用于导航和回调中的默认操作超时，不表示用户回调的 Python 代码可被强制终止。
 api 模式设置原生请求超时，max_redirects 仅控制 API 模式，allow_redirects=False 对应 0，不自动重试。
 
-明确的页面导航 TimeoutError 返回 status_code=-1。未分类 Playwright 错误、启动失败、用户回调异常继续传播。
-浏览器会话在操作失败或取消后关闭，防止残留页面活动或请求继续修改 Cookie；需要继续时重新装配会话。
+明确的页面导航 TimeoutError 返回 status_code=-1 并关闭会话。Playwright 的导航 `net::ERR_*` 错误及 API 模式连接或超时错误返回 status_code=-1，保留会话供后续请求使用；未分类 Playwright 错误、启动失败和用户回调异常继续传播并关闭会话。
+取消仍会关闭会话，防止残留页面活动或请求继续修改 Cookie；需要继续时重新装配会话。
 异步取消 Context 创建时会等待原生创建完成并关闭结果，避免把未登记的 Context 泄漏到外部 Browser。
 异步取消会话关闭时也会等待资源栈完成清理，再向调用方传播取消；清理完成前不会把会话标记为已关闭。
 

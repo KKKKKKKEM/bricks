@@ -9,7 +9,13 @@ from typing import Any
 import primp
 
 from ..models import Request, Response
-from ._options import TransportOptions
+from ..models.cookies import Cookies
+from ._options import (
+    TransportOptions,
+    _check_duplicate_headers,
+    _failed_response,
+    _redirect_failure,
+)
 
 _PROFILES = frozenset(
     [
@@ -37,8 +43,9 @@ _NETWORK_ERRORS = (
     primp.RedirectError,
     primp.BodyError,
     primp.DecodeError,
+    primp.RequestError,
 )
-# 只处理已知网络或响应读取错误，构造和未知请求错误继续传播。
+# BuilderError 与 Rust panic 不属于可恢复请求失败。
 
 
 def _profile(impersonate: str | None) -> str | None:
@@ -76,9 +83,7 @@ def _parameters(source: Request) -> dict[str, Any]:
         ValueError: 请求包含重复头名称。
     """
 
-    names = [name.lower() for name, _ in source.headers.raw]
-    if len(names) != len(set(names)):
-        raise ValueError("primp does not support duplicate request headers")
+    _check_duplicate_headers(source, "primp")
     return {
         "method": source.method,
         "url": source.real_url,
@@ -108,13 +113,21 @@ def _response(
     Returns:
         领域响应，Cookie 仅保留名称和值，不具备完整属性。
     """
-
+    failure = _redirect_failure(
+        source,
+        received.status_code,
+        received.url,
+        received.headers.items(),
+        started,
+    )
+    if failure is not None:
+        return failure
     return Response(
         content,
         status_code=received.status_code,
         url=received.url,
         headers=received.headers,
-        cookies=received.cookies,
+        cookies=Cookies._from_transport(received.cookies, url=received.url),
         request=source,
         cost=monotonic() - started,
     )
@@ -299,6 +312,15 @@ class AsyncPrimpDownloader(_PrimpOptions):
             await self.close_session(session)
 
 
+def _check_cookie_header(client: Any, source: Request) -> None:
+    """拒绝无法避免会话 Cookie 存储合并的显式请求头。"""
+
+    if "cookie" in source.headers and client.get_cookies(source.real_url):
+        raise ValueError(
+            "primp cannot combine an explicit Cookie header with a populated session jar"
+        )
+
+
 @dataclass
 class PrimpSessionDownloader:
     """持有固定指纹客户端，释放引用即结束包装器的资源所有权。"""
@@ -369,6 +391,7 @@ class PrimpSessionDownloader:
             领域响应，配置错误继续传播。
         """
 
+        _check_cookie_header(self.client, source)
         parameters = _parameters(source)
         started = monotonic()
         try:
@@ -378,9 +401,7 @@ class PrimpSessionDownloader:
             finally:
                 received.close()
         except _NETWORK_ERRORS as error:
-            return Response(
-                status_code=-1, error=error, request=source, cost=monotonic() - started
-            )
+            return _failed_response(source, error, started)
 
 
 @dataclass
@@ -459,6 +480,7 @@ class AsyncPrimpSessionDownloader:
             asyncio.CancelledError: 取消继续传播。
         """
 
+        _check_cookie_header(self.client, source)
         parameters = _parameters(source)
         started = monotonic()
         try:
@@ -468,6 +490,4 @@ class AsyncPrimpSessionDownloader:
             finally:
                 await received.aclose()
         except _NETWORK_ERRORS as error:
-            return Response(
-                status_code=-1, error=error, request=source, cost=monotonic() - started
-            )
+            return _failed_response(source, error, started)

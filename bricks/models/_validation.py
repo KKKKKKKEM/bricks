@@ -82,7 +82,8 @@ def http_url(value: str) -> str:
     parsed = urlsplit(value)
     if parsed.scheme.lower() not in ("http", "https") or not parsed.hostname:
         raise ValueError("url must be an absolute HTTP or HTTPS URL")
-    parsed.port
+    # 读取 port 校验端口格式和 0-65535 范围，非法时由 urllib 抛出 ValueError。
+    parsed.port  # noqa: B018
     return value
 
 
@@ -159,8 +160,12 @@ def request_cookies(values: Mapping[str, str] | None) -> Mapping[str, str]:
 
     result = cookies(values)
     for value in result.values():
+        candidate = (
+            value[1:-1] if len(value) >= 2 and value[0] == value[-1] == '"' else value
+        )
         if any(
-            ord(char) < 0x21 or ord(char) > 0x7E or char in '",;\\' for char in value
+            ord(char) < 0x21 or ord(char) > 0x7E or char in '",;\\'
+            for char in candidate
         ):
             raise ValueError(
                 "request cookie values must contain only HTTP cookie octets"

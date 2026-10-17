@@ -8,12 +8,17 @@ from time import monotonic
 import requests
 
 from ..models import Request, Response
-from ._options import TransportOptions
+from ._options import (
+    TransportOptions,
+    _check_duplicate_headers,
+    _ephemeral_session,
+    _failed_response,
+)
 from ._requests_common import (
-    _StrictHostCookieSession,
     _request_cookies,
     _response,
     _sent_request,
+    _StrictHostCookieSession,
 )
 
 
@@ -32,11 +37,7 @@ def _fetch(client: requests.Session, source: Request) -> Response:
         Exception: 配置和程序错误继续传播。
     """
 
-    names = [name.lower() for name, _ in source.headers.raw]
-    if len(names) != len(set(names)):
-        raise ValueError(
-            "requests downloader does not support duplicate request headers"
-        )
+    _check_duplicate_headers(source, "requests downloader")
     started = monotonic()
     try:
         received = client.request(
@@ -55,15 +56,16 @@ def _fetch(client: requests.Session, source: Request) -> Response:
         requests.TooManyRedirects,
         requests.exceptions.ChunkedEncodingError,
         requests.exceptions.ContentDecodingError,
+        requests.exceptions.InvalidURL,
+        requests.exceptions.InvalidSchema,
     ) as error:
-        return Response(
-            status_code=-1,
-            error=error,
-            request=_sent_request(source, error.request)
-            if isinstance(error.request, requests.PreparedRequest)
-            else source,
-            cost=monotonic() - started,
+        sent = error.request
+        request = (
+            _sent_request(source, sent)
+            if isinstance(sent, requests.PreparedRequest)
+            else source
         )
+        return _failed_response(source, error, started).copy(request=request)
     with received:
         return _response(source, received).copy(
             history=tuple(_response(source, item) for item in received.history),
@@ -113,11 +115,10 @@ class RequestsDownloader(TransportOptions):
         """
 
         source = request.copy()
-        session = self.prepare_session(proxy=source.proxy)
-        try:
+        with _ephemeral_session(
+            self.prepare_session, self.close_session, source.proxy
+        ) as session:
             return _fetch(session.client, source)
-        finally:
-            self.close_session(session)
 
 
 @dataclass

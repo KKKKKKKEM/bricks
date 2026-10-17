@@ -7,15 +7,17 @@ import logging
 import random
 import threading
 from collections.abc import Callable, Mapping
-from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit, urlunsplit
 
 from bricks import hooks, signals
 from bricks.proxies import Manager
-from bricks.spider.context import Context
 
 from . import scripts
 from ._utils import sync
+
+if TYPE_CHECKING:
+    from bricks.spider.context import Context
 
 _LOGGER = logging.getLogger(__name__)  # 默认使用标准日志，不创建额外 Handler。
 _USER_AGENTS = {
@@ -64,6 +66,8 @@ def _context() -> Context:
     Raises:
         RuntimeError: 插件不在消费回调中运行。
     """
+    from bricks.spider.context import Context
+
     return Context.get_context()
 
 
@@ -77,7 +81,7 @@ def _script_match(value: Any, context: Context) -> bool:
     Returns:
         条件的布尔结果。
     """
-    scope = globals() | scripts.build_namespace(context)
+    scope = scripts.build_namespace(context)
     scripts.Generator([(scripts.Type.define, ("MATCHED", value))]).run(scope)
     return bool(scope["MATCHED"])
 
@@ -93,13 +97,9 @@ def _safe_url(value: str | None) -> str:
     """
     if not value:
         return ""
-    parts = urlsplit(value)
-    query = urlencode(
-        [
-            (name, "[REDACTED]")
-            for name, _ in parse_qsl(parts.query, keep_blank_values=True)
-        ]
-    )
+    candidate = value if "://" in value or value.startswith("//") else "//" + value
+    parts = urlsplit(candidate)
+    query = "[REDACTED]" if parts.query else ""
     netloc = parts.netloc.rsplit("@", 1)[-1]
     return urlunsplit((parts.scheme, netloc, parts.path, query, ""))
 
@@ -109,11 +109,11 @@ class Before:
 
     @staticmethod
     @hooks.current
-    def set_proxy(timeout: float | None = None) -> None:
-        """选择固定代理或当前 Slot 的代理，参数与 dev 保持简洁。
+    def set_proxy(timeout: float | None = 30) -> None:
+        """选择固定代理或当前 Slot 的代理。
 
         Args:
-            timeout: 代理供应源最大等待秒数，默认不限制。
+            timeout: 代理供应源最大等待秒数，默认 30 秒。
 
         Raises:
             RuntimeError: 代理管理器未获得 Slot。
@@ -206,7 +206,7 @@ class After:
             raise TypeError("conditional scripts must be a mapping")
         if not selected:
             return
-        scope = globals() | scripts.build_namespace(context, namespace)
+        scope = scripts.build_namespace(context, namespace)
         scripts.Generator([(scripts.Type.condition, selected)]).run(scope)
 
     @staticmethod
@@ -287,17 +287,23 @@ class After:
                         return
                     raise action()
                 if isinstance(action, str):
-                    scope = globals() | scripts.build_namespace(context)
+                    scope = scripts.build_namespace(context)
                     scripts.Generator([(scripts.Type.code, action)]).run(scope)
                 elif callable(action):
-                    scope = globals() | scripts.build_namespace(context)
+                    scope = scripts.build_namespace(context)
                     scripts.Generator([(scripts.Type.code, action)]).run(scope)
                 else:
                     raise TypeError(
                         "bypass actions must be signals, scripts or callables"
                     )
                 return
-            accepted = context.response.ok
+            status = context.response.status_code
+            if 200 <= status < 300:
+                accepted = True
+            elif status == -1 or status == 429 or 500 <= status < 600:
+                raise signals.Retry()
+            else:
+                raise signals.Failure(f"response rejected: status={status}")
         else:
             accepted = _script_match(selected, context)
         if not accepted:

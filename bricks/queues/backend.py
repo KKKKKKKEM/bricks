@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import time
 from collections import deque
 from collections.abc import Callable, Mapping
 from functools import partial
-from threading import Event, RLock, Thread
+from itertools import pairwise
+from threading import Event, Lock, RLock, Thread
 from uuid import uuid4
 
 from interlace.adapters.memory import TaskBackend as LocalBackend
+from interlace.engine.errors import ExecutionControlError
 from interlace.spi import (
     Delivery,
     DeliveryOutcome,
@@ -22,7 +25,7 @@ from interlace.spi import (
 )
 
 from .base import TaskQueue
-from .models import LeaseLostError, TaskLease, _LocalSubmission, seconds, text
+from .models import LeaseLostError, LocalSubmission, TaskLease, seconds, text
 
 
 class _Binding:
@@ -44,7 +47,10 @@ class _Binding:
         _unbind: 本地调度器的独立注销句柄。
         _closed: 是否已完成关闭。
         _close_lock: 串行化重复关闭，所有调用均等待资源清理完成。
-        _lost: 已续租失败的 token，停止反复续租并避免影响其他交付的心跳。
+        _lost: 已确认失效的租约 token。
+        _finishing: 正在提交结束决定的 token，不再续租。
+        _wake: 交付结束时唤醒轮询线程的事件。
+        _claim_lock: 串行化领取操作与交付结束标记。
         _before_claim: 领取前同步门控，返回延迟秒数时暂缓领取，None 放行。
         _before_execute: 获得 Slot 后、执行 Graph 前的同步交付决策。
     """
@@ -77,6 +83,9 @@ class _Binding:
         self.local = LocalBackend(max_delivery_attempts=1)
         self.active: dict[str, TaskLease] = {}
         self.lock = RLock()
+        self._claim_lock = Lock()
+        self._finishing: set[str] = set()
+        self._wake = Event()
         self.stop = Event()
         self.errors: deque[BaseException] = deque()
         self._handler = handler
@@ -107,7 +116,9 @@ class _Binding:
         """
         with self.lock:
             lease = self.active[delivery.work.id]
+
         failure: BaseException | None = None
+        error_text = ""
         try:
             current = Delivery(
                 delivery.work, lease.attempt, slot_lease=delivery.slot_lease
@@ -127,35 +138,64 @@ class _Binding:
                 raise TypeError("work handler must return DeliveryResult")
         except BaseException as exc:
             failure = exc
-            result = DeliveryResult.reject(exc)
-        # 续租与确认、移除本地凭据必须互斥，防止确认后的续租误报失效。
-        with self.lock:
-            try:
-                if result.outcome is DeliveryOutcome.ACK:
-                    self.queue.ack(lease)
-                elif result.outcome is DeliveryOutcome.RETRY:
-                    self.queue.retry(
-                        lease, error="" if result.error is None else str(result.error)
+            error_text = f"{type(exc).__name__}: {exc}"
+            if isinstance(
+                exc,
+                (
+                    asyncio.CancelledError,
+                    KeyboardInterrupt,
+                    SystemExit,
+                    ExecutionControlError,
+                ),
+            ):
+                result = DeliveryResult.retry(exc)
+            else:
+                result = DeliveryResult.reject(exc)
+        with self._claim_lock:
+            with self.lock:
+                self._finishing.add(lease.token)
+        try:
+            if lease.token in self._lost:
+                failure = failure or LeaseLostError("queue lease was lost")
+            elif result.outcome is DeliveryOutcome.ACK:
+                self.queue.ack(lease)
+            elif result.outcome is DeliveryOutcome.RETRY:
+                status = self.queue.retry(
+                    lease,
+                    error=error_text
+                    or (
+                        ""
+                        if result.error is None
+                        else f"{type(result.error).__name__}: {result.error}"
+                    ),
+                )
+                if status == "dead":
+                    failure = (
+                        failure
+                        or result.error
+                        or RuntimeError("maximum delivery attempts exhausted")
                     )
-                    record = self.queue.get(delivery.work.id)
-                    if record is not None and record.status == "dead":
-                        failure = result.error or RuntimeError(
-                            "maximum delivery attempts exhausted"
-                        )
-                else:
-                    self.queue.reject(
-                        lease, error="" if result.error is None else str(result.error)
-                    )
-                    failure = result.error
-            except BaseException as exc:
-                # 写回失败时由过期回收恢复；不能以本地执行结束代替存储确认。
-                failure = failure or exc
-                self.stop.set()
-            finally:
+            else:
+                self.queue.reject(
+                    lease,
+                    error=error_text
+                    or (
+                        ""
+                        if result.error is None
+                        else f"{type(result.error).__name__}: {result.error}"
+                    ),
+                )
+                failure = result.error
+        except BaseException as exc:
+            failure = failure or exc
+        finally:
+            with self.lock:
                 if failure is not None:
                     self.errors.append(failure)
                 self.active.pop(delivery.work.id, None)
                 self._lost.discard(lease.token)
+                self._finishing.discard(lease.token)
+                self._wake.set()
         return DeliveryResult.ack()
 
     def submit_local(self, work: Work, slot_lease: SlotLease) -> None:
@@ -177,13 +217,17 @@ class _Binding:
             slot_lease.release()
             return
         with self.lock:
-            if self._closed or self.stop.is_set():
-                self.queue.retry(lease, error="local queue binding is closed")
-                raise RuntimeError("queue binding is closed")
-            if work.id in self.active:
-                self.queue.retry(lease, error="local task is already active")
-                raise LeaseLostError("overlapping local delivery of an active task")
-            self.active[work.id] = lease
+            unavailable = self._closed or self.stop.is_set()
+            duplicate = work.id in self.active
+            if not unavailable and not duplicate:
+                self.active[work.id] = lease
+        if unavailable:
+            self.queue.retry(lease, error="local queue binding is closed")
+            raise RuntimeError("queue binding is closed")
+        if duplicate:
+            self.queue.retry(lease, error="local task is already active")
+            slot_lease.release()
+            return
         try:
             self.local.submit_local(self.queue.name, lease.work, slot_lease)
         except BaseException:
@@ -193,36 +237,54 @@ class _Binding:
             raise
 
     def _poll(self) -> None:
-        """有界预取并持续续租；存储异常后停止新领取，仍等待当前执行清理。"""
+        """有界预取并续租，按租约丢失与暂时存储故障分别处理。"""
         next_heartbeat = time.monotonic() + self._ttl / 3
-        next_claim = 0.0  # 领取前 Hook 的延迟不会暂停已领取任务的续租。
+        next_claim = 0.0
+        claim_failures = 0
+        claim_failed_at: float | None = None
         while True:
+            self._wake.clear()
             with self.lock:
                 active = tuple(self.active.values())
             if self.stop.is_set() and not active:
                 return
-            try:
-                if time.monotonic() >= next_heartbeat:
-                    for lease in active:
+            now = time.monotonic()
+            if now >= next_heartbeat:
+                for lease in active:
+                    with self.lock:
+                        if (
+                            self.active.get(lease.work.id, None) is None
+                            or self.active[lease.work.id].token != lease.token
+                            or lease.token in self._lost
+                            or lease.token in self._finishing
+                        ):
+                            continue
+                    try:
+                        renewed = self.queue.renew(lease, lease_seconds=self._ttl)
+                    except LeaseLostError as exc:
                         with self.lock:
-                            if (
-                                lease.work.id not in self.active
-                                or lease.token in self._lost
-                            ):
-                                continue
-                            # 与完成确认互斥，防止确认后多余的续租误报失效。
-                            try:
-                                self.queue.renew(lease, lease_seconds=self._ttl)
-                            except BaseException as exc:
+                            if lease.token not in self._lost:
                                 self._lost.add(lease.token)
                                 self.errors.append(exc)
-                                self.stop.set()
-                    next_heartbeat = time.monotonic() + self._ttl / 3
-                if (
-                    not self.stop.is_set()
-                    and len(active) < self._concurrency
-                    and time.monotonic() >= next_claim
-                ):
+                    except BaseException as exc:
+                        if time.monotonic() >= lease.deadline:
+                            with self.lock:
+                                if lease.token not in self._lost:
+                                    self._lost.add(lease.token)
+                                    self.errors.append(exc)
+                    else:
+                        with self.lock:
+                            current = self.active.get(lease.work.id)
+                            if current is not None and current.token == lease.token:
+                                self.active[lease.work.id] = renewed
+                next_heartbeat = time.monotonic() + self._ttl / 3
+            if (
+                not self.stop.is_set()
+                and len(active) < self._concurrency
+                and time.monotonic() >= next_claim
+            ):
+                claiming = False
+                try:
                     delay = (
                         None
                         if self._before_claim is None
@@ -232,46 +294,73 @@ class _Binding:
                         if inspect.iscoroutine(delay):
                             delay.close()
                         next_claim = time.monotonic() + seconds(delay, positive=False)
-                        # 即使请求零延迟也等待一轮，避免空轮询忙循环。
-                        self.stop.wait(min(self._interval, self._ttl / 3))
-                        continue
-                    claimed = self.queue.claim(self._owner, lease_seconds=self._ttl)
-                    if claimed is not None:
-                        with self.lock:
-                            if claimed.work.id in self.active:
+                    else:
+                        with self._claim_lock:
+                            with self.lock:
+                                finishing = bool(self._finishing)
+                            claiming = not finishing
+                            claimed = (
+                                None
+                                if finishing
+                                else self.queue.claim(
+                                    self._owner, lease_seconds=self._ttl
+                                )
+                            )
+                        claiming = False
+                        claim_failures = 0
+                        claim_failed_at = None
+                        if claimed is not None:
+                            with self.lock:
+                                duplicate = claimed.work.id in self.active
+                                if not duplicate:
+                                    self.active[claimed.work.id] = claimed
+                            if duplicate:
                                 self.queue.retry(
                                     claimed,
                                     error="previous local delivery is still running",
                                 )
-                                raise LeaseLostError(
-                                    "overlapping redelivery of an active task"
-                                )
-                            self.active[claimed.work.id] = claimed
-                        try:
-                            self.local.submit(self.queue.name, claimed.work)
-                        except BaseException:
+                            else:
+                                try:
+                                    self.local.submit(self.queue.name, claimed.work)
+                                except BaseException:
+                                    with self.lock:
+                                        self.active.pop(claimed.work.id, None)
+                                    self.queue.retry(
+                                        claimed, error="local scheduling failed"
+                                    )
+                                    raise
+                                self._wake.set()
+                                continue
+                except BaseException as exc:
+                    if not claiming or isinstance(exc, (LeaseLostError, TimeoutError)):
+                        with self.lock:
+                            self.errors.append(exc)
+                        self.stop.set()
+                    else:
+                        claim_failures += 1
+                        if claim_failed_at is None:
+                            claim_failed_at = time.monotonic()
+                        if time.monotonic() - claim_failed_at >= self._ttl:
                             with self.lock:
-                                self.active.pop(claimed.work.id, None)
-                            self.queue.retry(claimed, error="local scheduling failed")
-                            raise
-                        continue
-            except BaseException as exc:
-                with self.lock:
-                    if not self.errors:
-                        self.errors.append(exc)
-                self.stop.set()
-                next_heartbeat = time.monotonic() + self._ttl / 3
-            # stop 后也要按正常间隔等待，不能使用已置位 Event 造成忙循环。
-            interval = min(self._interval, self._ttl / 3)
-            if self.stop.is_set():
-                time.sleep(interval)
-            else:
-                self.stop.wait(interval)
+                                self.errors.append(exc)
+                            self.stop.set()
+                        else:
+                            next_claim = time.monotonic() + min(
+                                self._interval * (2 ** min(claim_failures, 6)),
+                                self._ttl / 3,
+                            )
+            timeout = min(self._interval, self._ttl / 3)
+            if time.monotonic() < next_claim:
+                timeout = min(timeout, max(0.0, next_claim - time.monotonic()))
+            if time.monotonic() < next_heartbeat:
+                timeout = min(timeout, max(0.0, next_heartbeat - time.monotonic()))
+            self._wake.wait(timeout)
 
     def close(self) -> None:
         """停止领取并等待所有已领取交付及 Slot 清理，不关闭借用存储。"""
         with self._close_lock:
             self.stop.set()
+            self._wake.set()
             if self.thread.ident is not None:
                 self.thread.join()
             if self._closed:
@@ -374,7 +463,8 @@ class QueueBackend:
             work: JSON 可序列化任务。
         """
         with self._lock:
-            self._queue(queue).put(work)
+            store = self._queue(queue)
+        store.put(work)
 
     def submit_local(self, queue: str, work: Work, lease: SlotLease) -> None:
         """持久化目标 Work 并在当前进程延续同一 Slot 链。
@@ -401,9 +491,9 @@ class QueueBackend:
             binding = bindings[self._local_cursor % len(bindings)]
             self._local_cursor += 1
             target = (
-                work.inputs.work if isinstance(work.inputs, _LocalSubmission) else work
+                work.inputs.work if isinstance(work.inputs, LocalSubmission) else work
             )
-            binding.submit_local(target, lease)
+        binding.submit_local(target, lease)
 
     def bind(
         self,
@@ -432,7 +522,8 @@ class QueueBackend:
             store = self._queue(queue)
             if not callable(handler) or any(
                 check(candidate)
-                for candidate in (handler, getattr(handler, "__call__", None))
+                # 可调用实例的异步或生成器 __call__ 需单独检查。
+                for candidate in (handler, getattr(handler, "__call__", None))  # noqa: B004
                 for check in (
                     inspect.iscoroutinefunction,
                     inspect.isasyncgenfunction,
@@ -503,14 +594,25 @@ class QueueBackend:
         Raises:
             BaseException: 原始处理器异常或后台存储错误。
         """
+        failures: list[BaseException] = []
         with self._lock:
-            if self._errors:
-                raise self._errors.popleft()
+            failures.extend(self._errors)
+            self._errors.clear()
             bindings = tuple(self._bindings)
         for binding in bindings:
             with binding.lock:
-                if binding.errors:
-                    raise binding.errors.popleft()
+                failures.extend(binding.errors)
+                binding.errors.clear()
+        unique: list[BaseException] = []
+        seen: set[int] = set()
+        for failure in failures:
+            if id(failure) not in seen:
+                seen.add(id(failure))
+                unique.append(failure)
+        if unique:
+            for earlier, later in pairwise(unique):
+                earlier.__cause__ = later
+            raise unique[0]
 
     def wait_idle(self, timeout: float | None = None) -> None:
         """运行时等待共享队列排空；关闭后只等待本地交付和线程清理。
@@ -554,12 +656,13 @@ class QueueBackend:
                 bindings = tuple(self._bindings)
                 for binding in bindings:
                     binding.stop.set()
+                    binding._wake.set()
             failures: list[BaseException] = []
             for binding in bindings:
                 try:
                     self._unbind(binding)
                 except BaseException as exc:
                     failures.append(exc)
+            with self._lock:
+                self._errors.extend(failures)
             self._raise_failure()
-            if failures:
-                raise failures[0]
