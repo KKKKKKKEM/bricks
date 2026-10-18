@@ -11,7 +11,7 @@ from threading import Event, Lock
 from uuid import uuid4
 
 import pytest
-from interlace import Slot
+from interlace.engine import Slot
 
 from bricks import Request, Response, hooks
 from bricks.plugins.on_request import Before

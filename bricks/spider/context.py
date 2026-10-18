@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 from interlace import Context as EngineContext
-from interlace import Event, Slot
+from interlace import Event
+from interlace.engine import Slot
 from interlace.spi import Work
 
 from bricks import Items, Request, Response

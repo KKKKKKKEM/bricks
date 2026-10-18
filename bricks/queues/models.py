@@ -9,8 +9,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from interlace import Event, ExecutionLimits
-from interlace.spi import Work
+from interlace import Event
+from interlace.spi import ExecutionLimits, Work
 
 
 class LeaseLostError(RuntimeError):

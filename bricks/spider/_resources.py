@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any, NoReturn, cast
 
-from interlace import Graph, Runtime, Slot, SlotPool
-from interlace.runtime import EventRouter, GraphWorker
+from interlace import Graph, Runtime
+from interlace.engine import Slot, SlotPool
+from interlace.runtime import LocalInfrastructurePlugin
 from interlace.spi import SlotProvider
 
 from bricks.downloaders import SessionDownloader
@@ -144,13 +145,7 @@ def open_resources(spider: Any, initial: Graph, crawl: Graph) -> None:
             before_claim=spider._before_claim,
             before_execute=spider._after_claim,
         )
-        router = EventRouter(publisher=backend)
-        worker = GraphWorker(
-            consumer=backend,
-            emit=router.publish,
-            emit_local=router.publish_local,
-        )
-        runtime = Runtime(router=router, worker=worker)
+        runtime = Runtime(plugins=[LocalInfrastructurePlugin(tasks=backend)])
         runtime.register(spider.init_graph_name, initial)
         runtime.register(spider.crawl_graph_name, crawl)
         runtime.route(

@@ -71,7 +71,7 @@ with Runtime() as runtime:
 
 select 是同步、快速、可重入的领域函数，接收本次请求副本，仅负责返回名称；不要在其中执行网络 I/O 或保存当前请求状态。
 即使使用 AsyncDownloadNode，选择函数本身也保持同步，真正需要 await 的行为放在 AsyncDownloader.fetch 中。
-这与核心 InputPolicy/selector contribution 无关：选择下载实现不改变 Graph 的静态连接或 token 消费规则。
+这与核心 InputPolicy/selector 无关：选择下载实现不改变 Graph 的静态连接或 token 消费规则。
 
 同一 Graph 可以重复绑定下载节点类的不同实例，也可以由同一个节点按请求动态选择多个下载器。
 节点的输入端口为 `request: Request`，输出端口为 `response: Response`，可继续连接解析或业务处理节点。
@@ -348,7 +348,7 @@ curl_cffi、HTTPX、wreq、primp 的同步与异步下载器，以及 RequestsDo
 ```python
 from collections.abc import Mapping
 
-from interlace import Slot
+from interlace.engine import Slot
 from bricks import Downloader, DownloadNode
 
 

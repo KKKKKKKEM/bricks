@@ -6,7 +6,8 @@ import inspect
 import pytest
 from curl_cffi import requests as curl_requests
 from curl_cffi.requests.exceptions import ImpersonateError
-from interlace import Graph, Runtime, Slot
+from interlace import Graph, Runtime
+from interlace.engine import Slot
 from interlace.engine.events import bind_context
 
 from bricks import AsyncDownloadNode, DownloadNode, Request

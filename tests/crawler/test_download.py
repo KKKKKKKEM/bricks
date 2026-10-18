@@ -6,7 +6,8 @@ from threading import Barrier
 
 import httpx
 import pytest
-from interlace import Graph, Node, Ports, Runtime, Slot, SlotPool
+from interlace import Graph, Node, Runtime
+from interlace.engine import Slot, SlotPool
 from interlace.engine.errors import ExecutionCancelledError, NodeTimeoutError
 from interlace.engine.events import bind_context
 
@@ -210,7 +211,7 @@ def test_slot_sessions_follow_events_and_isolate_concurrent_chains(server):
     class Continue(Node):
         """登录后发出携带同一 Slot 的后续请求。"""
 
-        input_ports = Ports(response=Response)  # 登录响应端口。
+        inputs = {"response": Response}  # 登录响应端口。
 
         def execute(self, inputs, context):
             """保存账号标记并显式发出后续事件。
@@ -226,7 +227,7 @@ def test_slot_sessions_follow_events_and_isolate_concurrent_chains(server):
     class Collect(Node):
         """收集跨图延续的响应及会话归属。"""
 
-        input_ports = Ports(response=Response)  # 后续请求响应端口。
+        inputs = {"response": Response}  # 后续请求响应端口。
 
         def execute(self, inputs, context):
             """记录响应 Cookie 与 Slot 身份。

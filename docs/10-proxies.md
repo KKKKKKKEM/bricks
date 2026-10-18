@@ -39,7 +39,7 @@ API 只重试网络失败、429、5xx 和空地址结果；可配置有限等待
 ## 显式 Slot 管理
 
 ```python
-from interlace import Slot
+from interlace.engine import Slot
 from bricks.proxies import CustomProxy, Manager
 
 manager = Manager(CustomProxy("localhost:7890", threshold=10))

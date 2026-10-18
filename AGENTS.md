@@ -31,7 +31,9 @@
    `bricks.plugins`；该插件包不包含 Interlace 的插件宿主或注册实现。
    爬虫流程信号位于 `bricks.signals`，由领域节点处理，不并入 Interlace 的执行控制异常。
    独立代理值、供应源、Clash 控制与按 Slot 装配的管理工具位于 `bricks.proxies`，不在顶层转导出。
-3. Graph、Node、Event、Context、Execution、Slot 和 Runtime 从 `interlace` 导入，不在 Bricks 转导出。
+3. Graph、Node、Output、Event、Context 和 Runtime 从 `interlace` 导入，Execution、ExecutionPlan、Slot 与 SlotPool 从
+   `interlace.engine` 导入，ExecutionLimits 与任务 SPI 从 `interlace.spi` 导入；均不在 Bricks 转导出。
+   自定义任务后端经 `interlace.runtime.LocalInfrastructurePlugin(tasks=...)` 装配，不直接构造 Router 或 Worker。
 4. 新能力优先组合现有模型、普通函数、领域节点与窄协议，避免不必要的包装和全局注册表。
 5. curl_cffi 是默认传输和正式依赖；HTTPX、requests、wreq、primp、requests-go、playwright、camoufox
    通过同名 extra 安装，默认导入路径不加载可选库。
@@ -225,7 +227,7 @@
    同步浏览器、异步 Session 或自定义多资源 Slot 仍由调用方显式装配。
 2. 运行仅装配初始化和消费两张领域 Graph。公开 Spider API 与生命周期编排位于 `bricks.spider.air`，
    `_graphs` 负责图装配，`_initialization` 驱动初始化租约和断点，`_resources` 管理自有 Slot、会话、代理及运行时资源。
-   业务 Hook 的每个插槽必须是独立 HookNode，节点按 index 执行该阶段回调快照，不通过 Interlace NodeHook 装配业务插槽。
+   业务 Hook 的每个插槽必须是独立 HookNode，节点按 index 执行该阶段回调快照，不通过 Interlace 节点中间件装配业务插槽。
    初始化逐项或逐批通过 make_seeds、next_seed、submit、checkpoint 推进，消费通过
    make_request、download、parse、pipeline、complete 推进，并显式连接对应 before/after 插槽。
    retry、before_retry、retry_prepare、after_retry、retry_wait 构成回到 before_request 的重试分支。
@@ -235,7 +237,7 @@
    parse 明确接受 Items 或 list[dict]。业务方法可以返回 Awaitable，但不接受异步生成器或隐式函数参数注入。
 4. air.Context 的 seeds/request/response/items/target/task_queue/queue_name/form 为领域接口，
    它与 air.InitContext 均通过 Context(parent=base) 组合核心执行能力；Spider.Context 可替换并重写 make。
-   当前数据由图内载体传递，实例每次 firing 独立创建；核心 enter Hook 替换输入后节点绑定最终输入。
+   当前数据由图内载体传递，实例每次 firing 独立创建；核心节点中间件替换输入后节点绑定最终输入。
    业务方法与 Hook 实际调用期间通过 ContextVar 绑定当前领域 Context；Context、InitContext 和 HookContext
    的 get_context() 提供同类别的便捷访问，按同步调用链与异步任务隔离，回调结束后恢复上一层绑定。
    install(name, value, *, nx=False) 与 obtain(name, default=None) 只使用 Slot 内 Bricks 业务命名空间；同一 Slot

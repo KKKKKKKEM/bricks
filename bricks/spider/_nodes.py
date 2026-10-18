@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from typing import Any
 
 from interlace import Context as EngineContext
-from interlace import Node, Output, Ports
+from interlace import Node, Output
 from interlace.engine.errors import ExecutionControlError
 
 from bricks import AsyncDownloadNode, DownloadNode, signals
@@ -97,8 +97,8 @@ class HookNode(Node):
     """一个阶段一个节点，按固定顺序调用该插槽全部 Hooks。
 
     Attributes:
-        input_ports: 初始化状态、入口种子或图内任务端口。
-        output_ports: 正常、完成以及当前阶段允许的 retry/skip 端口。
+        inputs: 初始化状态、入口种子或图内任务端口。
+        outputs: 正常、完成以及当前阶段允许的 retry/skip 端口。
         _owner: 提供错误报告和回调生命周期保护的 Spider。
         _form: 当前插槽名称。
         _tasks: 打开时固定、已按 index 排序的声明。
@@ -133,12 +133,12 @@ class HookNode(Node):
         self._initial, self._retry, self._skip = initial, retry, skip
         value_type = Initialization if initial else _Task
         normal = "initial" if initial else "task"
-        self.input_ports = (
-            Ports(initial=Initialization)
+        self.inputs = (
+            {"initial": Initialization}
             if initial
-            else Ports(seeds=dict)
+            else {"seeds": dict}
             if entry
-            else Ports(task=_Task)
+            else {"task": _Task}
         )
         ports: dict[str, type[Any]] = {
             normal: value_type,
@@ -148,7 +148,7 @@ class HookNode(Node):
             ports["retry"] = value_type
         if skip:
             ports["skip"] = value_type
-        self.output_ports = Ports(**ports)
+        self.outputs = ports
 
     def execute(
         self, inputs: Mapping[str, Any], context: EngineContext
@@ -253,8 +253,8 @@ class CrawlNode(Node):
     """执行业务操作，Hook 已由前后独立节点执行。
 
     Attributes:
-        input_ports: 图内任务输入。
-        output_ports: 正常与成功收尾端口，下载阶段另有 retry。
+        inputs: 图内任务输入。
+        outputs: 正常与成功收尾端口，下载阶段另有 retry。
         _owner: 当前 Spider。
         _stage: 构造时固定的操作名称。
         _callback: 业务方法或 None。
@@ -263,7 +263,7 @@ class CrawlNode(Node):
         _retry_delay: 默认重试等待秒数。
     """
 
-    input_ports = Ports(task=_Task)  # 同一执行的数据载体。
+    inputs = {"task": _Task}  # 同一执行的数据载体。
 
     def __init__(
         self,
@@ -291,12 +291,10 @@ class CrawlNode(Node):
             max_retries,
             retry_delay,
         )
-        ports = {"task": _Task, "complete": _Task}
+        ports: dict[str, type[Any]] = {"task": _Task, "complete": _Task}
         if stage == "download":
             ports["retry"] = _Task
-        self.output_ports = (
-            Ports(summary=dict) if stage == "complete" else Ports(**ports)
-        )
+        self.outputs = {"summary": dict} if stage == "complete" else ports
 
     def execute(
         self, inputs: Mapping[str, Any], context: EngineContext
@@ -432,14 +430,14 @@ class InitNode(Node):
     """推进种子源、提交与检查点，前后 Hook 由独立节点执行。
 
     Attributes:
-        input_ports: 当前初始化状态。
-        output_ports: next_seed 分支为 seed/complete，其他操作为 initial/complete。
+        inputs: 当前初始化状态。
+        outputs: next_seed 分支为 seed/complete，其他操作为 initial/complete。
         _owner: 当前 Spider。
         _stage: 操作名称。
         _callback: 种子工厂或提交函数。
     """
 
-    input_ports = Ports(initial=Initialization)  # 不跨队列传输的生产状态。
+    inputs = {"initial": Initialization}  # 不跨队列传输的生产状态。
 
     def __init__(
         self, owner: Any, stage: str, callback: Callable[..., Any] | None = None
@@ -452,12 +450,12 @@ class InitNode(Node):
             callback: 对应业务函数。
         """
         self._owner, self._stage, self._callback = owner, stage, callback
-        self.output_ports = (
-            Ports(summary=dict)
+        self.outputs = (
+            {"summary": dict}
             if stage == "complete"
-            else Ports(seed=Initialization, complete=Initialization)
+            else {"seed": Initialization, "complete": Initialization}
             if stage == "next_seed"
-            else Ports(initial=Initialization, complete=Initialization)
+            else {"initial": Initialization, "complete": Initialization}
         )
 
     def execute(

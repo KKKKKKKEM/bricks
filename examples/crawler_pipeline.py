@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, TextIO
 from urllib.parse import urldefrag, urljoin, urlsplit
 
-from interlace import Context, Graph, Node, Output, Ports, Runtime
+from interlace import Context, Graph, Node, Output, Runtime
 
 from bricks import DownloadNode, Items, Request, Response
 from bricks.downloaders.curl_cffi import CurlCffiDownloader
@@ -90,8 +90,8 @@ def parse_page(response: Response) -> Page:
 class Parse(Node):
     """将 HTTP 响应转换为领域解析结果。"""
 
-    input_ports = Ports(response=Response)  # 当前执行的下载响应。
-    output_ports = Ports(page=Page)  # 当前执行拥有的页面结果。
+    inputs = {"response": Response}  # 当前执行的下载响应。
+    outputs = {"page": Page}  # 当前执行拥有的页面结果。
 
     def execute(self, inputs: Mapping[str, Any], context: Context) -> Output:
         """调用普通解析函数并显式返回 Output。
@@ -112,8 +112,8 @@ class Parse(Node):
 class WriteJsonl(Node):
     """将 Items 写入调用方拥有的文件；实例仅用于串行执行。"""
 
-    input_ports = Ports(page=Page)  # 含待保存 Items 的页面结果。
-    output_ports = Ports(page=Page)  # 原结果交还装配循环以继续分页。
+    inputs = {"page": Page}  # 含待保存 Items 的页面结果。
+    outputs = {"page": Page}  # 原结果交还装配循环以继续分页。
 
     def __init__(self, stream: TextIO) -> None:
         """注入由调用方打开并关闭的文本文件。

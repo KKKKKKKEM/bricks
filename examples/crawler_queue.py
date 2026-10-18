@@ -6,8 +6,8 @@ import argparse
 import json
 from contextlib import ExitStack
 
-from interlace import Context, Graph, Node, Ports, Runtime
-from interlace.runtime import EventRouter, GraphWorker
+from interlace import Context, Graph, Node, Runtime
+from interlace.runtime import LocalInfrastructurePlugin
 
 from bricks.queues import MemoryTaskQueue, QueueBackend, TaskQueue, make_work
 
@@ -15,8 +15,8 @@ from bricks.queues import MemoryTaskQueue, QueueBackend, TaskQueue, make_work
 class PrintSeed(Node):
     """打印领取到的 JSON 种子，不把日志输出当作幂等存储。"""
 
-    input_ports = Ports(seed=dict)  # 队列传来的 JSON 种子数据。
-    output_ports = Ports()  # 本示例通过标准输出展示处理过程。
+    inputs = {"seed": dict}  # 队列传来的 JSON 种子数据。
+    outputs = {}  # 本示例通过标准输出展示处理过程。
 
     def execute(self, inputs, context: Context) -> None:
         """处理当前种子并展示当前进程的 Slot 存在性。
@@ -68,12 +68,8 @@ def consume(queue: TaskQueue, concurrency: int) -> None:
         concurrency: 此进程的执行并发。
     """
     backend = QueueBackend({queue.name: queue})
-    router = EventRouter(publisher=backend)
-    worker = GraphWorker(
-        consumer=backend, emit=router.publish, emit_local=router.publish_local
-    )
     try:
-        with Runtime(router=router, worker=worker) as runtime:
+        with Runtime(plugins=[LocalInfrastructurePlugin(tasks=backend)]) as runtime:
             runtime.register(
                 "crawl@v1", Graph(entrypoint="print").add(print=PrintSeed())
             )

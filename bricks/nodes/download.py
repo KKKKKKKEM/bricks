@@ -7,7 +7,8 @@ from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Any, TypeVar
 
-from interlace import Context, Node, Output, Ports, Slot
+from interlace import Context, Node, Output
+from interlace.engine import Slot
 
 from ..downloaders import (
     AsyncDownloader,
@@ -216,8 +217,8 @@ class DownloadNode(Node):
         _downloaders: 固定注册快照或 Slot 解析函数，资源由调用方管理。
     """
 
-    input_ports = Ports(request=Request)  # 接收待下载的 HTTP 请求。
-    output_ports = Ports(response=Response)  # 输出 HTTP 响应或传输失败响应。
+    inputs = {"request": Request}  # 接收待下载的 HTTP 请求。
+    outputs = {"response": Response}  # 输出 HTTP 响应或传输失败响应。
 
     def __init__(
         self,
@@ -314,8 +315,8 @@ class AsyncDownloadNode(Node):
         _downloaders: 固定注册快照或 Slot 解析函数，资源由调用方管理。
     """
 
-    input_ports = Ports(request=Request)  # 接收待下载的 HTTP 请求。
-    output_ports = Ports(response=Response)  # 输出 HTTP 响应或传输失败响应。
+    inputs = {"request": Request}  # 接收待下载的 HTTP 请求。
+    outputs = {"response": Response}  # 输出 HTTP 响应或传输失败响应。
 
     def __init__(
         self,

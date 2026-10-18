@@ -11,7 +11,7 @@ from threading import RLock
 from typing import Protocol, TypedDict, runtime_checkable
 from urllib.parse import quote, urlsplit, urlunsplit
 
-from interlace import Slot
+from interlace.engine import Slot
 
 from bricks import Request
 from bricks.models._validation import duration

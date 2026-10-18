@@ -167,18 +167,13 @@ succeeded 不自动重新开始。fence 仅用于本队列的初始化写入，�
 
 ```python
 from interlace import Runtime
-from interlace.runtime import EventRouter, GraphWorker
+from interlace.runtime import LocalInfrastructurePlugin
 from bricks.queues import QueueBackend
 
 backend = QueueBackend({queue.name: queue}, lease_seconds=30)
-router = EventRouter(publisher=backend)
-worker = GraphWorker(
-    consumer=backend,
-    emit=router.publish,
-    emit_local=router.publish_local,
-)
-# 将 router 与 worker 交给 Runtime；注册 Graph 后再调用 runtime.consume。
-runtime = Runtime(router=router, worker=worker)
+# 以基础设施插件注入任务后端，默认 Router 与 Worker 经同一装配路径使用它；注册 Graph 后再调用 runtime.consume。
+# 后端由调用方在 Runtime 关闭后关闭。
+runtime = Runtime(plugins=[LocalInfrastructurePlugin(tasks=backend)])
 ```
 
 `QueueBackend.bind` 返回独立、幂等的注销句柄；多个绑定或进程可以竞争同一存储。

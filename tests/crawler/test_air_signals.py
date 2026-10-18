@@ -6,7 +6,7 @@ from contextlib import ExitStack
 from threading import Barrier
 
 import pytest
-from interlace import Slot, SlotPool
+from interlace.engine import Slot, SlotPool
 from interlace.engine.errors import ExecutionCancelledError, ExecutionError
 
 from bricks import DownloadNode, Response, hooks, signals

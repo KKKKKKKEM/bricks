@@ -14,13 +14,15 @@ from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 import pytest
-from interlace import ExecutionLimits, Graph, Node, Ports, Slot, SlotPool
+from interlace import Graph, Node
+from interlace.engine import Slot, SlotPool
 from interlace.engine.errors import (
     ExecutionCancelledError,
     ExecutionError,
     ExecutionTimeoutError,
 )
-from interlace.engine.hooks import NodeHook
+from interlace.plugins.points import NODE_CALL
+from interlace.spi import ExecutionLimits
 
 from bricks import DownloadNode, Items, Request, Response, hooks, signals
 from bricks.downloaders.curl_cffi import AsyncCurlCffiDownloader, CurlCffiDownloader
@@ -1088,28 +1090,31 @@ def test_static_class_plugins_and_inheritance_override():
     assert trace == [("static", hooks.AFTER_REQUEST), ("class", hooks.AFTER_REQUEST)]
 
 
-def test_core_hook_replacement_rebinds_domain_inputs():
-    """核心 Hook 修改端口后，节点与领域 Context 使用最终输入。"""
+def test_core_middleware_replacement_rebinds_domain_inputs():
+    """核心节点中间件替换端口输入后，节点与领域 Context 使用最终输入。"""
 
-    class ReplaceSeed(NodeHook):
-        """显式替换 make_request 的种子端口。"""
+    def replace_seed(call, call_next):
+        """以新种子调用内层节点。
 
-        def enter(self, call):
-            """返回新的端口输入。
+        Args:
+            call: 原始调用。
+            call_next: 内层调用。
 
-            Args:
-                call: 原始调用。
-
-            Returns:
-                保留调用身份的新输入。
-            """
-            return call.with_inputs({"seeds": {"url": "https://example.com/replaced"}})
+        Returns:
+            内层节点的输出。
+        """
+        return call_next(
+            call.with_inputs({"seeds": {"url": "https://example.com/replaced"}})
+        )
 
     spider = SimpleSpider()
     work = spider.submit({"url": "https://example.com/original"})
     with spider:
-        spider.runtime.attach(
-            ReplaceSeed(), graph=spider.crawl_graph_name, node="before_make_request"
+        spider.runtime.hooks.on(
+            NODE_CALL,
+            replace_seed,
+            graph=spider.crawl_graph_name,
+            node="before_make_request",
         )
         spider.run_spider(timeout=5)
     assert spider.stored[0]["url"] == "https://example.com/replaced"
@@ -1527,8 +1532,8 @@ def test_context_emit_selects_slot_reuse_for_arbitrary_target_graph():
     class Collect(Node):
         """记录目标 Graph 的 Slot 身份。"""
 
-        input_ports = Ports(payload=dict)  # 领域事件携带的 JSON 数据。
-        output_ports = Ports()  # 只记录观察值。
+        inputs = {"payload": dict}  # 领域事件携带的 JSON 数据。
+        outputs = {}  # 只记录观察值。
 
         def execute(self, inputs, context):
             """保存事件类别和 Slot。

@@ -17,9 +17,10 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from interlace import Event, ExecutionLimits, Graph, Node, Ports, Runtime, SlotPool
-from interlace.runtime import EventRouter, GraphWorker
-from interlace.spi import Delivery, DeliveryResult, Work
+from interlace import Event, Graph, Node, Runtime
+from interlace.engine import SlotPool
+from interlace.runtime import LocalInfrastructurePlugin
+from interlace.spi import Delivery, DeliveryResult, ExecutionLimits, Work
 
 from bricks.parsers import MISSING
 from bricks.queues import (
@@ -656,7 +657,7 @@ def test_backend_failure_is_observable(queue, mode):
 
 
 def test_runtime_graph_and_event_use_queue_backend(queue):
-    """公开 Router、Worker 装配可以经过真实队列执行并派生后续 Graph。
+    """基础设施插件注入的队列后端可以经过真实队列执行并派生后续 Graph。
 
     Args:
         queue: 隔离队列。
@@ -666,8 +667,8 @@ def test_runtime_graph_and_event_use_queue_backend(queue):
     class Crawl(Node):
         """读取 JSON 种子并显式发出后续业务事件。"""
 
-        input_ports = Ports(seed=dict)  # 当前 JSON 种子。
-        output_ports = Ports()  # 业务事件显式发出，不返回终端数据。
+        inputs = {"seed": dict}  # 当前 JSON 种子。
+        outputs = {}  # 业务事件显式发出，不返回终端数据。
 
         def execute(self, inputs, context):
             """记录身份、Slot 与独立执行配置。
@@ -681,12 +682,8 @@ def test_runtime_graph_and_event_use_queue_backend(queue):
                 context.emit("next", {"id": 2})
 
     backend = QueueBackend({queue.name: queue}, poll_interval=0.005)
-    router = EventRouter(publisher=backend)
-    worker = GraphWorker(
-        consumer=backend, emit=router.publish, emit_local=router.publish_local
-    )
     try:
-        with Runtime(router=router, worker=worker) as runtime:
+        with Runtime(plugins=[LocalInfrastructurePlugin(tasks=backend)]) as runtime:
             runtime.register("crawl@v1", Graph(entrypoint="crawl").add(crawl=Crawl()))
             runtime.on("next", graph="crawl@v1", queue=queue.name, concurrency=2)
             backend.submit(
@@ -722,8 +719,8 @@ def _redis_process(url: str, name: str, prefix: str, barrier: Any) -> None:
     class Collect(Node):
         """把执行身份写入本测试拥有的 Redis 列表。"""
 
-        input_ports = Ports(seed=dict)  # 当前种子数据。
-        output_ports = Ports()  # 数据直接写入测试收集器。
+        inputs = {"seed": dict}  # 当前种子数据。
+        outputs = {}  # 数据直接写入测试收集器。
 
         def execute(self, inputs, context):
             """记录当前进程执行的种子。
@@ -738,10 +735,8 @@ def _redis_process(url: str, name: str, prefix: str, barrier: Any) -> None:
             )
             time.sleep(0.03)
 
-    router = EventRouter(publisher=backend)
-    worker = GraphWorker(consumer=backend, emit=router.publish)
     try:
-        with Runtime(router=router, worker=worker) as runtime:
+        with Runtime(plugins=[LocalInfrastructurePlugin(tasks=backend)]) as runtime:
             runtime.register(
                 "crawl", Graph(entrypoint="collect").add(collect=Collect())
             )

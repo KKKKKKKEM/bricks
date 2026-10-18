@@ -5,7 +5,8 @@ from __future__ import annotations
 from itertools import pairwise
 from typing import Any
 
-from interlace import ExecutionPlan, Graph
+from interlace import Graph
+from interlace.engine import ExecutionPlan
 
 from bricks import hooks as hook_api
 
@@ -185,7 +186,7 @@ class GraphAssembly:
                 crawl.connect(
                     name, "complete", source_port="complete", target_port="task"
                 )
-            if "retry" in node.output_ports:
+            if "retry" in node.outputs:
                 crawl.connect(name, "retry", source_port="retry", target_port="task")
         for source, target in (
             ("before_make_request", "after_make_request"),

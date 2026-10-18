@@ -9,7 +9,8 @@ from threading import Thread
 
 import pytest
 import requests
-from interlace import Graph, Runtime, Slot
+from interlace import Graph, Runtime
+from interlace.engine import Slot
 from interlace.engine.events import bind_context
 
 from bricks import AsyncDownloadNode, DownloadNode, Request, UploadFile

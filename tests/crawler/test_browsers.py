@@ -8,7 +8,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
 import pytest
-from interlace import Graph, Runtime, Slot
+from interlace import Graph, Runtime
+from interlace.engine import Slot
 from interlace.engine.events import bind_context
 from playwright.async_api import Error as AsyncError
 from playwright.sync_api import Error as SyncError

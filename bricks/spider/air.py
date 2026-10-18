@@ -11,19 +11,19 @@ from threading import RLock
 from typing import Any, cast
 
 from interlace import Context as EngineContext
-from interlace import (
-    Execution,
-    ExecutionLimits,
-    ExecutionPlan,
-    Graph,
-    Runtime,
-    Slot,
-)
+from interlace import Graph, Runtime
+from interlace.engine import Execution, ExecutionPlan, Slot
 from interlace.engine.errors import (
     ExecutionCancelledError,
     ExecutionControlError,
 )
-from interlace.spi import Delivery, DeliveryResult, SlotProvider, Work
+from interlace.spi import (
+    Delivery,
+    DeliveryResult,
+    ExecutionLimits,
+    SlotProvider,
+    Work,
+)
 
 from bricks import (
     AsyncDownloader,

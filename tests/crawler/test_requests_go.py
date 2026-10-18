@@ -7,7 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import requests_go
-from interlace import Graph, Runtime, Slot
+from interlace import Graph, Runtime
+from interlace.engine import Slot
 from interlace.engine.events import bind_context
 from requests_go.tls_client.exceptions import TLSClientExeption
 

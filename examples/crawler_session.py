@@ -8,7 +8,8 @@ from contextlib import ExitStack
 from queue import SimpleQueue
 from typing import Any
 
-from interlace import Context, Graph, Node, Ports, Runtime, Slot, SlotPool
+from interlace import Context, Graph, Node, Runtime
+from interlace.engine import Slot, SlotPool
 
 from bricks import Downloader, DownloadNode, Request, Response
 from bricks.downloaders.curl_cffi import CurlCffiDownloader
@@ -30,7 +31,7 @@ def slot_downloaders(slot: Slot) -> Mapping[str, Downloader]:
 class Collect(Node):
     """将下载结果交付给调用方的线程安全队列。"""
 
-    input_ports = Ports(response=Response)  # 接收下载结果。
+    inputs = {"response": Response}  # 接收下载结果。
 
     def __init__(self, results: SimpleQueue[Response]) -> None:
         """注入结果队列。

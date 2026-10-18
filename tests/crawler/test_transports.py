@@ -9,7 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 import httpx
 import pytest
 from curl_cffi.requests.exceptions import ImpersonateError, SessionClosed
-from interlace import Graph, Runtime, Slot
+from interlace import Graph, Runtime
+from interlace.engine import Slot
 from interlace.engine.events import bind_context
 
 from bricks import AsyncDownloadNode, DownloadNode, Request, UploadFile

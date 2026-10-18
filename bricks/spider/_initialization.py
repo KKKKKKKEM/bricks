@@ -6,7 +6,7 @@ import time
 from typing import Any
 from uuid import uuid4
 
-from interlace import Execution
+from interlace.engine import Execution
 from interlace.engine.errors import ExecutionCancelledError
 
 from bricks.queues import InitRecord
