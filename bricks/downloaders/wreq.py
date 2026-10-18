@@ -30,7 +30,7 @@ _NETWORK_ERRORS = (
     wreq.BodyError,
     wreq.DecodingError,
     wreq.RequestError,
-)  # 通用请求错误转为失败响应，BuilderError、RustPanic 和取消继续传播。
+)  # 通用请求错误转为失败响应；重定向目标的 BadScheme 单独转换，其他 BuilderError、RustPanic 和取消继续传播。
 
 
 def _profile(impersonate: str | None) -> wreq.Profile | None:
@@ -326,13 +326,30 @@ class AsyncWreqDownloader(_WreqOptions):
 
 
 def _check_cookie_header(client: Any, source: Request) -> None:
-    """拒绝无法避免会话 Cookie Jar 合并的显式请求头。"""
+    """会话 Jar 非空时拒绝显式 Cookie 请求头，空 Jar 按原值发送。"""
 
     jar = client.cookie_jar
-    if "cookie" in source.headers and jar is not None:
+    if "cookie" in source.headers and jar is not None and jar.get_all():
         raise ValueError(
             "wreq cannot combine an explicit Cookie header with a populated session jar"
         )
+
+
+def _unsupported_redirect(source: Request, error: BaseException) -> bool:
+    """判断 BuilderError 是否来自跟随重定向时遇到的非 HTTP(S) 目标。
+
+    初始 URL 已由 Request 限定为 HTTP(S)，BadScheme 只能来自重定向目标；
+    其他构造错误属于配置或程序错误，继续传播。
+
+    Args:
+        source: 本次请求。
+        error: wreq 原生构造错误。
+
+    Returns:
+        应转换为失败响应时为 True。
+    """
+
+    return source.allow_redirects and "BadScheme" in str(error)
 
 
 @dataclass
@@ -405,6 +422,10 @@ class WreqSessionDownloader:
                 received.close()
                 raise
         except _NETWORK_ERRORS as error:
+            return _failed_response(source, error, started)
+        except wreq.BuilderError as error:
+            if not _unsupported_redirect(source, error):
+                raise
             return _failed_response(source, error, started)
 
 
@@ -494,4 +515,8 @@ class AsyncWreqSessionDownloader:
                 await received.close()
                 raise
         except _NETWORK_ERRORS as error:
+            return _failed_response(source, error, started)
+        except wreq.BuilderError as error:
+            if not _unsupported_redirect(source, error):
+                raise
             return _failed_response(source, error, started)

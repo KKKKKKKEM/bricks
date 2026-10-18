@@ -282,7 +282,7 @@ def is_success(
     from bricks.spider.context import Context
 
     context = Context.get_context()
-    scope = build_namespace(context)
+    scope = build_namespace(context, namespace)
     selected = dict(flow or {})
     selected.setdefault("not ISPASS", "raise signals.Retry")
     Generator(

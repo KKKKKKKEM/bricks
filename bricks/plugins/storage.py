@@ -250,7 +250,7 @@ def to_csv(
         conn: 可选调用方管理的 csv.DictWriter。
         encoding: 本函数打开文件时使用的编码。
         header: 稳定列顺序；None 使用第一条记录字段。
-        lock: 多调用方写同一文件时共享的上下文锁。
+        lock: 多调用方写同一文件或共享 conn 时的上下文锁，两种写入路径都在锁内执行。
         kwargs: csv.DictWriter 格式参数。
 
     Raises:
@@ -269,7 +269,8 @@ def to_csv(
     ):
         raise ValueError("CSV rows must match unique non-empty header fields")
     if conn is not None:
-        conn.writerows(rows)
+        with lock if lock is not None else nullcontext():
+            conn.writerows(rows)
         return
     if "extrasaction" in kwargs:
         raise ValueError("CSV does not silently discard extra fields")

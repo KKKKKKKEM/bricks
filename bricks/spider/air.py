@@ -118,6 +118,7 @@ class Spider:
         _hooks: 当前实例在启动前登记的回调。
         _installed: 是否已经完成一次 install，失败时回滚本次注册。
         _hook_tasks: 打开时固定的各阶段声明，不通过 Runtime.attach 装配业务 Hook。
+        _hooks_ready: 是否已执行过 install 并固定插槽声明；之前构造的图会缺少业务 Hook。
         _start_allowed: BEFORE_START 是否允许启动初始化和消费。
         _runtime: 自有 Runtime，尚未打开时为 None。
         _backend: 自有队列消费适配器，存储由调用方管理。
@@ -129,7 +130,8 @@ class Spider:
         _lifecycle: 保护启动、关闭及运行资源引用。
         _close_lock: 串行化关闭并等待资源清理完成。
         _stopping: 通知运行入口退出的标记。
-        _state: new、open、closing 或 closed，本实例关闭后不可重开。
+        _state: new、opening、open、closing 或 closed，本实例关闭后不可重开；
+            opening 表示插槽已固定、BEFORE_START 及资源装配进行中，打开失败时回到 new。
     """
 
     Context: type[domain.Context] = (
@@ -239,6 +241,7 @@ class Spider:
         self._hooks: list[Binding] = []
         self._installed = False
         self._hook_tasks: dict[str, tuple[Task, ...]] = {}
+        self._hooks_ready = False
         self._start_allowed = True
         self._runtime: Runtime | None = None
         self._backend: QueueBackend | None = None
@@ -488,7 +491,14 @@ class Spider:
         state.produced += len(batch)
 
     def build_graphs(self) -> tuple[Graph, Graph]:
-        """构造初始化图和消费图。"""
+        """构造初始化图和消费图。
+
+        Returns:
+            初始化图与所选消费分支装配的队列消费图。
+
+        Raises:
+            RuntimeError: 尚未打开，插件尚未安装且插槽未固定。
+        """
         return GraphAssembly(self).build_graphs()
 
     def _hook_node(self, form: str, **options: Any) -> HookNode:
@@ -500,11 +510,24 @@ class Spider:
 
         Returns:
             不保存执行状态的 HookNode。
+
+        Raises:
+            RuntimeError: 尚未打开，插件尚未安装且插槽未固定。
         """
+        if not self._hooks_ready:
+            # install 只在打开时执行一次；此前构造的图会静默缺少全部业务 Hook。
+            raise RuntimeError("open the spider before building graphs")
         return HookNode(self, form, self._hook_tasks.get(form, ()), **options)
 
     def build_init_graph(self) -> Graph:
-        """构造种子初始化图。"""
+        """构造种子初始化图。
+
+        Returns:
+            种子生产、入队与断点提交的初始化图。
+
+        Raises:
+            RuntimeError: 尚未打开，插件尚未安装且插槽未固定。
+        """
         return GraphAssembly(self).build_init_graph()
 
     def build_crawl_plan(self, *, survey: bool = False) -> ExecutionPlan:
@@ -515,6 +538,9 @@ class Spider:
 
         Returns:
             校验完整出口的消费计划。
+
+        Raises:
+            RuntimeError: 尚未打开，插件尚未安装且插槽未固定。
         """
         return GraphAssembly(self).build_crawl_plan(survey=survey)
 
@@ -589,6 +615,7 @@ class Spider:
         """
         with self._lifecycle:
             if self._state != "new":
+                # opening 状态下插槽已固定，BEFORE_START 内注册不会生效，必须明确失败。
                 raise RuntimeError("plugins must be registered before opening")
             form = text(form, "form")
             supported = {
@@ -821,21 +848,26 @@ class Spider:
                     raise
                 self._installed = True
             self._prepare_hooks()
+            self._hooks_ready = True
+            self._state = "opening"
             try:
-                self._boundary(HookContext(self, hook_api.BEFORE_START))
-            except signals.Success:
-                self._start_allowed = False
-            except signals.Failure as signal:
-                raise domain.ResponseRejectedError(
-                    str(signal) or "Spider startup rejected"
-                ) from signal
-            except signals.Signal as signal:
-                raise TypeError(
-                    f"{type(signal).__name__} is not allowed in BEFORE_START"
-                ) from signal
-            initial, crawl = self.build_graphs()
-
-            open_resources(self, initial, crawl)
+                try:
+                    self._boundary(HookContext(self, hook_api.BEFORE_START))
+                except signals.Success:
+                    self._start_allowed = False
+                except signals.Failure as signal:
+                    raise domain.ResponseRejectedError(
+                        str(signal) or "Spider startup rejected"
+                    ) from signal
+                except signals.Signal as signal:
+                    raise TypeError(
+                        f"{type(signal).__name__} is not allowed in BEFORE_START"
+                    ) from signal
+                initial, crawl = self.build_graphs()
+                open_resources(self, initial, crawl)
+            except BaseException:
+                self._state = "new"
+                raise
         return self
 
     def _consume(self) -> None:
@@ -1083,9 +1115,12 @@ class Spider:
                         else max(0, deadline - time.monotonic())
                     )
                 except BaseException as exc:
-                    if failure is not None:
+                    if failure is None:
+                        raise
+                    # 初始化失败已有 cause 时保留真实根因，不以消费错误覆盖。
+                    if failure.__cause__ is None:
                         raise failure from exc
-                    raise
+                    raise failure  # noqa: B904
                 if failure is not None:
                     raise failure
                 return self.report()
@@ -1183,6 +1218,9 @@ class Spider:
         try:
             self.close()
         except BaseException as cleanup:
-            if exc is not None:
+            if exc is None:
+                raise
+            # 块内异常已有 cause 时保留真实根因，不以清理错误覆盖。
+            if exc.__cause__ is None:
                 raise exc.with_traceback(traceback) from cleanup
-            raise
+            raise exc.with_traceback(traceback)  # noqa: B904

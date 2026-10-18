@@ -491,16 +491,18 @@ class Request:
                 copied._body_content_type = self._body_content_type
         return copied
 
-    def __reduce__(self) -> tuple[object, tuple[dict[str, Any]]]:
-        """通过独立字段快照支持请求的 pickle 与深复制。"""
+    def __reduce__(
+        self,
+    ) -> tuple[object, tuple[dict[str, Any], bytes | None, str | None]]:
+        """通过独立字段快照支持 pickle 与深复制，保留请求体来源、编码模式与已编码字节。"""
 
         values = {
             name: getattr(self, name)
             for name in Request.__slots__
             if not name.startswith("_")
         }
-        values.update(body=self.body, body_type="raw")
-        return _restore_request, (values,)
+        values.update(body=self._body_source, body_type=self._body_type)
+        return _restore_request, (values, self._body, self._body_content_type)
 
     def to_curl(self, *, body_file: str | None = None) -> str:
         """返回可用于 POSIX shell 的单条 cURL 命令，不执行命令。
@@ -546,7 +548,13 @@ class Request:
         return cls(**parse_curl(command, files))
 
 
-def _restore_request(values: dict[str, Any]) -> Request:
-    """从 pickle 字段快照重建请求。"""
+def _restore_request(
+    values: dict[str, Any], body: bytes | None, content_type: str | None
+) -> Request:
+    """从 pickle 字段快照重建请求，沿用原始字节和关联头，不重新生成 multipart 边界。"""
 
-    return Request(**values)
+    request = Request(**values)
+    request._body = body
+    request.headers = values["headers"]
+    request._body_content_type = content_type
+    return request

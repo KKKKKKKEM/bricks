@@ -8,7 +8,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
 import pytest
-from interlace import Context, Graph, Runtime, Slot
+from interlace import Graph, Runtime, Slot
+from interlace.engine.events import bind_context
 from playwright.async_api import Error as AsyncError
 from playwright.sync_api import Error as SyncError
 
@@ -263,7 +264,7 @@ def test_sync_modes_share_cookies_and_reuse_tab(server, factory):
         node = DownloadNode(lambda current: current["downloaders"])
         node.execute(
             {"request": Request(base + "/browser-page")},
-            Context(lambda event: None, slot),
+            bind_context(lambda event: None, slot),
         )
         assert session.context.pages == [page]
         assert page.evaluate("window.name") == "retained-tab"
@@ -584,7 +585,7 @@ def test_node_runtime_supports_both_browser_adapters(server):
 
 @pytest.mark.parametrize("factory", _SYNC)
 def test_https_certificate_verification_is_enabled(https_server, factory):
-    """验证两种模式默认拒绝不受信任的 HTTPS 证书。
+    """验证两种模式默认拒绝不受信任的 HTTPS 证书，并统一报告为传输失败。
 
     Args:
         https_server: 自签名证书服务。
@@ -592,8 +593,9 @@ def test_https_certificate_verification_is_enabled(https_server, factory):
     """
 
     for mode in ("page", "api"):
-        with pytest.raises(SyncError):
-            factory(mode=mode).fetch(Request(https_server[0]))
+        rejected = factory(mode=mode).fetch(Request(https_server[0]))
+        assert rejected.status_code == -1
+        assert rejected.error is not None
         assert (
             factory(mode=mode, verify=False).fetch(Request(https_server[0])).status_code
             == 200

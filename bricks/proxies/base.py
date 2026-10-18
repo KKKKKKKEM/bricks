@@ -61,13 +61,18 @@ def format_proxy(
         or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value)
     ):
         raise ValueError("proxy must be a non-empty address without whitespace")
-    parsed = urlsplit(value if "://" in value else f"{scheme}://{value}")
+    try:
+        parsed = urlsplit(value if "://" in value else f"{scheme}://{value}")
+        port = parsed.port
+    except ValueError:
+        # 解析错误消息会回显含认证信息的 netloc，不向调用方或日志暴露原值。
+        raise ValueError("proxy address is not a valid URL") from None
     if parsed.scheme not in {"http", "https", "socks4", "socks4a", "socks5", "socks5h"}:
         raise ValueError("unsupported proxy scheme")
     if (
         not parsed.hostname
-        or parsed.port is None
-        or parsed.port == 0
+        or port is None
+        or port == 0
         or parsed.path not in {"", "/"}
         or parsed.query
         or parsed.fragment

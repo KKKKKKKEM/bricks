@@ -76,9 +76,12 @@ def run_initialization(spider: Any) -> InitRecord | None:
         else:
             spider.task_queue.finish_init(lease, success=False, error=str(failure))
     except BaseException as cleanup:
-        if failure is not None:
+        if failure is None:
+            raise
+        # 初始化失败已有 cause 时保留真实根因，不以登记失败覆盖。
+        if failure.__cause__ is None:
             raise failure from cleanup
-        raise
+        raise failure  # noqa: B904
     if failure is not None:
         raise failure
     return spider.task_queue.initialization()

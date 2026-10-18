@@ -41,7 +41,7 @@ JSONPath 的 `prepare()`、单表达式及批量入口只接收 dict、list、st
 
 | 解析器 | 输入与结果 | 选项 |
 |---|---|---|
-| `CssParser` | HTML/XML 文本、字节或 lxml 元素，结果为列表 | `output="element"/"text"/"html"`、`attribute`、`namespaces` |
+| `CssParser` | HTML/XML 文本、字节、lxml 文档树或元素，结果为列表 | `output="element"/"text"/"html"`、`attribute`、`namespaces` |
 | `XPathParser` | 同上，保留列表、文本、数字、布尔结果 | `namespaces`、`variables` |
 | `JmesPathParser` | 已解码 JSON 值，保留查询结果 | `options` 接收原生 `jmespath.Options` |
 | `JsonPathParser` | 已解码 JSON 值，始终返回命中值列表 | 无；固定严格模式 |
@@ -56,14 +56,16 @@ CSS 默认返回元素。`output="text"` 读取元素及后代文本，保留空
 缺失属性以 `MISSING` 保持原位置；它不能与非默认 output 同用。
 不支持 `::text`、`::attr()`，选择器范围遵循 [cssselect/lxml 文档](https://lxml.de/cssselect.html)，
 不承诺浏览器所有 CSS 选择器。需要 HTML 容错修复时使用默认 `format="html"`；空文档报错。
+文本和字节输入准备为整篇文档树，CSS 可以匹配根元素自身；传入 lxml 元素表示元素作用域，
+CSS 只匹配其后代，即使该元素恰好是文档根。需要文档语义时传入 `element.getroottree()`。
 
 XML 显式使用 `XPathParser(format="xml")` 或 `CssParser(format="xml")`，不根据内容猜测格式。
 命名空间通过前缀映射传入。XML 禁用外部 DTD 加载，并在返回文档或执行查询前拒绝所有 DOCTYPE，
 抛出 ValueError，避免内部实体在 XPath 文本查询或属性读取时展开。
 传入现成元素时也检查其所属文档；调用方在外部解析、复制或修改文档前的行为由调用方负责。
 标准实体（如 `&amp;`）与数字字符引用仍正常解析，格式错误直接抛出原生异常。
-传入已解码 XML 字符串时，带 XML 声明的内容会先按 UTF-8 编码并尊重声明；字节输入默认遵循文档声明，
-需要覆盖时在构造器传 `encoding`。输入字符串始终作为内容，不读取文件或 URL。
+传入已解码 XML 字符串时始终按 UTF-8 编码后解析，构造器的 `encoding` 只作用于字节输入；
+字节输入默认遵循文档声明。输入字符串始终作为内容，不读取文件或 URL。
 
 正则默认 `group=0` 返回完整匹配，即使表达式存在捕获组也不改变形状。
 `group=1` 或名称读取指定组，`group=None` 返回命名组字典；未参与匹配的可选组为 None。

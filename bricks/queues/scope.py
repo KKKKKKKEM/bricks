@@ -128,8 +128,10 @@ class TaskScope:
         _lock: 保护当前凭据、状态、决定及后台错误。
         _exit_lock: 串行化退出操作。
         _state: new、entering、entered、closing 或 closed，禁止复用。
-        _failure: 第一次后台续租失败的原异常。
+        _failure: 第一次后台续租失败的原异常；暂时存储错误在本地租约到期前不登记。
         _decision: 在正常退出时对最新凭据执行的操作，None 表示默认请求重投。
+        _expires: 当前凭据的本地到期时刻，单位为 time.monotonic 秒；在发出领取或续租前取时，
+            不与存储侧 deadline 比较。
     """
 
     def __init__(
@@ -173,6 +175,7 @@ class TaskScope:
         self._state = "new"
         self._failure: BaseException | None = None
         self._decision: Callable[[TaskLease], Any] | None = None
+        self._expires = 0.0
 
     def __enter__(self) -> TaskScope | None:
         """领取或续租已有凭据，然后加入队列的共享续租调度。
@@ -190,6 +193,7 @@ class TaskScope:
             self._state = "entering"
         registered = False
         try:
+            started = time.monotonic()
             if self._owner is not None:
                 self._lease = self._queue.claim(self._owner, lease_seconds=self._ttl)
             if self._lease is not None:
@@ -197,9 +201,11 @@ class TaskScope:
                 self._renewals.add(self._lease.token, self)
                 registered = True
                 if self._owner is None:
+                    started = time.monotonic()
                     self._lease = self._queue.renew(
                         self._lease, lease_seconds=self._ttl
                     )
+                self._expires = started + self._ttl
             with self._lock:
                 self._state = "entered"
             return None if self._lease is None else self
@@ -217,12 +223,14 @@ class TaskScope:
                 if registered:
                     assert self._lease is not None
                     self._renewals.remove(self._lease.token)
-            if cleanup is not None and cleanup is not exc:
+            if cleanup is not None and cleanup is not exc and exc.__cause__ is None:
                 raise exc from cleanup
             raise
 
     def _heartbeat(self) -> bool:
         """续租当前占用并保留失败，不向共享线程抛出业务存储异常。
+
+        租约丢失立即登记；其他存储错误在本地租约到期前于后续心跳重试。
 
         Returns:
             是否继续为此上下文安排心跳。
@@ -234,16 +242,23 @@ class TaskScope:
                 return False
             assert self._lease is not None
             lease = self._lease
+        started = time.monotonic()
         try:
             renewed = self._queue.renew(lease, lease_seconds=self._ttl)
         except BaseException as exc:
             with self._lock:
-                if (
+                current = (
                     self._state == "entered"
                     and self._lease is not None
                     and self._lease.token == lease.token
+                )
+                if not current:
+                    return False
+                if not isinstance(exc, LeaseLostError) and (
+                    time.monotonic() < self._expires
                 ):
-                    self._failure = exc
+                    return True
+                self._failure = exc
             return False
         with self._lock:
             if (
@@ -252,6 +267,7 @@ class TaskScope:
                 and self._lease.token == lease.token
             ):
                 self._lease = renewed
+                self._expires = started + self._ttl
                 return True
             return False
 
@@ -403,11 +419,19 @@ class TaskScope:
                 secondary = (
                     failure if failure is not None and failure is not exc else cleanup
                 )
-                if secondary is not None and secondary is not exc:
+                if (
+                    secondary is not None
+                    and secondary is not exc
+                    and exc.__cause__ is None
+                ):
                     raise exc.with_traceback(traceback) from secondary
                 return False
             if failure is not None:
-                if cleanup is not None and cleanup is not failure:
+                if (
+                    cleanup is not None
+                    and cleanup is not failure
+                    and failure.__cause__ is None
+                ):
                     raise failure from cleanup
                 raise failure
             if cleanup is not None:

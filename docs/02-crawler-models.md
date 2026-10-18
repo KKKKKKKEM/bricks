@@ -132,7 +132,9 @@ Set-Cookie 自动提取，需要来源 URL；显式提供 Cookies、CookieJar、
 
 `cookies.get(name)` 返回单个值，同名记录有歧义时要求指定 domain/path。`to_string()` 和 `str()` 提取全部记录，
 不筛选有效期；`to_string(url=目标地址)` 根据域、路径、Secure 和有效期筛选。不带来源域的简写记录只用于提取，
-不会自动匹配任意主机。容器迭代返回完整 Cookie 副本。该实现不提供浏览器的 SameSite 请求上下文或公共后缀列表策略。
+不会自动匹配任意主机。容器迭代返回完整 Cookie 副本。该实现不提供浏览器的 SameSite 请求上下文。
+Domain 属性为公共后缀（如 `.co.uk`、`github.io`）且不等于来源主机的 Cookie 按随包发布的 publicsuffixlist 拒绝接收，
+已有记录也不会随 `to_string(url=...)` 或 requests/requests-go 会话请求发送到其他站点；后缀列表随依赖版本更新，运行时不联网获取。
 
 没有增加 cookie_str、follow 或页面解析接口；文件传输和持久化格式仍由后续适配器定义，异常对象目前仅用于进程内。
 

@@ -6,7 +6,8 @@ import inspect
 import pytest
 from curl_cffi import requests as curl_requests
 from curl_cffi.requests.exceptions import ImpersonateError
-from interlace import Context, Graph, Runtime, Slot
+from interlace import Graph, Runtime, Slot
+from interlace.engine.events import bind_context
 
 from bricks import AsyncDownloadNode, DownloadNode, Request
 from bricks.downloaders import AsyncFingerprintDownloader, FingerprintDownloader
@@ -28,7 +29,7 @@ def invoke(node, request, options, slot=None):
     """
 
     result = node.execute(
-        {"request": request}, Context(lambda event: None, slot, options=options)
+        {"request": request}, bind_context(lambda event: None, slot, options=options)
     )
     output = asyncio.run(result) if inspect.isawaitable(result) else result
     return output.value
@@ -189,7 +190,7 @@ def test_fingerprint_override_keeps_slot_session(server, asynchronous, reuse):
             output = await resolve(
                 node.execute(
                     {"request": request},
-                    Context(
+                    bind_context(
                         lambda event: None,
                         slot,
                         options=options,

@@ -63,9 +63,12 @@
 10. curl_cffi 同步会话使用非线程局部句柄，以支持 Slot 串行跨线程复用；curl_cffi、HTTPX 与 wreq 异步会话记录创建事件循环，跨循环使用或关闭明确抛出 RuntimeError。
     curl_cffi 响应只承诺初始提交请求及重定向 URL、状态和响应头，不伪造逐跳请求或响应体。无法解析或非 HTTP(S) 的自动重定向目标统一转换为 status_code=-1。
     显式 Cookie 请求头在可支持的后端按原值发送且不与会话 Cookie 合并；不能保证此语义且会话 Jar 非空时明确拒绝。Request.cookies 与 Cookie 请求头不可同时设置。
+    显式 Cookie 头与 Request.cookies 只承诺随初始请求发送，自动重定向后的各跳是否携带因后端而异，文档须如实说明。
     requests 仅提供同步实现，重复请求头明确拒绝；不通过线程包装声称支持原生异步取消。
     requests 与 requests-go 的显式 Request.cookies 绑定初始主机，不发送到子域或其他主机；HTTPS 显式 Cookie 禁止随降级发送到 HTTP。
     会话 Cookie 保留服务端 Domain、Path、Secure 与 host-only 语义，不把无 Domain Cookie 扩大为子域可用。
+    Cookies 模型与 requests 系会话发送时按 publicsuffixlist（正式依赖，随包内置列表、惰性加载、不联网更新）拒绝
+    Domain 为公共后缀且不等于来源主机的 Cookie，接收与发送均校验。
 11. Context.options 的 crawler.fingerprint.impersonate 覆盖当前执行的预设指纹，接受非空无首尾空白字符串或 None。
     缺省或 None 不执行指纹覆盖；curl_cffi 沿用下载器或会话默认值，None 不要求所选下载器支持指纹请求。
     节点仅对非 None 的指纹值调用可选 FingerprintDownloader / AsyncFingerprintDownloader 的 fetch_with_fingerprint。
@@ -87,7 +90,8 @@
     Context 代理在 prepare_session 时固定；一 Context 一 Tab 可在同一外部 Browser 内实现不同 Tab 不同代理，不热切已有 Context 的代理。
     自建 Browser/驱动归会话关闭栈管理，外部注入 Browser 由调用方管理；关闭会话不影响其他 Context。
 15. 浏览器同步会话受创建线程约束，异步会话受创建事件循环约束，错误作用域或重叠请求必须明确失败。
-    页面导航超时或取消后关闭会话；已知导航 `net::ERR_*` 与 API 连接或超时错误返回 status_code=-1 并保留会话，未分类浏览器操作错误继续传播。
+    页面导航超时或取消后关闭会话；已知导航网络错误（Chromium `net::ERR_*`、Firefox 证书/TLS 与重定向循环）及 API 连接、超时、
+    证书校验失败与重定向超限返回 status_code=-1 并保留会话，未分类浏览器操作错误继续传播。
     page 默认返回 UTF-8 DOM 快照并移除失效实体头，可选 response 模式返回主文档原始内容；api 始终返回原始响应体。
     page 只支持无请求体 GET 和浏览器重定向；api 支持普通 HTTP 方法和已编码请求体，CONNECT 明确拒绝。
     Camoufox 包和浏览器版本分别固定，不将其浏览器配置伪装成请求级 TLS impersonate；默认不下载或启用附加扩展。
@@ -234,7 +238,7 @@
    当前数据由图内载体传递，实例每次 firing 独立创建；核心 enter Hook 替换输入后节点绑定最终输入。
    业务方法与 Hook 实际调用期间通过 ContextVar 绑定当前领域 Context；Context、InitContext 和 HookContext
    的 get_context() 提供同类别的便捷访问，按同步调用链与异步任务隔离，回调结束后恢复上一层绑定。
-   install(name, value, nx=False) 与 obtain(name, default=None) 只使用 Slot 内 Bricks 业务命名空间；同一 Slot
+   install(name, value, *, nx=False) 与 obtain(name, default=None) 只使用 Slot 内 Bricks 业务命名空间；同一 Slot
    在 Spider 生命周期内跨任务复用资源，不因物理线程变化失效，不同 Slot 互相隔离。
    Context 中的运行时对象不跨队列序列化，提交只接受 JSON 种子。
 5. context.submit(*obj, affinity="current") 与初始化使用同一稳定 Work 构造规则，返回 Work 列表而不返回未来 Context。

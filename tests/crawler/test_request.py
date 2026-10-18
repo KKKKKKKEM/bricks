@@ -567,3 +567,39 @@ def test_request_pickle_and_deepcopy():
     request = Request("http://example.test", params=[("a", "1"), ("a", "2")])
     assert copy.deepcopy(request).params.raw == request.params.raw
     assert pickle.loads(pickle.dumps(request)).params.raw == request.params.raw
+
+
+@pytest.mark.parametrize(
+    ("body", "body_type"),
+    [
+        ({"a": 1}, "auto"),
+        ({"a": "1"}, "form"),
+        ({"f": UploadFile("x.txt", b"hi")}, "multipart"),
+    ],
+)
+def test_request_copy_protocols_preserve_body_source_and_type(body, body_type):
+    """deepcopy、copy 与 pickle 保留请求体来源和编码模式，之后仍可切换编码。
+
+    Args:
+        body: 请求体来源。
+        body_type: 原编码模式。
+    """
+
+    import copy
+    import pickle
+
+    request = Request(
+        "https://example.test", method="POST", body=body, body_type=body_type
+    )
+    for clone in (
+        copy.deepcopy(request),
+        copy.copy(request),
+        pickle.loads(pickle.dumps(request)),
+    ):
+        assert clone.body_type == body_type
+        assert clone.body == request.body
+        assert clone.headers.raw == request.headers.raw
+        if body_type != "multipart":
+            assert (
+                clone.copy(body_type="json").body == request.copy(body_type="json").body
+            )

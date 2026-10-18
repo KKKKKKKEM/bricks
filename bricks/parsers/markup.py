@@ -20,7 +20,7 @@ class _MarkupParser(BaseParser):
 
     Attributes:
         format: html 容错解析或 xml 严格解析，默认 html，不自动猜测。
-        encoding: 字节输入的显式编码，默认 None 由 lxml 读取文档声明。
+        encoding: 字节输入的显式编码，默认 None 由 lxml 读取文档声明；XML 文本输入始终按 UTF-8 解析。
     """
 
     format: Literal["html", "xml"] = "html"
@@ -38,39 +38,41 @@ class _MarkupParser(BaseParser):
         if self.encoding is not None and not isinstance(self.encoding, str):
             raise TypeError("encoding must be a string or None")
 
-    def prepare(self, source: Any) -> etree._Element:
-        """解析文档内容或复用现有元素；XML 文档返回前拒绝 DOCTYPE。
+    def prepare(self, source: Any) -> etree._Element | etree._ElementTree:
+        """解析文档内容或复用已准备对象；XML 文档返回前拒绝 DOCTYPE。
+
+        文本解析结果是整篇文档，CSS 可匹配根元素自身；传入元素表示元素作用域，CSS 只匹配其后代。
 
         Args:
-            source: str、bytes 或 lxml 元素；文本只作为内容，不读取路径。
+            source: str、bytes、lxml 文档树或元素；文本只作为内容，不读取路径。
 
         Returns:
-            文档根元素或传入的原元素，树的所有权归调用方。
+            文本输入的文档树，或传入的原文档树和元素，树的所有权归调用方。
 
         Raises:
             TypeError: 输入类型不支持。
             ValueError: HTML 无法生成文档，或 XML 所属文档包含 DOCTYPE。
             etree.XMLSyntaxError: XML 格式错误。
         """
-        if isinstance(source, etree._Element):
-            root = source
+        if isinstance(source, (etree._Element, etree._ElementTree)):
+            prepared = source
         elif not isinstance(source, (str, bytes)):
-            raise TypeError("markup source must be str, bytes, or an lxml element")
-        elif self.format == "xml":
-            xml_source = (
-                source.encode("utf-8")
-                if isinstance(source, str) and "<?xml" in source[:256]
-                else source
+            raise TypeError(
+                "markup source must be str, bytes, or an lxml element or tree"
             )
+        elif self.format == "xml":
+            # 文本统一按 UTF-8 字节解析，显式编码只作用于字节输入。
+            text_source = isinstance(source, str)
             root = etree.fromstring(
-                xml_source,
+                source.encode("utf-8") if isinstance(source, str) else source,
                 parser=etree.XMLParser(
-                    encoding=self.encoding,
+                    encoding="utf-8" if text_source else self.encoding,
                     resolve_entities=False,
                     load_dtd=False,
                     no_network=True,
                 ),
             )
+            prepared = root.getroottree()
         else:
             root = etree.HTML(
                 source,
@@ -78,10 +80,16 @@ class _MarkupParser(BaseParser):
             )
             if root is None:
                 raise ValueError("HTML source does not contain a document")
+            prepared = root.getroottree()
+        tree = (
+            prepared
+            if isinstance(prepared, etree._ElementTree)
+            else prepared.getroottree()
+        )
         # 未展开的实体仍可能被 XPath 或属性访问求值，查询前拒绝其声明来源。
-        if self.format == "xml" and root.getroottree().docinfo.doctype:
+        if self.format == "xml" and tree.docinfo.doctype:
             raise ValueError("XML DOCTYPE declarations are not supported")
-        return root
+        return prepared
 
 
 class CssParser(_MarkupParser):
@@ -91,7 +99,7 @@ class CssParser(_MarkupParser):
         """选择元素并按明确选项生成等长列表，不自动去除空白。
 
         Args:
-            source: 文档文本、字节或已准备的元素。
+            source: 文档文本、字节、文档树或作为作用域的元素。
             expression: cssselect 支持的 CSS 选择器，不支持 ::text/::attr。
             **options: output 为 element/text/html，默认 element；attribute
                 为属性名且不能与非默认 output 同用；namespaces 为命名空间映射。
@@ -108,7 +116,7 @@ class CssParser(_MarkupParser):
 
     def _select(
         self,
-        root: etree._Element,
+        root: etree._Element | etree._ElementTree,
         expression: str,
         *,
         output: Literal["element", "text", "html"] = "element",
@@ -118,7 +126,7 @@ class CssParser(_MarkupParser):
         """执行 CSS 选择，并显式投影节点内容。
 
         Args:
-            root: 已准备的文档或子元素。
+            root: 已准备的文档树或作为作用域的元素。
             expression: CSS 表达式。
             output: 元素、后代文本或外层 HTML。
             attribute: 属性名，默认 None 不提取属性。
@@ -140,11 +148,11 @@ class CssParser(_MarkupParser):
                 raise ValueError(
                     "attribute requires a nonempty name and default output"
                 )
-        is_document_root = root is root.getroottree().getroot()
+        document = isinstance(root, etree._ElementTree)
         namespace_key = tuple(sorted((namespaces or {}).items()))
-        elements = _css_selector(
-            expression, self.format, namespace_key, is_document_root
-        )(root)
+        elements = _css_selector(expression, self.format, namespace_key, document)(
+            root.getroot() if isinstance(root, etree._ElementTree) else root
+        )
         if attribute is not None:
             return [element.attrib.get(attribute, MISSING) for element in elements]
         if output == "text":
@@ -166,7 +174,7 @@ class XPathParser(_MarkupParser):
         """执行 XPath 表达式，不把字符串结果拆成字符或自动 strip。
 
         Args:
-            source: 文档文本、字节或已准备的元素。
+            source: 文档文本、字节、文档树或已准备的元素。
             expression: XPath 1.0 表达式。
             **options: namespaces 为前缀映射，variables 为显式 XPath 变量映射。
 
@@ -182,7 +190,7 @@ class XPathParser(_MarkupParser):
 
     @staticmethod
     def _select(
-        root: etree._Element,
+        root: etree._Element | etree._ElementTree,
         expression: str,
         *,
         namespaces: Mapping[str, str] | None = None,
@@ -191,7 +199,7 @@ class XPathParser(_MarkupParser):
         """编译 XPath 并使用独立变量映射求值。
 
         Args:
-            root: 当前文档或子元素。
+            root: 当前文档树或子元素；文档树的相对路径以根元素为上下文。
             expression: XPath 表达式。
             namespaces: 前缀到 URI 的映射。
             variables: 变量名到值的映射。

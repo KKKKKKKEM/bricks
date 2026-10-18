@@ -67,6 +67,27 @@ def test_range_checkpoint_keeps_empty_record_and_resumes_exactly():
     assert list(make_seeds.by_range(0, 7, 2, batch_size=2, record=record)) == [
         [{"id": 4}, {"id": 6}]
     ]
+    assert record == {next(iter(record)): 4}
+    resumed = {"position": 2}
+    unbounded = make_seeds.by_range(
+        0, None, 3, batch_size=2, record=resumed, checkpoint="position"
+    )
+    assert next(unbounded) == [{"id": 6}, {"id": 9}]
+    unbounded.close()
+    assert resumed == {"position": 4}
+    reverse = {}
+    descending = make_seeds.by_range(
+        0, 6, 1, batch_size=2, reverse=True, record=reverse
+    )
+    assert next(descending) == [{"id": 5}, {"id": 4}]
+    descending.close()
+    assert list(
+        make_seeds.by_range(0, 6, 1, batch_size=2, reverse=True, record=reverse)
+    ) == [
+        [{"id": 3}, {"id": 2}],
+        [{"id": 1}, {"id": 0}],
+    ]
+    assert list(reverse.values()) == [6]
     assert list(make_seeds.by_range(-3, 4, 2, reverse=True)) == [
         [{"id": 3}, {"id": 1}, {"id": -1}, {"id": -3}]
     ]
@@ -230,6 +251,26 @@ def test_csv_shared_lock_and_header_validation(tmp_path):
     with pytest.raises(ValueError, match="header"):
         storage.to_csv(path, [{"name": "different"}])
     assert path.read_bytes() == before
+
+
+def test_csv_shared_writer_connection_writes_under_lock():
+    """调用方共享的 DictWriter 与 lock 同时传入时，写入在锁内执行。"""
+    lock, held = Lock(), []
+
+    class Writer:
+        """记录写入时锁状态的 DictWriter 替身。"""
+
+        def writerows(self, rows):
+            """登记当前是否持锁。
+
+            Args:
+                rows: 待写入记录。
+            """
+            held.append(lock.locked())
+
+    storage.to_csv("shared.csv", [{"id": 1}], Writer(), lock=lock)
+    assert held == [True]
+    assert not lock.locked()
 
 
 @pytest.mark.parametrize("key_type", ["set", "list", "string"])
@@ -568,9 +609,10 @@ def test_dynamic_plugins_keep_dev_parameters_and_callable_flexibility():
                 {
                     "func": scripts.is_success,
                     "kwargs": {
-                        "match": ["response.status_code == 200"],
+                        "match": ["response.status_code == expected"],
                         "pre": "context.target.observed.append('pre')",
                         "post": "context.target.observed.append('post')",
+                        "namespace": {"expected": 200},
                     },
                     "index": 2,
                 },
@@ -876,6 +918,9 @@ def test_safe_url_redacts_bare_proxy_credentials_and_bare_query():
 
     assert "secret" not in _safe_url("user:secret@proxy.test:8080")
     assert "secret" not in _safe_url("https://example.test/path?secret")
+    # 解析失败时返回固定占位，既不抛错也不回显含凭据的原值。
+    assert _safe_url("http://user:p\u2100secret@proxy.test:80") == "[INVALID URL]"
+    assert _safe_url("http://[bad/x?token=secret") == "[INVALID URL]"
 
 
 @pytest.mark.parametrize(

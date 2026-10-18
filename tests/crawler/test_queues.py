@@ -322,6 +322,7 @@ def test_init_lease_progress_and_fenced_submission(queue):
         queue.finish_init(first, success=True)
     renewed = queue.renew_init(second, lease_seconds=60)
     assert renewed.deadline > second.deadline
+    assert type(renewed.deadline) is float
     queue.finish_init(renewed, success=False, error="producer failed")
     third = queue.acquire_init("retry")
     assert third.fence == second.fence + 1
@@ -1049,8 +1050,8 @@ def test_shared_scope_renewal_failure_does_not_stop_other_tasks(renewals):
                 assert bad.work.id == "bad" and good.work.id == "good"
                 bad.ack()
                 assert failed.wait(2)
-                with pytest.raises(ConnectionError):
-                    bad.check()
+                # 暂时存储错误在本地租约到期前继续重试，到期后才登记为失败。
+                _eventually(lambda: _raises(bad.check, ConnectionError))
                 watch.wait_past(expiry)
                 good.check()
                 good.ack()
@@ -1092,6 +1093,75 @@ def test_scope_cleanup_failure_preserves_body_error():
     assert queue.get("release-failure").status == "leased"
 
 
+def test_scope_cleanup_failure_keeps_existing_body_cause():
+    """块内异常已有 cause 时，释放失败不覆盖真实根因。"""
+    root = KeyError("root")
+
+    class ReleaseFailureQueue(MemoryTaskQueue):
+        """模拟退出时的存储错误。"""
+
+        def retry(self, lease, *, delay=0, error=""):
+            """拒绝释放占用。
+
+            Args:
+                lease: 当前凭据。
+                delay: 延迟秒数。
+                error: 原因文本。
+
+            Raises:
+                ConnectionError: 模拟的写回失败。
+            """
+            raise ConnectionError("release unavailable")
+
+    queue = ReleaseFailureQueue("release-cause")
+    queue.put(make_work("crawl", id="release-cause"))
+    with pytest.raises(ValueError) as caught:
+        with queue.reserve("worker"):
+            raise ValueError("body failed") from root
+    assert caught.value.__cause__ is root
+
+
+def test_scope_transient_renewal_error_retries_until_local_expiry(renewals):
+    """单次暂时存储错误不终止续租，退出仍写入已登记的确认。
+
+    Args:
+        renewals: 续租观察器工厂。
+    """
+    failed = ThreadEvent()
+
+    class FlakyQueue(MemoryTaskQueue):
+        """第一次续租模拟连接抖动，之后恢复。"""
+
+        def renew(self, lease, *, lease_seconds=30):
+            """首次抛出连接错误，其余正常续租。
+
+            Args:
+                lease: 当前租约。
+                lease_seconds: 续租秒数。
+
+            Returns:
+                新租约。
+
+            Raises:
+                ConnectionError: 首次模拟的续租错误。
+            """
+            if not failed.is_set():
+                failed.set()
+                raise ConnectionError("renewal flapped")
+            return super().renew(lease, lease_seconds=lease_seconds)
+
+    queue = FlakyQueue("flaky-renewal")
+    watch = renewals(queue)
+    queue.put(make_work("crawl", id="flaky"))
+    with queue.reserve("worker", lease_seconds=0.6) as scope:
+        expiry = time.monotonic() + 0.6
+        scope.ack()
+        assert failed.wait(2)
+        watch.wait_past(expiry)
+        scope.check()
+    assert queue.get("flaky").status == "acked"
+
+
 def test_scope_check_failure_propagates_without_self_cause(queue, monkeypatch):
     """块内 check 抛出的后台错误在退出时保持原对象，不形成自身 cause。
 
@@ -1120,10 +1190,15 @@ def test_scope_check_failure_propagates_without_self_cause(queue, monkeypatch):
     with pytest.raises(ConnectionError) as caught:
         with queue.reserve("worker", lease_seconds=0.6) as task:
             assert observed.wait(2)
+            # 暂时存储错误在本地租约到期后才登记，随后 check 传播原对象。
+            _eventually(lambda: _raises(task.check, ConnectionError))
             task.check()
     assert caught.value is failure
     assert caught.value.__cause__ is not failure
-    assert queue.get("check-error").status == "pending"
+    recovered = []
+    _eventually(lambda: recovered.append(queue.claim("replacement")) or recovered[-1])
+    assert recovered[-1].work.id == "check-error"
+    assert recovered[-1].attempt == 2
 
 
 def test_scope_thread_start_failure_rolls_back_and_can_restart(monkeypatch):
@@ -1279,6 +1354,261 @@ def test_background_storage_failure_reaches_wait_and_close_cleans_threads():
     try:
         with pytest.raises(ConnectionError, match="storage unavailable"):
             backend.wait_idle(5)
+    finally:
+        backend.close()
+
+
+def _eventually(predicate, timeout=5):
+    """在截止时间内轮询条件成立，不依赖紧贴租约的固定等待。
+
+    Args:
+        predicate: 无参条件函数。
+        timeout: 最长等待秒数。
+    """
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "condition was not reached in time"
+        time.sleep(0.005)
+
+
+def _raises(call, error):
+    """判断无参调用是否抛出指定异常。
+
+    Args:
+        call: 无参调用。
+        error: 期望的异常类型。
+
+    Returns:
+        抛出该异常时为 True，正常返回时为 False。
+    """
+    try:
+        call()
+    except error:
+        return True
+    return False
+
+
+def test_backend_renewal_outage_uses_local_clock_and_stops_binding():
+    """存储时钟不是本机单调时钟时，持续续租失败仍在本地租约到期后传播并停止绑定。"""
+    release = ThreadEvent()
+
+    class EpochQueue(MemoryTaskQueue):
+        """使用纪元时钟模拟 Redis 服务端时间，续租始终连接失败。"""
+
+        def renew(self, lease, *, lease_seconds=30):
+            """报告存储断开。
+
+            Args:
+                lease: 当前租约。
+                lease_seconds: 续租秒数。
+
+            Raises:
+                ConnectionError: 模拟的连接错误。
+            """
+            raise ConnectionError("renewal unavailable")
+
+    def handler(delivery: Delivery) -> DeliveryResult:
+        """保持执行直到测试释放。
+
+        Args:
+            delivery: 本地交付。
+
+        Returns:
+            ACK。
+        """
+        assert release.wait(5)
+        return DeliveryResult.ack()
+
+    queue = EpochQueue("epoch-renewal", clock=time.time)
+    queue.put(Work("crawl", id="outage"))
+    backend = QueueBackend({queue.name: queue}, lease_seconds=0.3, poll_interval=0.01)
+    backend.bind(queue.name, handler, concurrency=1)
+    try:
+        with pytest.raises(ConnectionError, match="renewal unavailable"):
+            backend.wait_idle(5)
+    finally:
+        release.set()
+        with pytest.raises(LeaseLostError):
+            backend.close()
+    assert queue.get("outage").attempt == 1
+
+
+def test_backend_defers_reclaimed_lease_until_local_delivery_finishes():
+    """租约过期后本绑定重新领到仍在执行的任务时，不并发执行也不空耗交付次数。"""
+    now = [100.0]
+    queue = MemoryTaskQueue("reclaimed", clock=lambda: now[0])
+    queue.put(Work("crawl", id="slow"))
+    started, release = ThreadEvent(), ThreadEvent()
+    attempts = []
+
+    def handler(delivery: Delivery) -> DeliveryResult:
+        """首次交付阻塞直到释放，之后立即确认。
+
+        Args:
+            delivery: 本地交付。
+
+        Returns:
+            ACK。
+        """
+        attempts.append(delivery.attempt)
+        if delivery.attempt == 1:
+            started.set()
+            assert release.wait(5)
+        return DeliveryResult.ack()
+
+    backend = QueueBackend({queue.name: queue}, lease_seconds=0.3, poll_interval=0.01)
+    backend.bind(queue.name, handler, concurrency=2)
+    try:
+        assert started.wait(5)
+        now[0] += 60
+        _eventually(lambda: queue.get("slow").attempt == 2)
+        # 新租约保持续租，旧交付结束前不会被重投耗尽。
+        record = queue.get("slow")
+        assert (record.status, record.attempt) == ("leased", 2)
+        assert attempts == [1]
+        release.set()
+        _eventually(lambda: queue.get("slow").status == "acked")
+        assert attempts == [1, 2]
+        with pytest.raises(LeaseLostError):
+            backend.wait_idle(5)
+    finally:
+        release.set()
+        backend.close()
+
+
+def test_backend_renewal_racing_ack_is_not_reported_lost():
+    """续租往返期间交付已确认时，续租返回的失效不能报告为失败。"""
+    renewing, acked = ThreadEvent(), ThreadEvent()
+
+    class SlowRenewQueue(MemoryTaskQueue):
+        """首次续租等待确认完成后才访问存储。"""
+
+        def renew(self, lease, *, lease_seconds=30):
+            """模拟网络往返中交付被确认。
+
+            Args:
+                lease: 当前租约。
+                lease_seconds: 续租秒数。
+
+            Returns:
+                新租约。
+            """
+            if not renewing.is_set():
+                renewing.set()
+                assert acked.wait(5)
+            return super().renew(lease, lease_seconds=lease_seconds)
+
+        def ack(self, lease, *, result=None):
+            """确认后放行等待中的续租。
+
+            Args:
+                lease: 当前租约。
+                result: 业务结果。
+            """
+            super().ack(lease, result=result)
+            acked.set()
+
+    def handler(delivery: Delivery) -> DeliveryResult:
+        """等到续租已发出再确认。
+
+        Args:
+            delivery: 本地交付。
+
+        Returns:
+            ACK。
+        """
+        assert renewing.wait(5)
+        return DeliveryResult.ack()
+
+    queue = SlowRenewQueue("renew-race")
+    queue.put(Work("crawl", id="race"))
+    backend = QueueBackend({queue.name: queue}, lease_seconds=0.3, poll_interval=0.01)
+    backend.bind(queue.name, handler, concurrency=1)
+    try:
+        backend.wait_idle(5)
+        assert queue.get("race").status == "acked"
+    finally:
+        acked.set()
+        backend.close()
+
+
+@pytest.mark.parametrize("stop", ["unbind", "close"])
+def test_backend_accepts_local_continuation_while_draining(queue, stop):
+    """注销或关闭排空期间，在途交付发起的本地延续仍被持久化并执行。
+
+    Args:
+        queue: 隔离的内存或 Redis 任务存储。
+        stop: 停止领取的方式。
+    """
+    pool = SlotPool(2)
+    started, proceed = ThreadEvent(), ThreadEvent()
+    backend = QueueBackend({queue.name: queue}, poll_interval=0.005)
+
+    def handler(delivery: Delivery) -> DeliveryResult:
+        """父交付在停止领取后提交本地延续。
+
+        Args:
+            delivery: 本地交付。
+
+        Returns:
+            ACK。
+        """
+        if delivery.work.id == "parent":
+            started.set()
+            assert proceed.wait(5)
+            backend.submit_local(
+                queue.name, Work("crawl", {"child": 1}, id="child"), pool.acquire()
+            )
+        return DeliveryResult.ack()
+
+    unbind = backend.bind(queue.name, handler, concurrency=1, slots=pool)
+    # 绑定对象只用于观察停止领取的时刻。
+    binding = backend._bindings[-1]
+    backend.submit(queue.name, Work("crawl", id="parent"))
+    try:
+        assert started.wait(5)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            closing = executor.submit(unbind if stop == "unbind" else backend.close)
+            _eventually(binding.stop.is_set)
+            proceed.set()
+            closing.result(5)
+        assert queue.get("parent").status == "acked"
+        assert queue.get("child").status == "acked"
+        assert pool.available == 2
+    finally:
+        proceed.set()
+        backend.close()
+        pool.close()
+
+
+def test_backend_failure_aggregation_keeps_existing_causes(queue):
+    """多个交付失败聚合传播时不覆盖各自已有的根因。
+
+    Args:
+        queue: 隔离的内存或 Redis 任务存储。
+    """
+
+    def handler(delivery: Delivery) -> DeliveryResult:
+        """抛出带根因的业务错误。
+
+        Args:
+            delivery: 本地交付。
+
+        Raises:
+            ValueError: 以 KeyError 为 cause 的业务错误。
+        """
+        raise ValueError(delivery.work.id) from KeyError(delivery.work.id)
+
+    backend = QueueBackend({queue.name: queue}, poll_interval=0.005)
+    backend.bind(queue.name, handler, concurrency=2)
+    backend.submit(queue.name, Work("crawl", id="first"))
+    backend.submit(queue.name, Work("crawl", id="second"))
+    try:
+        _eventually(lambda: queue.counts()["dead"] == 2)
+        with pytest.raises(ValueError) as caught:
+            backend.wait_idle(5)
+        assert isinstance(caught.value.__cause__, KeyError)
+        assert caught.value.__cause__.args == caught.value.args
     finally:
         backend.close()
 

@@ -27,6 +27,9 @@ class AsyncDownloader(Protocol):
 配置错误、程序错误、取消和引擎控制异常必须继续传播。下载节点不通过捕获所有 Exception 将程序错误伪装成网络失败。
 Request 可用显式 `Cookie` 请求头发送原始 Cookie 字符串，此时不设置 `Request.cookies`；两者同时设置会在模型校验时拒绝。
 requests 保留该头原值且不合并 Jar；curl_cffi、HTTPX、wreq 与 primp 在会话 Jar 已有 Cookie 时明确拒绝，以避免静默合并或覆盖。
+显式 Cookie 请求头与 `Request.cookies` 只承诺随初始请求发送。自动跟随重定向后，后续各跳是否携带因后端而异：
+requests、requests-go 与 HTTPX 不再发送显式 Cookie 头，curl_cffi 在重定向中途收到 Set-Cookie 时改为只发送会话 Cookie。
+需要每一跳都携带指定 Cookie 时，设置 `allow_redirects=False` 并自行构造后续请求。
 
 ## 节点和动态选择
 
@@ -261,10 +264,13 @@ node = DownloadNode(
 runtime.run("crawl", request, options={"crawler.session.reuse": False})
 ```
 
-直接调用节点时也可以直接构造 Context：
+直接调用节点（例如测试）时，使用 Interlace 供执行器绑定基础上下文的 `bind_context`；`Context` 的公开构造只接受
+`parent`，用于组合已有上下文：
 
 ```python
-context = Context(emit, slot, options={"crawler.session.reuse": False})
+from interlace.engine.events import bind_context
+
+context = bind_context(emit, slot, options={"crawler.session.reuse": False})
 response = node.execute({"request": request}, context).value
 ```
 
@@ -282,12 +288,13 @@ Client 代理等设置由装配方分别配置，框架不从已有 Client 猜�
 空字符串、首尾空白或错误类型会在发请求前失败；不支持的浏览器名称由 curl_cffi 抛出配置异常。
 
 ```python
-from interlace import Context
+from interlace.engine.events import bind_context
 from bricks import DownloadNode, Request
 
 node = DownloadNode()
-context = Context(
+context = bind_context(
     lambda event: None,
+    None,
     options={
         "crawler.fingerprint.impersonate": "chrome",
     },

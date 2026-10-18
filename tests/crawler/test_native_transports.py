@@ -8,13 +8,16 @@ import sys
 from threading import Thread
 
 import pytest
-from interlace import Context, Graph, Runtime, Slot
+import requests
+from interlace import Graph, Runtime, Slot
+from interlace.engine.events import bind_context
 
 from bricks import AsyncDownloadNode, DownloadNode, Request, UploadFile
 from bricks.downloaders.curl_cffi import AsyncCurlCffiDownloader, CurlCffiDownloader
 from bricks.downloaders.httpx import AsyncHttpxDownloader, HttpxDownloader
 from bricks.downloaders.primp import AsyncPrimpDownloader, PrimpDownloader
 from bricks.downloaders.requests import RequestsDownloader
+from bricks.downloaders.requests_go import RequestsGoDownloader
 
 _FAILURE_TRANSPORTS = [
     CurlCffiDownloader,
@@ -45,6 +48,14 @@ def _closed_socket_response(kind):
 
     def serve():
         connection, _ = listener.accept()
+        if kind in ("ftp_redirect", "bad_redirect", "partial"):
+            # 先读完请求头，确保客户端进入响应处理而不是因连接复位失败。
+            received = b""
+            while b"\r\n\r\n" not in received:
+                chunk = connection.recv(4096)
+                if not chunk:
+                    break
+                received += chunk
         if kind == "rst":
             connection.setsockopt(
                 socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
@@ -57,6 +68,10 @@ def _closed_socket_response(kind):
             connection.sendall(
                 b"HTTP/1.1 302 Found\r\nLocation: http://\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             )
+        elif kind == "partial":
+            connection.sendall(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n0123456789"
+            )
         connection.close()
         listener.close()
 
@@ -65,7 +80,8 @@ def _closed_socket_response(kind):
 
 
 @pytest.mark.parametrize(
-    "failure", ["eof", "rst", "garbage", "tls", "ftp_redirect", "bad_redirect"]
+    "failure",
+    ["eof", "rst", "garbage", "tls", "ftp_redirect", "bad_redirect", "partial"],
 )
 @pytest.mark.parametrize("downloader_type", _FAILURE_TRANSPORTS)
 def test_common_transport_failures_return_failed_responses(
@@ -77,6 +93,25 @@ def test_common_transport_failures_return_failed_responses(
     response = downloader_type(verify=True).fetch(Request(url, timeout=3))
     assert response.status_code == -1
     assert response.error is not None
+
+
+@pytest.mark.parametrize("failure", ["ftp_redirect", "bad_redirect"])
+def test_requests_go_redirect_target_failures_return_failed_responses(failure):
+    """requests-go 跟随到无法请求的重定向目标时同样转换为 -1。"""
+
+    url = _closed_socket_response(failure)
+    response = RequestsGoDownloader().fetch(Request(url, timeout=3))
+    assert response.status_code == -1
+    assert response.error is not None
+
+
+def test_requests_proxy_configuration_error_propagates():
+    """调用方代理配置错误不是传输失败，不能被转换为 -1。"""
+
+    with pytest.raises(requests.exceptions.InvalidURL):
+        RequestsDownloader().fetch(
+            Request("http://127.0.0.1:1/", proxy="http://", timeout=3)
+        )
 
 
 @pytest.mark.parametrize(
@@ -128,6 +163,25 @@ def test_explicit_cookie_header_rejects_populated_native_jar(downloader_type, se
         session.fetch(Request(base + "/cookies"))
         with pytest.raises(ValueError, match="explicit Cookie header"):
             session.fetch(Request(base + "/echo", headers={"Cookie": "manual=1"}))
+    finally:
+        downloader.close_session(session)
+
+
+@pytest.mark.parametrize(
+    "downloader_type",
+    [CurlCffiDownloader, HttpxDownloader, PrimpDownloader]
+    + ([WreqDownloader] if sys.version_info >= (3, 11) else []),
+)
+def test_explicit_cookie_header_is_sent_with_empty_native_jar(downloader_type, server):
+    """会话 Jar 为空时显式 Cookie 头按原值发送，临时下载同样适用。"""
+
+    base, _, _ = server
+    request = Request(base + "/echo", headers={"Cookie": "manual=1"})
+    downloader = downloader_type()
+    assert downloader.fetch(request).json()["cookie"] == "manual=1"
+    session = downloader.prepare_session()
+    try:
+        assert session.fetch(request).json()["cookie"] == "manual=1"
     finally:
         downloader.close_session(session)
 
@@ -284,7 +338,7 @@ def test_sessions_and_context_fingerprints(server, transport):
             output = await resolve(
                 node.execute(
                     {"request": Request(base + path)},
-                    Context(lambda event: None, slot, options=options),
+                    bind_context(lambda event: None, slot, options=options),
                 )
             )
             return output.value

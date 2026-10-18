@@ -7,7 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import requests_go
-from interlace import Context, Graph, Runtime, Slot
+from interlace import Graph, Runtime, Slot
+from interlace.engine.events import bind_context
 from requests_go.tls_client.exceptions import TLSClientExeption
 
 from bricks import DownloadNode, Request, UploadFile
@@ -267,7 +268,7 @@ def test_go_sessions_and_context_fingerprints(https_server, monkeypatch):
 
         return node.execute(
             {"request": Request(base + path)},
-            Context(lambda event: None, slot, options=options),
+            bind_context(lambda event: None, slot, options=options),
         ).value
 
     try:

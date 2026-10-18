@@ -346,7 +346,7 @@ def _freeze_rules(rules: RuleSet) -> RuleSet:
     Raises:
         TypeError: 不是支持的记录规则，即使源中没有数据也必须报错。
     """
-    if isinstance(rules, (Rows, Product, MappingProxyType)):
+    if isinstance(rules, (Rows, Product)):
         return rules
     if isinstance(rules, Mapping):
         return _freeze_fields(rules)
@@ -362,13 +362,11 @@ def _freeze_fields(fields: Mapping[str, Any]) -> Mapping[str, Any]:
         fields: 输出字段名到字段规则的映射。
 
     Returns:
-        独立的只读映射；规则实例本身不被修改或绑定引擎。
+        独立的只读映射；传入的只读映射同样重新校验和复制，规则实例不被修改。
 
     Raises:
         TypeError: 字段名或规则类型不合法。
     """
-    if isinstance(fields, MappingProxyType):
-        return fields
     if not isinstance(fields, Mapping):
         raise TypeError("fields must be a mapping")
     result: dict[str, Any] = {}

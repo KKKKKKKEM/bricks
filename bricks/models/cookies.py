@@ -5,11 +5,14 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
 from copy import deepcopy
 from email.message import Message
+from functools import cache
 from http.client import HTTPResponse
 from http.cookiejar import Cookie, CookieJar, DefaultCookiePolicy
-from typing import cast
+from typing import Any, cast
 from urllib.parse import urlsplit
 from urllib.request import Request as URLRequest
+
+from publicsuffixlist import PublicSuffixList
 
 from ._validation import cookies as validate_cookies
 from ._validation import http_url, request_cookies
@@ -29,6 +32,74 @@ def cookie_domain(hostname: str) -> str:
     if ":" in hostname:
         return f"[{hostname}].local"
     return hostname if "." in hostname else f"{hostname}.local"
+
+
+@cache
+def _public_suffixes() -> PublicSuffixList:
+    """惰性加载随依赖发布的公共后缀列表，进程内只解析一次，不联网更新。
+
+    Returns:
+        共享的只读公共后缀查询对象。
+    """
+
+    return PublicSuffixList()
+
+
+def _public_domain(cookie: Cookie, request: Any) -> bool:
+    """判断 Cookie 是否把 Domain 属性设为公共后缀且不等于请求主机。
+
+    Args:
+        cookie: 待接收或发送的 Cookie。
+        request: 提供 get_full_url 的标准库或 requests 兼容请求。
+
+    Returns:
+        Domain 会让 Cookie 跨越公共后缀下的不同站点时为 True。
+    """
+
+    if not cookie.domain_specified:
+        return False
+    domain = cookie.domain.lstrip(".").casefold()
+    host = (urlsplit(request.get_full_url()).hostname or "").casefold()
+    return domain != host and _public_suffixes().is_public(domain)
+
+
+class StrictCookiePolicy(DefaultCookiePolicy):
+    """严格 host-only 匹配，并拒绝 Domain 为公共后缀的 Cookie，接收与发送均校验。"""
+
+    def __init__(self) -> None:
+        """固定严格无 Domain 匹配规则，其余沿用标准库默认值。"""
+
+        super().__init__(strict_ns_domain=DefaultCookiePolicy.DomainStrictNonDomain)
+
+    def set_ok_domain(self, cookie: Cookie, request: Any) -> bool:
+        """在标准库校验后拒绝接收公共后缀 Domain。
+
+        Args:
+            cookie: 响应设置的 Cookie。
+            request: 来源请求。
+
+        Returns:
+            允许存入 Jar 时为 True。
+        """
+
+        return super().set_ok_domain(cookie, request) and not _public_domain(
+            cookie, request
+        )
+
+    def return_ok_domain(self, cookie: Cookie, request: Any) -> bool:
+        """在标准库校验后拒绝向其他站点发送公共后缀 Domain 的已有记录。
+
+        Args:
+            cookie: Jar 中的 Cookie。
+            request: 目标请求。
+
+        Returns:
+            允许随该请求发送时为 True。
+        """
+
+        return super().return_ok_domain(cookie, request) and not _public_domain(
+            cookie, request
+        )
 
 
 class RequestCookies(MutableMapping[str, str]):
@@ -240,11 +311,7 @@ class Cookies:
         """
 
         http_url(url)
-        jar = CookieJar(
-            policy=DefaultCookiePolicy(
-                strict_ns_domain=DefaultCookiePolicy.DomainStrictNonDomain,
-            )
-        )
+        jar = CookieJar(policy=StrictCookiePolicy())
         # CookieJar 实际只要求 info()，类型声明却限定为完整 HTTPResponse。
         jar.extract_cookies(
             cast(HTTPResponse, _CookieResponse(headers)), URLRequest(url)
@@ -323,11 +390,7 @@ class Cookies:
                 for cookie in self._records
             )
         http_url(url)
-        jar = CookieJar(
-            policy=DefaultCookiePolicy(
-                strict_ns_domain=DefaultCookiePolicy.DomainStrictNonDomain,
-            )
-        )
+        jar = CookieJar(policy=StrictCookiePolicy())
         for cookie in self._records:
             if cookie.domain:
                 jar.set_cookie(deepcopy(cookie))

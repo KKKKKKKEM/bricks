@@ -33,6 +33,7 @@ _TRANSPORT_ERRORS = frozenset(
         CurlECode.GOT_NOTHING,
         CurlECode.SEND_ERROR,
         CurlECode.RECV_ERROR,
+        CurlECode.PARTIAL_FILE,
         CurlECode.PEER_FAILED_VERIFICATION,
         CurlECode.BAD_CONTENT_ENCODING,
         CurlECode.HTTP2,

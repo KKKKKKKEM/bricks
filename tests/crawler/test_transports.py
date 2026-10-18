@@ -9,7 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 import httpx
 import pytest
 from curl_cffi.requests.exceptions import ImpersonateError, SessionClosed
-from interlace import Context, Graph, Runtime, Slot
+from interlace import Graph, Runtime, Slot
+from interlace.engine.events import bind_context
 
 from bricks import AsyncDownloadNode, DownloadNode, Request, UploadFile
 from bricks.downloaders.curl_cffi import AsyncCurlCffiDownloader, CurlCffiDownloader
@@ -201,7 +202,7 @@ def test_session_isolation_and_context_override(server, transport):
             output = await resolve(
                 node.execute(
                     {"request": Request(base + path)},
-                    Context(
+                    bind_context(
                         lambda event: None,
                         slot,
                         options={"crawler.session.reuse": reuse},

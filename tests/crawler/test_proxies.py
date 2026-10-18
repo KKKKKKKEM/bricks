@@ -144,6 +144,21 @@ def test_proxy_address_and_credentials_are_explicit():
             format_proxy(value)
     with pytest.raises(ValueError):
         Proxy("localhost:80", threshold=True)
+    # 解析错误消息不回显含认证信息的原地址。
+    for value in ("http://user:p℀secret@proxy.test:80", "http://user:secret@[bad:80"):
+        with pytest.raises(ValueError) as caught:
+            format_proxy(value)
+        assert "secret" not in str(caught.value)
+
+
+def test_proxy_sources_reject_missing_intervals_at_construction():
+    """轮询间隔和缓存时长不能为 None，构造时明确失败而不是使用时才出错。"""
+    with pytest.raises(TypeError, match="poll_interval"):
+        ApiProxy("http://provider.test/list", poll_interval=None)
+    with pytest.raises(TypeError, match="poll_interval"):
+        RedisProxy("pool", object(), poll_interval=None)
+    with pytest.raises(TypeError, match="cache_ttl"):
+        ClashProxy("http://localhost:9090", cache_ttl=None)
 
 
 def test_proxy_repr_redacts_credentials():

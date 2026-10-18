@@ -1716,8 +1716,20 @@ def test_survey_hook_failure_never_acknowledges_or_calls_default_pipeline():
 
 
 def test_crawl_plans_share_hooks_and_expose_validated_storage_branches():
-    """两种计划只选择各自的存储操作，裁剪出口不泄露任何控制端口。"""
+    """两种计划只选择各自的存储操作并保留业务 Hook，裁剪出口不泄露任何控制端口。"""
     spider = SimpleSpider()
+
+    def marker(context):
+        """仅用于识别插槽中保留的业务 Hook。
+
+        Args:
+            context: 当前记录上下文。
+        """
+
+    spider.use(hooks.AFTER_PIPELINE, hooks.Task(marker))
+    with pytest.raises(RuntimeError, match="open the spider"):
+        spider.build_crawl_plan()
+    spider.open()
     normal = spider.build_crawl_plan()
     manual = spider.build_crawl_plan(survey=True)
     assert "pipeline" in normal.nodes and "survey_pipeline" not in normal.nodes
@@ -1725,6 +1737,10 @@ def test_crawl_plans_share_hooks_and_expose_validated_storage_branches():
     assert normal.outputs == manual.outputs == {("complete", "summary")}
     assert normal.cut_outputs == manual.cut_outputs == frozenset()
     assert "before_pipeline" in manual.nodes and "after_pipeline" in manual.nodes
+    for plan in (normal, manual):
+        # 插槽节点只公开 Graph 契约，通过其固定声明确认业务 Hook 未在计划中丢失。
+        tasks = plan.graph.nodes["after_pipeline"]._tasks
+        assert marker in [task.func for task in tasks]
     short = normal.graph.plan(
         include={"parse"},
         entrypoint="parse",

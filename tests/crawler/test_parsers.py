@@ -5,6 +5,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
 from io import BytesIO, StringIO
+from types import MappingProxyType
 from typing import Any
 
 import pytest
@@ -72,6 +73,11 @@ def test_markup_encoding_and_explicit_xml_namespaces(tmp_path) -> None:
     ) == ["1"]
     declared = '<?xml version="1.0" encoding="UTF-8"?><root><item>值</item></root>'
     assert XPathParser(format="xml").extract(declared, "//item/text()") == ["值"]
+    # 显式编码只作用于字节输入，带声明的文本仍按 UTF-8 解析。
+    gbk = XPathParser(format="xml", encoding="gbk")
+    assert gbk.extract(declared, "string(//item)") == "值"
+    with pytest.raises(etree.XMLSyntaxError):
+        gbk.extract(declared.encode("utf-8"), "string(//item)")
     secret = tmp_path / "secret.txt"
     secret.write_text("never-expand-this", encoding="utf-8")
     document = f'<!DOCTYPE r [<!ENTITY x SYSTEM "{secret.as_uri()}">]><r>&x;</r>'
@@ -326,6 +332,33 @@ def test_rows_css_selects_descendants_without_matching_row_itself() -> None:
             {"titles": Rule("div", options={"output": "text"})},
         ),
     ) == [{"titles": ["A"]}, {"titles": ["B"]}]
+
+
+def test_rows_css_scope_is_same_for_document_root_row() -> None:
+    """文档根元素作为行时同样只匹配后代，与非根行一致；整篇文档仍可匹配根。"""
+    source = "<list><list><i>1</i></list><i>2</i></list>"
+    field = {"n": Rule("list", options={"output": "text"})}
+    parser = CssParser(format="xml")
+    rows = Rows(Rule("/list", parser=XPathParser(format="xml")), field)
+    assert parser.match(source, rows) == [{"n": ["1"]}]
+    nested = Rows(Rule("//list", parser=XPathParser(format="xml")), field)
+    assert parser.match(source, nested) == [{"n": ["1"]}, {"n": []}]
+    assert parser.extract(source, "list", output="text") == ["12", "1"]
+
+
+def test_caller_mapping_proxy_rules_are_validated_and_copied() -> None:
+    """调用方的只读映射同样校验和复制，不能绕过表达式简写或后续被修改。"""
+    source = "<r><b>x</b></r>"
+    parser = XPathParser(format="xml")
+    assert match(source, MappingProxyType({"x": "string(//b)"}), parser=parser) == [
+        {"x": "x"}
+    ]
+    with pytest.raises(TypeError):
+        match(source, MappingProxyType({"x": 1}), parser=parser)
+    fields = {"x": "string(//b)"}
+    rows = Rows("/r", MappingProxyType(fields))
+    fields["y"] = "string(//b)"
+    assert list(rows.fields) == ["x"]
 
 
 def test_match_json_rows_preserve_arrays_and_explicit_null_policy() -> None:

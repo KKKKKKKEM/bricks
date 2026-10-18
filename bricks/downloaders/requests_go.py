@@ -21,6 +21,7 @@ from ._options import (
     _failed_response,
 )
 from ._requests_common import (
+    _raised_by_redirect,
     _request_cookies,
     _response,
     _sent_request,
@@ -294,6 +295,14 @@ class RequestsGoSessionDownloader:
                 else source
             )
             return _failed_response(source, error, started).copy(request=request)
+        except (
+            requests.exceptions.InvalidURL,
+            requests.exceptions.InvalidSchema,
+        ) as error:
+            # 只转换重定向目标错误；代理等调用方配置错误继续传播。
+            if not _raised_by_redirect(error):
+                raise
+            return _failed_response(source, error, started)
         finally:
             if previous_adapter is not self.client.get_adapter("https://"):
                 previous_adapter.close()

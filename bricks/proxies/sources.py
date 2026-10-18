@@ -102,7 +102,7 @@ class ApiProxy(BaseProxy):
 
         Raises:
             ValueError: 请求地址或间隔非法。
-            TypeError: 下载器或解析函数不符合同步协议。
+            TypeError: 下载器或解析函数不符合同步协议，或间隔不是数值。
         """
         super().__init__(**options)
         self._request = Request(key, timeout=10) if request is None else request.copy()
@@ -120,6 +120,8 @@ class ApiProxy(BaseProxy):
         self._extract = handle_response
         self._available: deque[Proxy] = deque()
         self._lock = RLock()
+        if poll_interval is None:
+            raise TypeError("poll_interval must be a number")
         duration(poll_interval, "poll_interval")
         self._interval = poll_interval
         self._last_error: BaseException | None = None
@@ -227,6 +229,7 @@ class RedisProxy(BaseProxy):
 
         Raises:
             ValueError: 键名、类型或间隔非法。
+            TypeError: 间隔不是数值。
         """
         super().__init__(**options)
         if not isinstance(key, str) or not key or key_type not in {"set", "list"}:
@@ -235,6 +238,8 @@ class RedisProxy(BaseProxy):
         self.client = client
         self.key_type = key_type
         self._original_values: dict[int, str] = {}
+        if poll_interval is None:
+            raise TypeError("poll_interval must be a number")
         duration(poll_interval, "poll_interval")
         self._interval = poll_interval
 

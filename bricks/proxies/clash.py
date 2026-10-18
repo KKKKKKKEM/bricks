@@ -74,6 +74,8 @@ class ClashProxy(BaseProxy):
             raise TypeError("ClashProxy requires a synchronous downloader")
         self._address = None if proxy is None else self._make(proxy).proxy
         self._match = match
+        if cache_ttl is None:
+            raise TypeError("cache_ttl must be a number")
         duration(cache_ttl, "cache_ttl", allow_zero=True)
         self._cache_ttl = cache_ttl
         self._cache_time = float("-inf")

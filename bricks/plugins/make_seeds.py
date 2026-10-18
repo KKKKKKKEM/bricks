@@ -42,6 +42,7 @@ def _batch(
     record: dict[str, Any] | None,
     checkpoint: str,
     transform: Callable[[Any], dict[str, Any]] | None = None,
+    offset: int = 0,
 ) -> Iterator[list[dict[str, Any]]]:
     """按已投放位置恢复，校验整批后在产出前更新调用方记录。
 
@@ -52,6 +53,7 @@ def _batch(
         record: Air 初始化持有的可变 JSON 记录；None 不记录。
         checkpoint: 当前源独立的记录键。
         transform: 可选同步记录转换，用于显式处理 ObjectId 等类型。
+        offset: 源已自行定位到的绝对起始位置，写回记录时计入，默认 0。
 
     Yields:
         严格 JSON 种子批次。Air 在整批入队后提交该位置。
@@ -72,6 +74,7 @@ def _batch(
     iterator = iter(source)
     for _ in itertools.islice(iterator, position):
         pass
+    position += offset
     while True:
         values = list(itertools.islice(iterator, batch_size))
         if not values:
@@ -168,6 +171,7 @@ def by_range(
         ({key: value} for value in values),
         batch_size=batch_size,
         skip=0,
+        offset=position,
         record=record,
         checkpoint=checkpoint or _key("range", [start, stop, step, key, reverse]),
     )

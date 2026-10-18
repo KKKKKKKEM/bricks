@@ -99,6 +99,7 @@ HookNode 捕获领域 signals 并输出到已声明的路由；不再通过 chec
 共享定义包含正式 `pipeline` 和无默认存储的 `survey_pipeline` 两个备选分支，计划只选择其中一个，
 并以 `outputs={("complete", "summary")}` 校验出口，避免重试或跳过端口因裁剪变成普通结果。
 `build_graphs()` 用公开的 `Graph.compose` 将计划选定的节点、入口和连接装配成队列消费图。
+插槽声明在打开时固定，因此三个 `build_*` 方法须在 `open()` 或 `with spider:` 之后调用，之前调用抛出 RuntimeError。
 两种分支复用请求、解析、前后 Hook 与重试节点，资源和确认仍由正常队列执行链管理。
 
 计划提供 `describe()` 查看入口、连接和出口，也可从 `plan.graph.plan(...)` 派生独立入口或连接选择。
@@ -148,7 +149,7 @@ seeds 的修改只影响当前交付，不回写原始队列任务或自动重�
 仍指向同一次 firing，回调结束后立即恢复；在回调外或使用错误的 Context 类别会抛出 RuntimeError。
 显式参数仍适合需要清楚依赖或复用测试的函数，当前 Context 适合直接 use 的简洁插件，两者可按场景混用。
 
-`context.install(name, value, nx=False)` 将进程内业务资源写入当前 Slot，`context.obtain(name, default=None)`
+`context.install(name, value, *, nx=False)` 将进程内业务资源写入当前 Slot，`nx` 只能按关键字传入；`context.obtain(name, default=None)`
 只读取 Slot 业务命名空间。`concurrency=N` 时框架维护 N 个长期 Slot，作用类似 dev 的 N 份线程变量，
 但资源身份不绑定物理线程：同一 Slot 即共享，不同 Slot 即隔离。本地优先子任务继续使用原 Slot；Slot 归还池后，
 后续根任务若再次取得它，也能看到尚未清除的资源。
@@ -247,7 +248,8 @@ BEFORE/AFTER_REQUEST、BEFORE/AFTER_RETRY、BEFORE/AFTER_PARSE、BEFORE/AFTER_PI
 BEFORE_START、BEFORE_CLOSE、ERROR_OCCURRED、BEFORE/AFTER_GET_SEEDS 位于真实非图边界，使用同步 HookContext。
 领取后的 AFTER_GET_SEEDS 在本地 Slot 已分配、Graph 尚未开始时执行，并与同 Slot 的 Graph execution 共用 Interlace `SlotLease.execution()` 串行边界。
 若父 Graph 正持有该 Slot，子任务 Hook 会等父 Graph 退出后再运行；父 Graph 不应同步等待依赖该子 Hook 的信号。
-use 应在打开前调用；install 在首次打开时执行一次，可调用 super().install() 扩展默认插件，也可完全自行注册。
+use 应在打开前调用；插槽在 BEFORE_START 运行前已经固定，在该回调或之后调用 use 会抛出 RuntimeError。
+install 在首次打开时执行一次，可调用 super().install() 扩展默认插件，也可完全自行注册。
 完全覆盖 install 时，响应是否接受由自行装配的插件决定；无信号的正常返回沿图的正常边继续。
 
 ## 运行与资源

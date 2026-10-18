@@ -93,12 +93,15 @@ def _safe_url(value: str | None) -> str:
         value: 原始请求或代理 URL。
 
     Returns:
-        不含认证信息和敏感参数值的 URL。
+        不含认证信息和敏感参数值的 URL；无法解析时返回固定占位，不回显原值。
     """
     if not value:
         return ""
     candidate = value if "://" in value or value.startswith("//") else "//" + value
-    parts = urlsplit(candidate)
+    try:
+        parts = urlsplit(candidate)
+    except ValueError:
+        return "[INVALID URL]"
     query = "[REDACTED]" if parts.query else ""
     netloc = parts.netloc.rsplit("@", 1)[-1]
     return urlunsplit((parts.scheme, netloc, parts.path, query, ""))

@@ -1,12 +1,12 @@
 """requests 与 requests-go 共用的响应和 PreparedRequest 转换。"""
 
-from http.cookiejar import DefaultCookiePolicy
+import traceback
 from urllib.parse import urlsplit
 
 import requests
 
 from ..models import Request, Response
-from ..models.cookies import cookie_domain
+from ..models.cookies import StrictCookiePolicy, cookie_domain
 from ._options import _redirect_failure
 
 
@@ -42,6 +42,23 @@ def _request_cookies(source: Request) -> requests.cookies.RequestsCookieJar:
     return cookies
 
 
+def _raised_by_redirect(error: BaseException) -> bool:
+    """判断 URL 或协议错误是否在 Session.resolve_redirects 跟随重定向时产生。
+
+    初始 URL 已由 Request 校验，重定向之外的同类错误来自代理等调用方配置，必须继续传播。
+
+    Args:
+        error: requests 抛出的 InvalidURL 或 InvalidSchema。
+
+    Returns:
+        错误来自重定向目标时为 True。
+    """
+    return any(
+        frame.f_code.co_name == "resolve_redirects"
+        for frame, _ in traceback.walk_tb(error.__traceback__)
+    )
+
+
 class _StrictHostCookieSession(requests.Session):
     """在每次请求的合并 CookieJar 上启用严格主机匹配。"""
 
@@ -59,11 +76,7 @@ class _StrictHostCookieSession(requests.Session):
         prepared = super().prepare_request(request)
         # requests 的重定向复制保留此 Jar，但 types-requests 未声明该内部字段。
         cookie_jar: requests.cookies.RequestsCookieJar = prepared._cookies  # type: ignore[attr-defined]
-        cookie_jar.set_policy(
-            DefaultCookiePolicy(
-                strict_ns_domain=DefaultCookiePolicy.DomainStrictNonDomain
-            )
-        )
+        cookie_jar.set_policy(StrictCookiePolicy())
         explicit_cookie_header = any(
             name.lower() == "cookie"
             for headers in (request.headers, self.headers)

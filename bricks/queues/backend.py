@@ -49,6 +49,12 @@ class _Binding:
         _close_lock: 串行化重复关闭，所有调用均等待资源清理完成。
         _lost: 已确认失效的租约 token。
         _finishing: 正在提交结束决定的 token，不再续租。
+        _expires: token 到本地租约到期时刻的映射，单位为 time.monotonic 秒；
+            在发出领取或续租前取时，只与本机时钟比较，不使用存储侧 deadline。
+        _waiting: 本地旧交付仍在执行时重新领取到的同 ID 租约，按 Work ID 索引；
+            持续续租，旧交付结束后再调度，避免并发执行或空耗交付次数。
+        _reserved: 正在执行 put_claim 的本地延续数量，非零时轮询线程不得退出。
+        _retired: 轮询线程是否已退出；退出后不再接受本地延续。
         _wake: 交付结束时唤醒轮询线程的事件。
         _claim_lock: 串行化领取操作与交付结束标记。
         _before_claim: 领取前同步门控，返回延迟秒数时暂缓领取，None 放行。
@@ -96,6 +102,10 @@ class _Binding:
         self._closed = False
         self._close_lock = RLock()
         self._lost: set[str] = set()
+        self._expires: dict[str, float] = {}
+        self._waiting: dict[str, TaskLease] = {}
+        self._reserved = 0
+        self._retired = False
         self._before_claim = before_claim
         self._before_execute = before_execute
         self._unbind = self.local.bind(
@@ -193,13 +203,93 @@ class _Binding:
                 if failure is not None:
                     self.errors.append(failure)
                 self.active.pop(delivery.work.id, None)
+                self._expires.pop(lease.token, None)
                 self._lost.discard(lease.token)
                 self._finishing.discard(lease.token)
+                waiting = self._waiting.pop(delivery.work.id, None)
                 self._wake.set()
+        if waiting is not None:
+            self._resume(waiting)
         return DeliveryResult.ack()
+
+    def _resume(self, lease: TaskLease) -> None:
+        """旧交付结束后调度等待中的同 ID 租约，已停止领取时交还存储。
+
+        Args:
+            lease: 本地旧交付执行期间重新领取到的租约。
+        """
+        with self.lock:
+            resume = not self.stop.is_set()
+            if resume:
+                self.active[lease.work.id] = lease
+            else:
+                self._expires.pop(lease.token, None)
+        try:
+            if not resume:
+                self.queue.retry(lease, error="local queue binding is closing")
+                return
+            try:
+                self.local.submit(self.queue.name, lease.work)
+            except BaseException:
+                with self.lock:
+                    self.active.pop(lease.work.id, None)
+                    self._expires.pop(lease.token, None)
+                self.queue.retry(lease, error="local scheduling failed")
+                raise
+        except BaseException as exc:
+            with self.lock:
+                self.errors.append(exc)
+        finally:
+            self._wake.set()
+
+    @property
+    def accepts_local(self) -> bool:
+        """轮询线程仍在续租时接受本地延续，包括停止领取后的排空阶段。
+
+        Returns:
+            绑定尚未关闭且轮询线程尚未退出时为 True。
+        """
+        with self.lock:
+            return not (self._closed or self._retired)
+
+    def _holds(self, lease: TaskLease) -> bool:
+        """持锁检查租约仍由本绑定持有、未失效且未进入结束提交。
+
+        Args:
+            lease: 待检查的执行中或等待中租约。
+
+        Returns:
+            仍需续租时为 True。
+        """
+        current = self.active.get(lease.work.id)
+        if current is None or current.token != lease.token:
+            current = self._waiting.get(lease.work.id)
+        return (
+            current is not None
+            and current.token == lease.token
+            and lease.token not in self._lost
+            and lease.token not in self._finishing
+        )
+
+    def _lose(self, lease: TaskLease, error: BaseException) -> None:
+        """持锁登记失效租约；等待中的租约直接放弃，执行中的租约在结束时报告。
+
+        Args:
+            lease: 已失效的租约。
+            error: 交给等待方的失效原因。
+        """
+        waiting = self._waiting.get(lease.work.id)
+        if waiting is not None and waiting.token == lease.token:
+            del self._waiting[lease.work.id]
+            self._expires.pop(lease.token, None)
+        else:
+            self._lost.add(lease.token)
+        self.errors.append(error)
 
     def submit_local(self, work: Work, slot_lease: SlotLease) -> None:
         """原子持久化并领取 Work，再延续当前 Slot 执行。
+
+        停止领取后的排空阶段仍接受在途交付发起的延续，延续属于排空的一部分。
 
         Args:
             work: 已包含稳定 ID 与执行配置的目标 Work。
@@ -210,31 +300,36 @@ class _Binding:
             TypeError: Work 或 lease 不符合 Interlace 契约。
         """
         with self.lock:
-            if self._closed or self.stop.is_set():
+            if self._closed or self._retired:
                 raise RuntimeError("queue binding is closed")
-        lease = self.queue.put_claim(work, self._owner, lease_seconds=self._ttl)
-        if lease is None:
-            slot_lease.release()
-            return
-        with self.lock:
-            unavailable = self._closed or self.stop.is_set()
-            duplicate = work.id in self.active
-            if not unavailable and not duplicate:
-                self.active[work.id] = lease
-        if unavailable:
-            self.queue.retry(lease, error="local queue binding is closed")
-            raise RuntimeError("queue binding is closed")
-        if duplicate:
-            self.queue.retry(lease, error="local task is already active")
-            slot_lease.release()
-            return
+            self._reserved += 1
         try:
-            self.local.submit_local(self.queue.name, lease.work, slot_lease)
-        except BaseException:
+            started = time.monotonic()
+            lease = self.queue.put_claim(work, self._owner, lease_seconds=self._ttl)
+            if lease is None:
+                slot_lease.release()
+                return
             with self.lock:
-                self.active.pop(work.id, None)
-            self.queue.retry(lease, error="local scheduling failed")
-            raise
+                duplicate = work.id in self.active
+                if not duplicate:
+                    self.active[work.id] = lease
+                    self._expires[lease.token] = started + self._ttl
+            if duplicate:
+                self.queue.retry(lease, error="local task is already active")
+                slot_lease.release()
+                return
+            try:
+                self.local.submit_local(self.queue.name, lease.work, slot_lease)
+            except BaseException:
+                with self.lock:
+                    self.active.pop(work.id, None)
+                    self._expires.pop(lease.token, None)
+                self.queue.retry(lease, error="local scheduling failed")
+                raise
+        finally:
+            with self.lock:
+                self._reserved -= 1
+            self._wake.set()
 
     def _poll(self) -> None:
         """有界预取并续租，按租约丢失与暂时存储故障分别处理。"""
@@ -245,42 +340,47 @@ class _Binding:
         while True:
             self._wake.clear()
             with self.lock:
-                active = tuple(self.active.values())
-            if self.stop.is_set() and not active:
-                return
+                held = (*self.active.values(), *self._waiting.values())
+                if self.stop.is_set() and not held and not self._reserved:
+                    # 与本地延续的登记互斥，退出后 submit_local 明确拒绝。
+                    self._retired = True
+                    return
             now = time.monotonic()
             if now >= next_heartbeat:
-                for lease in active:
+                for lease in held:
                     with self.lock:
-                        if (
-                            self.active.get(lease.work.id, None) is None
-                            or self.active[lease.work.id].token != lease.token
-                            or lease.token in self._lost
-                            or lease.token in self._finishing
-                        ):
+                        if not self._holds(lease):
                             continue
+                    started = time.monotonic()
                     try:
                         renewed = self.queue.renew(lease, lease_seconds=self._ttl)
                     except LeaseLostError as exc:
                         with self.lock:
-                            if lease.token not in self._lost:
-                                self._lost.add(lease.token)
-                                self.errors.append(exc)
+                            # 续租往返期间交付可能已经确认；只登记仍持有的租约，避免误报。
+                            if self._holds(lease):
+                                self._lose(lease, exc)
                     except BaseException as exc:
-                        if time.monotonic() >= lease.deadline:
-                            with self.lock:
-                                if lease.token not in self._lost:
-                                    self._lost.add(lease.token)
-                                    self.errors.append(exc)
+                        with self.lock:
+                            if self._holds(lease) and time.monotonic() >= (
+                                self._expires.get(lease.token, 0.0)
+                            ):
+                                # 存储持续不可用约一个租约时长，与领取失败一致停止绑定并传播。
+                                self._lose(lease, exc)
+                                self.stop.set()
                     else:
                         with self.lock:
-                            current = self.active.get(lease.work.id)
-                            if current is not None and current.token == lease.token:
-                                self.active[lease.work.id] = renewed
+                            if self._holds(lease):
+                                if lease.work.id in self._waiting and (
+                                    self._waiting[lease.work.id].token == lease.token
+                                ):
+                                    self._waiting[lease.work.id] = renewed
+                                else:
+                                    self.active[lease.work.id] = renewed
+                                self._expires[lease.token] = started + self._ttl
                 next_heartbeat = time.monotonic() + self._ttl / 3
             if (
                 not self.stop.is_set()
-                and len(active) < self._concurrency
+                and len(held) < self._concurrency
                 and time.monotonic() >= next_claim
             ):
                 claiming = False
@@ -299,6 +399,7 @@ class _Binding:
                             with self.lock:
                                 finishing = bool(self._finishing)
                             claiming = not finishing
+                            started = time.monotonic()
                             claimed = (
                                 None
                                 if finishing
@@ -311,20 +412,24 @@ class _Binding:
                         claim_failed_at = None
                         if claimed is not None:
                             with self.lock:
+                                self._expires[claimed.token] = started + self._ttl
                                 duplicate = claimed.work.id in self.active
-                                if not duplicate:
+                                if duplicate:
+                                    # 旧租约失效后本绑定重新领到仍在执行的任务：保留并续租新租约，
+                                    # 旧交付结束后再调度，不并发执行也不空耗交付次数。
+                                    stale = self._waiting.get(claimed.work.id)
+                                    if stale is not None:
+                                        self._expires.pop(stale.token, None)
+                                    self._waiting[claimed.work.id] = claimed
+                                else:
                                     self.active[claimed.work.id] = claimed
-                            if duplicate:
-                                self.queue.retry(
-                                    claimed,
-                                    error="previous local delivery is still running",
-                                )
-                            else:
+                            if not duplicate:
                                 try:
                                     self.local.submit(self.queue.name, claimed.work)
                                 except BaseException:
                                     with self.lock:
                                         self.active.pop(claimed.work.id, None)
+                                        self._expires.pop(claimed.token, None)
                                     self.queue.retry(
                                         claimed, error="local scheduling failed"
                                     )
@@ -469,23 +574,29 @@ class QueueBackend:
     def submit_local(self, queue: str, work: Work, lease: SlotLease) -> None:
         """持久化目标 Work 并在当前进程延续同一 Slot 链。
 
+        优先选择仍在领取的绑定；注销或关闭排空期间，在途交付的延续交给仍在续租的绑定。
+
         Args:
             queue: 已绑定的本地消费通道。
             work: Interlace Router 创建的工作请求；本地提交信封可携带完整目标 Work。
             lease: Router 已 retain 并转交给本次投递的 Slot 引用。
 
         Raises:
-            RuntimeError: 后端已关闭或通道没有本地消费者。
+            RuntimeError: 通道没有仍可执行的本地消费者。
             ValueError: 通道未装配。
             TypeError: Work 或 lease 不符合 Interlace 契约。
         """
         with self._lock:
-            self._queue(queue)
-            bindings = tuple(
+            if queue not in self._queues:
+                raise ValueError(f"queue is not configured: {queue!r}")
+            accepting = [
                 binding
                 for binding in self._bindings
-                if binding.queue.name == queue and not binding.stop.is_set()
-            )
+                if binding.queue.name == queue and binding.accepts_local
+            ]
+            bindings = [
+                binding for binding in accepting if not binding.stop.is_set()
+            ] or accepting
             if not bindings:
                 raise RuntimeError(f"task queue {queue!r} has no local consumers")
             binding = bindings[self._local_cursor % len(bindings)]
@@ -611,7 +722,9 @@ class QueueBackend:
                 unique.append(failure)
         if unique:
             for earlier, later in pairwise(unique):
-                earlier.__cause__ = later
+                # 原异常已有 cause 时保留真实根因，不以后续错误覆盖。
+                if earlier.__cause__ is None:
+                    earlier.__cause__ = later
             raise unique[0]
 
     def wait_idle(self, timeout: float | None = None) -> None:

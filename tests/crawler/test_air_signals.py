@@ -96,7 +96,8 @@ class Example(Spider):
 def test_graph_contains_real_hook_nodes_and_no_legacy_decision_node():
     """图定义直接呈现插槽，不再通过一个隐藏的响应决策节点跳转。"""
     spider = Example()
-    initial, crawl = spider.build_graphs()
+    with spider:
+        initial, crawl = spider.build_graphs()
     assert "check_response" not in crawl.nodes
     assert isinstance(crawl.nodes["before_request"], HookNode)
     assert isinstance(crawl.nodes["after_request"], HookNode)
@@ -104,6 +105,99 @@ def test_graph_contains_real_hook_nodes_and_no_legacy_decision_node():
     assert isinstance(initial.nodes["before_put_seeds"], HookNode)
     assert isinstance(initial.nodes["after_put_seeds"], HookNode)
     assert "checkpoint" in initial.nodes
+
+
+def test_use_during_before_start_is_rejected_after_hooks_are_fixed():
+    """BEFORE_START 运行时插槽已固定，再注册插件明确失败而不是静默不生效。"""
+    spider = Example()
+
+    def register(context):
+        """尝试在启动边界追加请求插件。
+
+        Args:
+            context: 启动边界。
+        """
+        context.target.use(hooks.BEFORE_REQUEST, {"func": lambda ctx: None})
+
+    spider.use(hooks.BEFORE_START, {"func": register})
+    with pytest.raises(RuntimeError, match="before opening"):
+        spider.run()
+    assert spider.downloader.calls == []
+
+
+def test_root_causes_survive_secondary_failures():
+    """初始化根因不被消费失败覆盖，with 块异常已有 cause 时不被关闭失败覆盖。"""
+
+    class BrokenInit(Example):
+        """先产出一条种子再失败，同时存储也失败。"""
+
+        def make_seeds(self, context, **kwargs):
+            """产出一条种子后抛出初始化根因。
+
+            Args:
+                context: 初始化上下文。
+                kwargs: 恢复记录。
+
+            Yields:
+                单条种子。
+
+            Raises:
+                ValueError: 初始化根因。
+            """
+            yield {"url": "https://example.com/one"}
+            raise ValueError("init root cause")
+
+        def item_pipeline(self, context):
+            """模拟消费存储失败。
+
+            Args:
+                context: 当前记录上下文。
+
+            Raises:
+                KeyError: 消费错误。
+            """
+            raise KeyError("pipeline failed")
+
+    def chain(error):
+        """展开显式 cause 链。
+
+        Args:
+            error: 链首异常。
+
+        Returns:
+            按 cause 顺序排列的异常列表。
+        """
+        found = []
+        while error is not None and error not in found:
+            found.append(error)
+            error = error.__cause__
+        return found
+
+    with pytest.raises(ExecutionError) as caught:
+        BrokenInit().run()
+    assert any(
+        isinstance(error, ValueError) and str(error) == "init root cause"
+        for error in chain(caught.value)
+    )
+
+    def fail_close(context):
+        """模拟关闭插槽的二次错误。
+
+        Args:
+            context: 关闭边界。
+
+        Raises:
+            OSError: 关闭阶段失败。
+        """
+        raise OSError("close hook failed")
+
+    root = KeyError("root")
+    spider = Example()
+    spider.use(hooks.BEFORE_CLOSE, {"func": fail_close})
+    with pytest.raises(ValueError) as body:
+        with spider:
+            raise ValueError("body") from root
+    assert body.value.__cause__ is root
 
 
 @pytest.mark.parametrize("signal", [signals.Success, signals.Failure])
@@ -468,27 +562,32 @@ def test_start_signal_and_close_hook_run_once_without_consuming():
     assert trace == ["start", "close"] and spider.downloader.calls == []
 
 
-def test_wait_before_claim_keeps_active_delivery_renewed():
-    """领取前 Wait 暂缓新领取，已经执行的任务仍持续续租。"""
+def test_wait_before_claim_keeps_active_delivery_renewed(renewals):
+    """领取前 Wait 暂缓新领取，已经执行的任务仍持续续租。
+
+    Args:
+        renewals: 续租观察器工厂。
+    """
     waits = []
 
     class Slow(Example):
         """在租约期间执行慢同步存储。"""
 
         def item_pipeline(self, context):
-            """等待超过原始租期再完成。
+            """等到在途租约跨过原始期限并完成续租后再结束。
 
             Args:
                 context: 当前结果。
             """
-            time.sleep(0.15)
+            watch.wait_past(time.monotonic() + 0.3)
             super().item_pipeline(context)
 
     spider = Slow(
         seeds=[{"url": "https://example.com/1"}, {"url": "https://example.com/2"}],
         concurrency=2,
-        lease_seconds=0.06,
+        lease_seconds=0.3,
     )
+    watch = renewals(spider.task_queue)
 
     def delay(context):
         """有在途交付时延后下一次领取。

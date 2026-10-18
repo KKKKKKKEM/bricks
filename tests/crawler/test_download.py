@@ -6,8 +6,9 @@ from threading import Barrier
 
 import httpx
 import pytest
-from interlace import Context, Graph, Node, Ports, Runtime, Slot, SlotPool
+from interlace import Graph, Node, Ports, Runtime, Slot, SlotPool
 from interlace.engine.errors import ExecutionCancelledError, NodeTimeoutError
+from interlace.engine.events import bind_context
 
 from bricks import (
     AsyncDownloadNode,
@@ -63,7 +64,7 @@ def test_context_session_policy_preserves_existing_session(server, asynchronous)
                 服务端回显的请求信息。
             """
 
-            context = Context(
+            context = bind_context(
                 lambda event: None,
                 None if isolated else slot,
                 options={"crawler.session.reuse": False} if isolated else {},
@@ -149,7 +150,9 @@ def test_invalid_session_policy_fails_before_download(asynchronous):
 
         result = node.execute(
             {"request": Request("https://example.com")},
-            Context(lambda event: None, options={"crawler.session.reuse": value}),
+            bind_context(
+                lambda event: None, None, options={"crawler.session.reuse": value}
+            ),
         )
         if asynchronous:
             asyncio.run(result)
@@ -307,7 +310,7 @@ def test_async_slot_sessions_and_cancellation(server):
         ):
             node = AsyncDownloadNode(lambda slot: slot["downloaders"])
             contexts = [
-                Context(
+                bind_context(
                     lambda event: None,
                     Slot(
                         {
@@ -381,8 +384,8 @@ def test_slot_resolver_contracts(asynchronous):
             asyncio.run(result)
 
     with pytest.raises(RuntimeError, match="Slot"):
-        invoke(lambda slot: {}, Context(lambda event: None))
-    context = Context(lambda event: None, Slot())
+        invoke(lambda slot: {}, bind_context(lambda event: None, None))
+    context = bind_context(lambda event: None, Slot())
     with pytest.raises(ValueError, match="not registered"):
         invoke(lambda slot: {}, context)
     with pytest.raises(TypeError, match="mapping"):
@@ -797,7 +800,8 @@ def test_selection_and_downloader_return_contracts(asynchronous):
         node = node_type(bindings, select=lambda request, selected=selected: selected)
         with pytest.raises(TypeError, match="select"):
             result = node.execute(
-                {"request": Request("https://example.com")}, Context(lambda *args: None)
+                {"request": Request("https://example.com")},
+                bind_context(lambda event: None, None),
             )
             if asynchronous:
                 asyncio.run(result)
@@ -825,7 +829,8 @@ def test_selection_and_downloader_return_contracts(asynchronous):
     node = node_type({"default": AsyncInvalid() if asynchronous else Invalid()})
     with pytest.raises(TypeError, match="Response"):
         result = node.execute(
-            {"request": Request("https://example.com")}, Context(lambda *args: None)
+            {"request": Request("https://example.com")},
+            bind_context(lambda event: None, None),
         )
         if asynchronous:
             asyncio.run(result)
@@ -991,7 +996,7 @@ def test_registry_validation_and_unknown_name(node_type, downloader_type):
         default="other",
         select=lambda request: "missing",
     )
-    context = Context(lambda *args: None)
+    context = bind_context(lambda event: None, None)
     with pytest.raises(ValueError, match="missing"):
         result = node.execute({"request": Request("https://example.com")}, context)
         if isinstance(node, AsyncDownloadNode):
@@ -1047,7 +1052,8 @@ def test_node_does_not_swallow_programming_or_control_errors(error, asynchronous
     )
     with pytest.raises(type(error)) as caught:
         result = node.execute(
-            {"request": Request("https://example.com")}, Context(lambda *args: None)
+            {"request": Request("https://example.com")},
+            bind_context(lambda event: None, None),
         )
         if asynchronous:
             asyncio.run(result)

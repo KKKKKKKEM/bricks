@@ -588,7 +588,11 @@ class _Queue:
             初始化凭据。
         """
         return InitLease(
-            self.name, data["owner"], data["token"], data["fence"], data["deadline"]
+            self.name,
+            data["owner"],
+            data["token"],
+            data["fence"],
+            float(data["deadline"]),
         )
 
     def renew_init(self, lease: InitLease, *, lease_seconds: float = 30) -> InitLease:

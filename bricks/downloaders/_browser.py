@@ -193,13 +193,15 @@ def _html_headers(headers: list[tuple[str, str]]) -> list[tuple[str, str]]:
 
 
 def _known_network_error(error: Exception) -> bool:
-    """识别 Playwright 报告的网络错误和 API 请求超时。
+    """识别 Playwright 报告的网络、TLS 证书、重定向上限错误和 API 请求超时。
+
+    Chromium 与 Firefox 的导航错误及 APIRequestContext 的 Node TLS 错误统一视为传输失败。
 
     Args:
         error: Playwright 抛出的异常。
 
     Returns:
-        异常属于已知网络错误时为 True。
+        异常属于已知传输错误时为 True。
     """
 
     if not isinstance(error, (synchronous.Error, asynchronous.Error)):
@@ -216,6 +218,16 @@ def _known_network_error(error: Exception) -> bool:
         "socket hang up",
         "timed out",
         "timeout",
+        # Firefox 导航的证书与 TLS 错误、重定向循环。
+        "sec_error_",
+        "ssl_error_",
+        "mozilla_pkix_error_",
+        "ns_error_redirect_loop",
+        # APIRequestContext 的证书校验失败与重定向上限。
+        "certificate",
+        "self-signed",
+        "self signed",
+        "max redirect count exceeded",
     )
     return any(marker in message for marker in markers)
 
@@ -553,7 +565,12 @@ class AsyncBrowserSessionDownloader:
     _loop: asyncio.AbstractEventLoop = field(
         default_factory=asyncio.get_running_loop, init=False, repr=False
     )  # 会话所属循环。
-    _closed: bool = field(default=False, init=False, repr=False)  # 关闭后不可再下载。
+    _closed: bool = field(
+        default=False, init=False, repr=False
+    )  # 关闭开始后不可再下载。
+    _closing: asyncio.Task[None] | None = field(
+        default=None, init=False, repr=False
+    )  # 唯一的清理任务，并发关闭共同等待其完成。
     _busy: bool = field(
         default=False, init=False, repr=False
     )  # 阻止多个任务并发操作同一 Tab。
@@ -573,24 +590,28 @@ class AsyncBrowserSessionDownloader:
     async def close(self) -> None:
         """关闭本会话资源，保留外部注入的 Browser。
 
+        并发调用等待同一次清理；清理开始即拒绝后续下载，清理失败也不恢复会话可用状态。
+
         Raises:
             RuntimeError: 事件循环错误。
+            Exception: 清理失败；正在等待同一次清理的调用均收到该错误。
         """
 
         self._check_owner()
-        if not self._closed:
-            cleanup = asyncio.create_task(self._resources.aclose())
-            try:
-                try:
-                    await asyncio.shield(cleanup)
-                except asyncio.CancelledError:
-                    await cleanup
-                    self._closed = True
-                    raise
-                self._closed = True
-            finally:
-                self._page = None
-                self._document = None
+        if self._closing is None:
+            self._closed = True
+            self._page = None
+            self._document = None
+            self._closing = asyncio.create_task(self._resources.aclose())
+        elif self._closing.done():
+            return
+        cleanup = self._closing
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            # 清理不可被打断：等待完成后再传播取消。
+            await cleanup
+            raise
 
     def _record_document(self, response: asynchronous.Response) -> None:
         """记录当前 Tab 最后主文档的响应对象。

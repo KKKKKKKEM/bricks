@@ -189,6 +189,42 @@ def test_cookie_strings_preserve_duplicate_names_and_attributes():
     assert len(response.headers.get_all("Set-Cookie")) == 4
 
 
+def test_cookie_public_suffix_domain_is_not_accepted_or_sent():
+    """Domain 为公共后缀的 Cookie 不被接收，已有记录也不随其他站点请求发送。"""
+
+    from http.cookiejar import Cookie
+
+    response = Response(
+        url="https://a.co.uk/",
+        headers=[
+            ("Set-Cookie", "sid=x; Domain=.co.uk; Path=/"),
+            ("Set-Cookie", "ok=1; Domain=a.co.uk; Path=/"),
+        ],
+    )
+    assert [cookie.name for cookie in response.cookies] == ["ok"]
+    assert response.cookies.to_string(url="https://b.co.uk/") == ""
+    assert response.cookies.to_string(url="https://www.a.co.uk/") == "ok=1"
+    forged = Cookie(
+        version=0,
+        name="sid",
+        value="x",
+        port=None,
+        port_specified=False,
+        domain=".co.uk",
+        domain_specified=True,
+        domain_initial_dot=True,
+        path="/",
+        path_specified=True,
+        secure=False,
+        expires=None,
+        discard=True,
+        comment=None,
+        comment_url=None,
+        rest={},
+    )
+    assert Cookies([forged]).to_string(url="https://b.co.uk/") == ""
+
+
 def test_cookiejar_expiry_copy_and_mapping_convenience():
     """验证 CookieJar 有效期筛选、复制和简写映射。"""
 
