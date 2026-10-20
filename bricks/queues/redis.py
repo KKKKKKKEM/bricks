@@ -10,8 +10,8 @@ from .base import _Queue
 from .models import encode, text
 
 _SCRIPT = r"""
--- 每个队列固定使用同一 hash tag 的四个键；业务 JSON 保持原始字符串。
-local records, ready, active, meta = KEYS[1], KEYS[2], KEYS[3], KEYS[4]
+-- 每个队列固定使用同一 hash tag 的五个键；业务 JSON 保持原始字符串。
+local records, ready, active, meta, dead = KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5]
 local op, a = ARGV[1], cjson.decode(ARGV[2])
 local tm = redis.call('TIME')
 local now = tonumber(tm[1]) + tonumber(tm[2]) / 1000000
@@ -42,6 +42,23 @@ local function save(id, r)
     redis.call('HSET', records, id, cjson.encode(r))
 end
 
+-- 记录进入 dead，并加入按进入时间排序的死信索引。
+local function bury(id, r)
+    r.status = 'dead'
+    redis.call('HINCRBY', meta, 'dead', 1)
+    redis.call('ZADD', dead, now, id)
+end
+
+-- 把 dead 记录恢复为立即可领取，交付次数清零。
+local function revive(id, r)
+    r.status, r.attempt, r.error, r.result = 'pending', 0, '', null
+    r.ready = string.format('%.17g', now)
+    redis.call('HINCRBY', meta, 'dead', -1)
+    redis.call('ZREM', dead, id)
+    redis.call('ZADD', ready, now, id)
+    save(id, r)
+end
+
 local r = a.id and read(records, a.id) or nil
 if op == 'put' or op == 'put_claim' then
     if op == 'put' and a.init ~= null and not valid(read(meta, 'init'), a.init, true) then
@@ -55,8 +72,7 @@ if op == 'put' or op == 'put_claim' then
             r.token, r.owner, r.deadline = '', '', '0'
             r.error, r.ready = 'delivery lease expired', string.format('%.17g', now)
             if r.attempt >= r.maximum then
-                r.status = 'dead'
-                redis.call('HINCRBY', meta, 'dead', 1)
+                bury(a.id, r)
             else
                 r.status = 'pending'
                 redis.call('ZADD', ready, now, a.id)
@@ -87,8 +103,7 @@ if op == 'claim' then
         old.error, old.ready = 'delivery lease expired', string.format('%.17g', now)
         redis.call('ZREM', active, id)
         if old.attempt >= old.maximum then
-            old.status = 'dead'
-            redis.call('HINCRBY', meta, 'dead', 1)
+            bury(id, old)
         else
             old.status = 'pending'
             redis.call('ZADD', ready, now, id)
@@ -118,9 +133,20 @@ if op == 'forget' then
     if r.status ~= 'acked' and r.status ~= 'dead' then
         return out({failure='only terminal tasks can be forgotten'})
     end
+    if r.status == 'dead' then redis.call('ZREM', dead, a.id) end
     redis.call('HINCRBY', meta, r.status, -1)
     redis.call('HDEL', records, a.id)
     return out(true)
+end
+if op == 'revive' then
+    if not r or r.status ~= 'dead' then return out(false) end
+    revive(a.id, r)
+    return out(true)
+end
+if op == 'revive_dead' then
+    local ids = redis.call('ZRANGE', dead, 0, a.limit - 1)
+    for _, id in ipairs(ids) do revive(id, read(records, id)) end
+    return out(#ids)
 end
 if op == 'renew' or op == 'ack' or op == 'retry' or op == 'reject' then
     if not valid(r, a, false) then return out({failure='lease'}) end
@@ -137,9 +163,10 @@ if op == 'renew' or op == 'ack' or op == 'retry' or op == 'reject' then
         r.status, r.ready, r.error = 'pending', string.format('%.17g', now + a.delay), a.error
         redis.call('ZADD', ready, tonumber(r.ready), a.id)
     else
-        r.status, r.error = 'dead', a.error
+        r.error = a.error
+        bury(a.id, r)
     end
-    if r.status ~= 'pending' then redis.call('HINCRBY', meta, r.status, 1) end
+    if r.status == 'acked' then redis.call('HINCRBY', meta, 'acked', 1) end
     r.token, r.owner, r.deadline = '', '', '0'
     save(a.id, r)
     return out(r.status)
@@ -210,7 +237,7 @@ class RedisTaskQueue(_Queue):
         tag = hashlib.sha256(name.encode()).hexdigest()
         self._keys = [
             f"{prefix}:{{{tag}}}:{part}"
-            for part in ("records", "ready", "active", "meta")
+            for part in ("records", "ready", "active", "meta", "dead")
         ]
         self._script = client.register_script(_SCRIPT)
 

@@ -31,14 +31,13 @@ QueueBackend 通过公开 SPI 接入 Interlace，并组合其本地调度器管�
 
 ## 安装和版本
 
-Interlace 尚未发布到 PyPI，`pyproject.toml` 使用完整 Git 提交 ID 声明直接依赖，`uv.lock` 固定完整解析结果。
-`uv sync --locked` 可从远端安装，不依赖本地相邻目录、隐式路径或可编辑安装。
-后续发布 Interlace 到 PyPI 后，再统一更新依赖声明和锁文件。
+Interlace 以 `interlace-py` 发行名发布到 PyPI，导入名仍为 `interlace`。`pyproject.toml` 声明兼容的次版本范围，
+`uv.lock` 固定完整解析结果；`uv sync --locked` 从包索引安装，不依赖本地相邻目录、隐式路径或可编辑安装。
 
 PyPI 与 TestPyPI 不接受包含直接 URL 依赖的发行包，构建成功不代表可以上传。
 发布工作流在上传前通过 `.github/scripts/check_distribution.py` 检查 wheel 的真实 `Requires-Dist`，
-发现直接依赖即明确失败；当前 Git 依赖仍会触发该检查，不静默跳过上传，也不删除依赖元数据。
-正式发布须先将经过验证的 Interlace 版本发布到包索引，再更新 Bricks 的依赖与锁文件并运行跨包验证。
+发现直接依赖即明确失败，不静默跳过上传，也不删除依赖元数据。
+升级 Interlace 时先确认目标版本已发布到包索引并可安装，再更新 Bricks 的依赖与锁文件并运行跨包验证。
 本地可执行 `uv run --locked python .github/scripts/check_distribution.py dist/*.whl` 检查构建产物。
 
 需要在两个项目间临时联调时，可对本地开发环境做显式覆盖。此流程仅用于开发者本机运行示例，测试与 CI 均须使用锁定的远端提交：

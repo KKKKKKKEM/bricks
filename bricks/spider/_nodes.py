@@ -259,7 +259,6 @@ class CrawlNode(Node):
         _stage: 构造时固定的操作名称。
         _callback: 业务方法或 None。
         _download: 已装配的领域下载节点。
-        _max_retries: 额外重试次数上限。
         _retry_delay: 默认重试等待秒数。
     """
 
@@ -272,7 +271,6 @@ class CrawlNode(Node):
         callback: Callable[..., Any] | None = None,
         *,
         download: DownloadNode | AsyncDownloadNode | None = None,
-        max_retries: int = 2,
         retry_delay: float = 0,
     ) -> None:
         """固定业务操作、资源与输出类型。
@@ -282,15 +280,10 @@ class CrawlNode(Node):
             stage: 业务操作名。
             callback: 显式接收 Context 的方法。
             download: 借用下载节点。
-            max_retries: 额外重试次数。
             retry_delay: 默认等待秒数。
         """
         self._owner, self._stage, self._callback = owner, stage, callback
-        self._download, self._max_retries, self._retry_delay = (
-            download,
-            max_retries,
-            retry_delay,
-        )
+        self._download, self._retry_delay = download, retry_delay
         ports: dict[str, type[Any]] = {"task": _Task, "complete": _Task}
         if stage == "download":
             ports["retry"] = _Task
@@ -341,7 +334,7 @@ class CrawlNode(Node):
                     "retries": task.retries,
                 }
             if self._stage == "retry":
-                if task.retries >= self._max_retries:
+                if task.retries >= current.max_retry:
                     detail = (
                         f"last status={task.response.status_code}"
                         if task.response is not None

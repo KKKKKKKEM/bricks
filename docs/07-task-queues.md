@@ -1,7 +1,8 @@
 # 任务队列
 
 任务队列属于爬虫装配层。`bricks.queues` 提供存储协议、内存实现、交付与初始化租约，
-`bricks.queues.redis.RedisTaskQueue` 提供可跨进程共享的 Redis 实现。
+`bricks.queues.sqlite.SqliteTaskQueue` 提供同机多进程共享、重启后保留任务的 SQLite 实现，
+`bricks.queues.redis.RedisTaskQueue` 提供可跨机器共享的 Redis 实现。
 `QueueBackend` 把这些存储接入 Interlace 的公开 `TaskPublisher / TaskConsumer` SPI，
 完整 Graph 的执行、线程和本地 Slot 分配仍使用 Interlace。
 
@@ -26,6 +27,20 @@ uv run --locked python -m examples.crawler_queue --redis-url redis://127.0.0.1:6
 
 示例消费者在已有任务排空后退出；它不是持续监听的守护服务。持续消费服务应保持 Runtime 存活，
 由外层服务负责停止信号和生命周期。示例仅打印种子，不能把日志输出当作可靠业务存储。
+
+单机部署不需要 Redis 也能在进程退出或重启后继续：
+
+```python
+from bricks.queues.sqlite import SqliteTaskQueue
+
+queue = SqliteTaskQueue("tasks.sqlite3", "news-run-1")
+spider = MySpider(task_queue=queue, queue_name="news-run-1", concurrency=4)
+```
+
+SQLite 实现使用标准库 sqlite3，无需额外依赖。每次操作打开独立连接，在 `BEGIN IMMEDIATE` 写事务内完成校验与状态迁移，
+同一数据库文件可由同机多个进程和线程共享，文件内按队列名隔离；`timeout` 设置等待其他进程写锁的秒数，默认 30。
+租约时间使用本机墙上时钟，因此不支持跨机器共享或网络文件系统；系统时钟大幅回拨会使已过期租约暂时视为有效。
+不接受 `:memory:` 内存数据库，进程内临时队列使用 MemoryTaskQueue。
 
 ## 身份、序列化和状态
 
@@ -71,7 +86,16 @@ Redis Lua 不解析业务 JSON，避免大整数精度损失或空列表变为�
 `ack(lease, result="success" / "failure")` 可以原子登记显式业务结果；省略时保持 None。
 `get(id)` 返回状态和独立 Work 副本，`counts()` 返回四种状态的计数。
 终态不会自动删除，以便保留去重身份；`forget(id)` 只允许移除 acked/dead 任务。
-需要重跑死信时先检查其内容，再显式忘记并重新提交；这两个操作不是原子重放，也不会撤销外部副作用。
+
+`revive(id)` 把单个 dead 任务恢复为可立即领取的 pending，交付次数清零并清除错误与业务结果；
+任务不存在或不是 dead 时返回 False。`revive_dead(limit=1000)` 每次原子恢复至多 limit 个死信并返回数量，
+循环调用直到返回 0 即可重跑全部死信。恢复不撤销已发生的外部副作用，排查失败原因后再恢复，
+避免同一问题再次耗尽交付次数。Redis 以独立有序集合索引死信，SQLite 按入队顺序查询。
+
+```python
+while queue.revive_dead():
+    pass
+```
 
 ## 交付租约与恢复
 
@@ -92,6 +116,7 @@ attempt 从首次领取的 1 开始递增；最大次数随第一次入队保存
 没有活跃领取器时不会自动执行过期回收，因此 counts 中 leased 不代表凭据仍有效。
 
 内存实现以锁和单调时钟保证当前进程内的原子操作，同名不同实例不共享数据，进程退出后任务丢失。
+SQLite 以文件写事务保证同机进程间的原子性，任务、终态与初始化断点随文件保留。
 Redis 使用[服务端 TIME](https://redis.io/docs/latest/commands/time/)和
 [Lua 原子操作](https://redis.io/docs/latest/develop/programmability/eval-intro/)保护状态与索引；
 使用独立命名空间管理这些键，不应由其他代码直接改写其类型或内容。
@@ -103,7 +128,7 @@ Worker 可能在写入外部数据库后、ACK 前崩溃，因此业务存储需
 
 ## 使用 with 管理占用
 
-两个具体队列实现都提供同步上下文管理入口：
+三个具体队列实现都提供同步上下文管理入口：
 
 ```python
 with queue.reserve("worker-1", lease_seconds=60) as task:
@@ -224,9 +249,10 @@ BRICKS_TEST_REDIS_URL=redis://127.0.0.1:6379/0 uv run --locked pytest tests/craw
 ```
 
 使用专用测试 Redis；测试仅删除各自随机前缀的键，不执行 FLUSHDB。
-契约包括并发去重、严格 JSON、租约接管与过期写入拒绝、延迟与次数耗尽、初始化断点、长任务续租、
-关闭排空、跨图事件、两个独立 Runtime 竞争，以及 Worker 进程退出后的恢复。
+契约测试对内存、SQLite 与 Redis 三种实现参数化执行，覆盖并发去重、严格 JSON、租约接管与过期写入拒绝、
+延迟与次数耗尽、死信恢复、初始化断点、长任务续租、关闭排空、跨图事件、两个独立 Runtime 竞争，
+以及 Worker 进程退出后的恢复；SQLite 另验证子进程领取后退出、重新打开文件接管。
 with 契约还验证共享线程数量、长任务占用、延后确认、异常释放、过期凭据拒绝和单项续租失败隔离。
-未配置地址时跳过 Redis 用例，本地契约仍执行。
+未配置地址时跳过 Redis 用例，内存与 SQLite 契约仍执行。
 
 [返回目录](README.md)

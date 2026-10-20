@@ -134,7 +134,7 @@ class GraphAssembly:
             "pipeline": CrawlNode(spider, "pipeline", spider.item_pipeline),
             "survey_pipeline": CrawlNode(spider, "pipeline", spider._survey_pipeline),
             "after_pipeline": hook(hook_api.AFTER_PIPELINE),
-            "retry": CrawlNode(spider, "retry", max_retries=spider._max_retries),
+            "retry": CrawlNode(spider, "retry"),
             "before_retry": hook(hook_api.BEFORE_RETRY),
             "retry_prepare": CrawlNode(spider, "retry_prepare", spider.on_retry),
             "after_retry": hook(hook_api.AFTER_RETRY),

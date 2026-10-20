@@ -58,13 +58,15 @@ requests-go 可通过 `uv sync --extra requests-go` 安装，模块 `bricks.down
 - `bricks.downloaders`：同步与异步下载协议；curl_cffi 默认实现，以及可选 HTTPX、requests、wreq、primp、requests-go 实现。
 - 浏览器适配器：Playwright、Camoufox，共用页面操作、API 请求和会话生命周期。
 - `bricks.nodes`：可组合到 Interlace Graph 的爬虫节点。
-- `bricks.parsers`：CSS、XPath、JMESPath、JSONPath、正则及独立的 `match` 批量规则，支持笛卡尔组合与父子展开；不与 Response 绑定。
+- `bricks.parsers`：CSS、XPath、JMESPath、JSONPath、正则及独立的 `match` 批量规则，支持笛卡尔组合与父子展开；
+  解析器不依赖 Response，`Response.get/extract` 与 `css/xpath/jsonpath/re` 及其 `*_first` 是调用它们的便捷入口。
 
 解析器可单独使用，`uv run python -m examples.crawler_parse` 演示 CSS/JSON 批量提取、商品规格组合、父字段继承、
 Pipeline 跨格式连续提取与 Collect 多规则收集，
 接口、第三方扩展和规则语义见[独立解析与批量规则](docs/06-parsers.md)。
 
-`bricks.queues` 提供本地／Redis 任务存储、默认按内容生成 ID 的 `make_work`、交付租约、有限重投和初始化断点，
+`bricks.queues` 提供内存、SQLite（单机重启可恢复）与 Redis 任务存储、默认按内容生成 ID 的 `make_work`、交付租约、
+有限重投、死信恢复（`revive/revive_dead`）和初始化断点，
 QueueBackend 通过 Interlace SPI 接入执行。运行 `uv run --locked python -m examples.crawler_queue` 查看本地示例；
 分布式安装与装配见[任务队列](docs/07-task-queues.md)。
 手动消费可使用 `with queue.reserve(...) as task` 或 `with queue.hold(lease) as task`，
@@ -78,6 +80,8 @@ QueueBackend 通过 Interlace SPI 接入执行。运行 `uv run --locked python 
 接口和插件注册见 [Air 爬虫基类](docs/08-air-spider.md)。
 业务插槽是图中的独立 HookNode，回调通过 `raise signals.Retry()` 等信号改变流程；
 插槽位置和合法信号见 [Hook 节点与 signals](docs/12-hooks-and-signals.md)。
+`bricks.spider.form.Spider` 以 Download、Parse、Task、Pipeline 步骤声明流程，每个 Download 开启一段并作为独立
+Work 持久化，中断后从当前段恢复，列表到详情可用 `Download(each=True)` 逐条派发，见[配置式爬虫](docs/13-form-spider.md)。
 
 `bricks.plugins` 提供 CSV、SQLite、Mongo、Redis、范围种子源，以及存储、分页、条件动作和 UA 插件，
 见[领域插件](docs/09-domain-plugins.md)。`bricks.proxies` 提供固定、API、Redis、Clash 供应源和按 Slot

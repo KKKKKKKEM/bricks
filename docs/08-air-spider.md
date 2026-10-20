@@ -43,7 +43,7 @@ spider.run()
 | queue_name | 注入队列时必须等于其 name；缺省取队列名或爬虫类完整名称 |
 | proxy | 固定地址、ProxyProvider 或 Manager，Request 的显式代理优先；不接受动态 ref 配置 |
 | forever | True 时空队列仍保持消费，默认 False |
-| max_retry / retry_delay | 额外重试预算（默认 2）和等待秒数（默认 0）；下载前的 Retry 也消耗预算 |
+| max_retry / retry_delay | 额外重试预算（默认 2）和等待秒数（默认 0）；下载前的 Retry 也消耗预算，单个任务可用执行配置覆盖 |
 | options / limits | 默认 JSON 执行配置及单种子 ExecutionLimits |
 | lease_seconds / init_timeout | 交付和初始化租约秒数，以及初始化图的执行超时 |
 | poll_interval | 队列空轮询间隔秒数，默认 0.05；任务完成会唤醒领取循环 |
@@ -51,6 +51,21 @@ spider.run()
 | slots | 借用的本地 SlotProvider，资源归调用方管理 |
 
 这些配置应在打开实例前确定，不在运行中修改。不同进程使用同一队列名称时，必须注册相同版本的业务流程和配置。
+
+重试次数与成功判断可以按任务设置，配置随 Work 持久化，进程重启后仍生效：
+
+```python
+context.submit(seed, options={"crawler.retry.max": 5})
+context.submit(seed, options={"crawler.response.ok": "response.get('code') == 0"})
+spider = MySpider(options={"crawler.response.ok": {"response.status_code == 404": "raise signals.Success"}})
+```
+
+`context.max_retry` 读取当前任务的重试上限：执行配置 `crawler.retry.max` 优先，form 另有段级 `Download.max_retry`，
+最后为 Spider 的 max_retry。`context.ok_rule` 读取执行配置 `crawler.response.ok`，form 另有段级 `Download.ok`；
+默认注册的 `After.bypass` 未显式传入 ok 时使用它，仍为 None 时采用默认状态码规则。Spider 的 options 会合并进每个任务，
+因此与单任务配置同级，优先于 form 的段级设置。执行配置只接受 JSON 值，callable 规则通过 `bypass(ok=...)`
+参数或 form 的 `Download(ok=...)` 声明。重试耗尽时任务进入 dead，可用队列的 `revive_dead` 重新投放。
+执行配置的框架键统一使用 `crawler.` 前缀。
 
 | 业务方法 | 返回值及职责 |
 | --- | --- |
@@ -153,6 +168,12 @@ seeds 的修改只影响当前交付，不回写原始队列任务或自动重�
 只读取 Slot 业务命名空间。`concurrency=N` 时框架维护 N 个长期 Slot，作用类似 dev 的 N 份线程变量，
 但资源身份不绑定物理线程：同一 Slot 即共享，不同 Slot 即隔离。本地优先子任务继续使用原 Slot；Slot 归还池后，
 后续根任务若再次取得它，也能看到尚未清除的资源。
+
+`context.fetch(request)` 在业务方法或插件中立即下载一个附加请求，返回 Response，适合在存储前补充接口数据。它复用
+`build_download_node()` 的下载器选择与当前 Slot 会话（含会话 Cookie 与会话代理），但不经过请求插槽、代理插件、
+UA 预设或下载重试；非会话模式只使用 request.proxy，需要沿用主请求代理时显式设置
+`request.proxy = context.request.proxy`。使用异步下载器的 Spider 在异步回调中改用 `await context.afetch(request)`，
+两者在下载器类别不匹配时抛出 TypeError。
 
 ```python
 context.submit({"url": next_url})

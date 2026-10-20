@@ -124,6 +124,33 @@ Response 以读取为主，允许直接修改 content 和 encoding；其他字�
 修改编码不改变字节数；修改 content 后立即更新。不读取 Content-Length，也不包含响应头、重定向历史或对象内存
 开销。字节数统计当前存储的响应体，不代表压缩前后的网络传输流量。需要文本字符数时使用 `len(response.text)`。
 
+`response.get(expression, default=None)` 对 `json()` 的解码结果执行 JMESPath 查询，结果为 None（字段缺失或值为 null）
+时返回 default。`response.extract(engine, rules)` 按 `bricks.parsers.match` 的规则批量提取记录：`json`（JMESPath）与
+`jsonpath` 读取 `json()`，`css`、`xpath`、`regex` 读取 `text`；引擎名区分大小写。需要 XML 格式、显式字节编码或
+自定义解析器时，直接调用解析器的 `match`。
+
+```python
+from bricks.parsers import Rows
+
+if response.get("code") != 0:
+    ...
+records = response.extract("json", Rows("data.list", {"id": "id", "title": "title"}))
+```
+
+单表达式查询直接返回原始结果，`*_first` 取列表首项、空列表时返回 default：
+
+```python
+links = response.css("a.item", attribute="href")
+title = response.css_first("h1", output="text")
+price = response.xpath_first("//span[@class='price']/text()", default="0")
+total = response.xpath("count(//li)")
+ids = response.jsonpath("$.data[*].id")
+token = response.re_first(r'token="(\w+)"', group=1)
+```
+
+`css/xpath/re` 读取 text，`jsonpath` 读取 json()，选项分别传给对应解析器的 extract。每次调用都重新解析当前内容，
+同一页面多次查询时先用解析器 `prepare` 准备文档再查询，可避免重复解析。
+
 Cookies 保存标准库 Cookie 记录，保留域、路径、Secure、有效期及扩展属性。省略 cookies 参数时，从响应头的
 Set-Cookie 自动提取，需要来源 URL；显式提供 Cookies、CookieJar、Cookie 序列或简写字典时使用提供的数据。
 解析时使用标准库 CookieJar 的来源和有效期策略；原始 Set-Cookie 始终保留在 headers 中。
@@ -136,7 +163,7 @@ Set-Cookie 自动提取，需要来源 URL；显式提供 Cookies、CookieJar、
 Domain 属性为公共后缀（如 `.co.uk`、`github.io`）且不等于来源主机的 Cookie 按随包发布的 publicsuffixlist 拒绝接收，
 已有记录也不会随 `to_string(url=...)` 或 requests/requests-go 会话请求发送到其他站点；后缀列表随依赖版本更新，运行时不联网获取。
 
-没有增加 cookie_str、follow 或页面解析接口；文件传输和持久化格式仍由后续适配器定义，异常对象目前仅用于进程内。
+没有增加 cookie_str 或 follow 接口；文件传输和持久化格式仍由后续适配器定义，异常对象目前仅用于进程内。
 
 ## Items 整理解析结果
 

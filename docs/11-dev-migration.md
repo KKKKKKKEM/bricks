@@ -7,6 +7,14 @@
 | --- | --- |
 | `air.Spider` 四个业务方法 | 仍为 make_seeds/make_request/parse/item_pipeline；由初始化和消费两张 Graph 执行 |
 | `survey(*seeds, extract=...)` | 新实例调用同名手动消费入口，正常构造器提供业务配置；默认跳过 item_pipeline，保留插件和动态种子消费 |
+| `response.extract(engine=..., rules=...)`、`response.get(expr)` | `response.extract(engine, rules)` 使用 `bricks.parsers` 规则语法；`get` 对 JSON 执行 JMESPath，缺失或 null 返回 default |
+| `response.xpath/xpath_first/jsonpath/jsonpath_first/re/re_first` | 保留同名方法并新增 `css/css_first`；`*_first` 的 default 为第二个参数，选项传给对应解析器 |
+| `Request(ok=..., max_retry=...)`、`$maxRetry` | 任务执行配置 `crawler.response.ok`、`crawler.retry.max`，或 form 的 `Download(ok=..., max_retry=...)`；耗尽一律进入 dead，不再按成功丢弃 |
+| `task_queue.reverse/smart_reverse` | `queue.revive(id)` 恢复单个死信，`queue.revive_dead(limit)` 批量恢复，交付次数清零 |
+| `LocalQueue/RedisQueue/SqliteQueue` | `MemoryTaskQueue`、`RedisTaskQueue(client, name)`、`SqliteTaskQueue(path, name)`；不保留 set/list/zset genre 与优先级插队 |
+| `self.fetch(request)` | `context.fetch(request)` 复用当前下载器与 Slot 会话，异步下载器使用 `await context.afetch(request)`；不经过插槽与重试 |
+| `context.success()` | 删除；存储正常返回即在后置插槽完成后确认，提前结束使用 `raise signals.Success()` |
+| `form.Spider`、`template.Spider` | 合并为 `bricks.spider.form.Spider`，按 Download 分段并逐段持久化，见[配置式爬虫](13-form-spider.md) |
 | `events.on`、const、当前 Context | `bricks.hooks.on`、hooks 常量；回调可显式接收 Context 或在调用期间使用同类 Context.get_context()，业务插槽由 HookNode 执行 |
 | `use(form, {...})` | 保留 func/args/kwargs/index/match 字段；func 与 match 必须是实际函数 |
 | `plugins.make_seeds.by_*` | CSV、SQLite、Mongo、Redis、range 均已迁入；显式传入恢复 record |
@@ -18,8 +26,8 @@
 | Redis string 的 `$key`、拼接身份 | 使用 row_keys 的规范 JSON 摘要生成前缀键，业务记录不增删 `$key` |
 | `Before.set_proxy` | 保留请求显式地址，支持 Air 固定地址或 Slot 管理器 |
 | `Before.fake_ua` 的 `@chrome(...)` | 内置常用 UA 预设；复杂策略仍可注入 factory |
-| `After.show_response/bypass` | 可直接 use；bypass 支持 `$ok`、字符串、映射和 callable |
-| `After.conditional_scripts` | 可直接 use，缺省从 execution options 的 `$scripts` 读取可信动态脚本 |
+| `After.show_response/bypass` | 可直接 use；bypass 支持字符串、映射和 callable，省略时读取 `context.ok_rule`（执行配置 `crawler.response.ok`） |
+| `After.conditional_scripts` | 可直接 use，缺省从执行配置 `crawler.response.scripts` 读取可信动态脚本 |
 | `scripts.is_success/turn_page/inject` | 参数顺序贴近 dev；字符串与同步 callable 可混合，Type/Generator 恢复 flow 组合 |
 | `raise signals.Retry/Success/Failure` | 使用 `bricks.signals`，由领域节点转换为图内路由或明确失败 |
 | `BEFORE_PIPELINE` 中的 Skip | 跳过 pipeline，仍执行 AFTER_PIPELINE；其他 before 阶段按明确替代数据规则处理 |
@@ -54,8 +62,8 @@ SQLite 原生连接有线程亲和性，源迭代器若交给 Air，应由调用
 
 ## 当前范围
 
-本轮完成的是 Air、旧领域插件和代理管理工具的迁移；`form/template` 配置式爬虫、
-旧爬虫 RPC/CLI、SQLite/RocksDB 任务队列、旧 DB 包装器和部分传输实现尚不属于当前公开能力。
+本轮完成的是 Air、配置式 form（合并旧 template）、SQLite 任务队列、死信恢复、旧领域插件和代理管理工具的迁移；
+旧爬虫 RPC/CLI、RocksDB/Smart/Cache 任务队列、优先级插队、旧 DB 包装器和部分传输实现尚不属于当前公开能力。
 动态脚本和 Flow 已作为领域插件恢复，但不恢复动态类路径、旧数据库包装器或进程级全局状态。
 
 完整示例见 [Air 爬虫](08-air-spider.md)、[领域插件](09-domain-plugins.md)、[代理管理](10-proxies.md)

@@ -223,6 +223,28 @@ class TaskQueue(Protocol):
         """
         ...
 
+    def revive(self, task_id: str) -> bool:
+        """把 dead 任务恢复为可立即领取的 pending，交付次数清零并清除错误与结果。
+
+        Args:
+            task_id: 要恢复的任务 ID。
+
+        Returns:
+            已恢复返回 True；任务不存在或不是 dead 返回 False。
+        """
+        ...
+
+    def revive_dead(self, *, limit: int = 1000) -> int:
+        """批量恢复至多 limit 个 dead 任务，规则同 revive。
+
+        Args:
+            limit: 本次最多恢复的数量，限定单次原子操作的规模。
+
+        Returns:
+            实际恢复数量；调用方循环调用直到返回 0 即可恢复全部死信。
+        """
+        ...
+
 
 class _Queue:
     """为本地和 Redis 存储提供相同的校验与快照边界。
@@ -557,6 +579,33 @@ class _Queue:
             是否删除。
         """
         return bool(self._execute("forget", id=text(task_id, "task ID")))
+
+    def revive(self, task_id: str) -> bool:
+        """恢复单个 dead 任务，契约见 TaskQueue.revive。
+
+        Args:
+            task_id: 要恢复的任务 ID。
+
+        Returns:
+            是否恢复。
+        """
+        return bool(self._execute("revive", id=text(task_id, "task ID")))
+
+    def revive_dead(self, *, limit: int = 1000) -> int:
+        """批量恢复 dead 任务，契约见 TaskQueue.revive_dead。
+
+        Args:
+            limit: 本次最多恢复的数量。
+
+        Returns:
+            实际恢复数量。
+
+        Raises:
+            ValueError: limit 不是正整数。
+        """
+        if type(limit) is not int or limit < 1:
+            raise ValueError("limit must be a positive integer")
+        return int(self._execute("revive_dead", limit=limit))
 
     def acquire_init(
         self, owner: str, *, lease_seconds: float = 30

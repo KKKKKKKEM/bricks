@@ -31,14 +31,16 @@ from bricks.queues import (
     make_work,
 )
 from bricks.queues.redis import RedisTaskQueue
+from bricks.queues.sqlite import SqliteTaskQueue
 
 
-@pytest.fixture(params=["memory", "redis"])
-def queue(request):
+@pytest.fixture(params=["memory", "sqlite", "redis"])
+def queue(request, tmp_path):
     """为每个测试提供隔离队列，真实 Redis 通过显式环境变量启用。
 
     Args:
         request: 当前参数化测试请求。
+        tmp_path: SQLite 队列使用的临时目录。
 
     Yields:
         仅本测试拥有的队列。
@@ -46,6 +48,9 @@ def queue(request):
     name = uuid4().hex
     if request.param == "memory":
         yield MemoryTaskQueue(name)
+        return
+    if request.param == "sqlite":
+        yield SqliteTaskQueue(tmp_path / "tasks.sqlite3", name)
         return
     url = os.environ.get("BRICKS_TEST_REDIS_URL")
     if not url:
@@ -295,6 +300,38 @@ def test_crashed_final_attempt_becomes_dead(queue):
     assert queue.claim("replacement") is None
     assert queue.get("one").status == "dead"
     assert queue.counts()["dead"] == 1
+
+
+def test_revive_restores_dead_tasks_with_fresh_attempts(queue):
+    """死信恢复为可领取并清零交付次数，非死信不受影响，批量恢复有界且不重复。
+
+    Args:
+        queue: 隔离队列。
+    """
+    for task_id in ("a", "b", "c", "done"):
+        queue.put(Work("crawl", {"id": task_id}, id=task_id))
+    for _ in range(4):
+        lease = queue.claim("worker")
+        if lease.work.id == "done":
+            queue.ack(lease)
+        else:
+            queue.reject(lease, error="broken")
+    assert queue.counts() == {"pending": 0, "leased": 0, "acked": 1, "dead": 3}
+    assert not queue.revive("done")
+    assert not queue.revive("missing")
+    assert queue.revive("a")
+    assert not queue.revive("a")
+    revived = queue.claim("worker")
+    assert revived.work.id == "a" and revived.attempt == 1
+    assert queue.get("a").error == ""
+    queue.ack(revived)
+    assert queue.forget("b")
+    assert queue.revive_dead(limit=1) == 1
+    assert queue.revive_dead() == 0
+    assert queue.counts() == {"pending": 1, "leased": 0, "acked": 2, "dead": 0}
+    assert queue.claim("worker").work.id == "c"
+    with pytest.raises(ValueError):
+        queue.revive_dead(limit=0)
 
 
 def test_init_lease_progress_and_fenced_submission(queue):
@@ -1671,3 +1708,74 @@ def test_real_redis_recovers_after_worker_process_exit():
         if keys:
             client.delete(*keys)
         client.close()
+
+
+def _sqlite_claim_then_exit(path: str, name: str, connection: Any) -> None:
+    """领取 SQLite 任务后直接退出进程，模拟未确认的 Worker 崩溃。
+
+    Args:
+        path: 共享数据库文件。
+        name: 测试队列名称。
+        connection: 向父进程发送交付凭据的管道。
+    """
+    queue = SqliteTaskQueue(path, name)
+    lease = queue.claim("crashing-worker", lease_seconds=0.3)
+    connection.send((lease.token, lease.owner, lease.attempt, lease.deadline))
+    connection.close()
+    os._exit(0)
+
+
+def test_sqlite_recovers_after_worker_process_exit_and_reopen(tmp_path):
+    """SQLite 任务与初始化断点在进程退出后保留，重新打开文件即可接管未确认交付。
+
+    Args:
+        tmp_path: 数据库目录。
+    """
+    from bricks.queues import TaskLease
+
+    path = str(tmp_path / "tasks.sqlite3")
+    name = uuid4().hex
+    queue = SqliteTaskQueue(path, name)
+    init = queue.acquire_init("producer")
+    work = Work("crawl", {"id": 1}, id="recover")
+    queue.put(work, init=init)
+    queue.save_init(init, {"next": 1})
+    process_context = multiprocessing.get_context("spawn")
+    parent, child = process_context.Pipe(duplex=False)
+    process = process_context.Process(
+        target=_sqlite_claim_then_exit, args=(path, name, child)
+    )
+    try:
+        process.start()
+        assert parent.poll(10)
+        token, owner, attempt, deadline = parent.recv()
+        process.join(5)
+        assert process.exitcode == 0
+        reopened = SqliteTaskQueue(path, name)
+        assert reopened.initialization().progress == {"next": 1}
+        assert reopened.claim("replacement") is None
+        time.sleep(0.4)
+        recovered = reopened.claim("replacement")
+        assert recovered.attempt == 2 and recovered.work == work
+        old = TaskLease(name, work, token, owner, attempt, deadline)
+        with pytest.raises(LeaseLostError):
+            reopened.ack(old)
+        reopened.ack(recovered, result="success")
+        assert queue.get("recover").result == "success"
+    finally:
+        if process.is_alive():
+            process.terminate()
+            process.join(5)
+        parent.close()
+        child.close()
+
+
+@pytest.mark.parametrize("path", ["", ":memory:", "file::memory:?cache=shared"])
+def test_sqlite_queue_requires_database_file(path):
+    """每次操作独立连接，内存数据库无法共享，构造时明确拒绝。
+
+    Args:
+        path: 非文件数据库地址。
+    """
+    with pytest.raises(ValueError, match="database file"):
+        SqliteTaskQueue(path, "tasks")

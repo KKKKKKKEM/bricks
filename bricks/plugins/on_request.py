@@ -193,7 +193,7 @@ class After:
         *,
         namespace: Mapping[str, Any] | None = None,
     ) -> None:
-        """执行全部命中的动态条件动作，缺省读取 options['$scripts']。
+        """执行全部命中的动态条件动作，缺省读取执行配置 crawler.response.scripts。
 
         Args:
             rules: 条件到动作的有序映射；None 从当前 execution options 读取。
@@ -204,7 +204,11 @@ class After:
             BaseException: 脚本错误和领域信号原样传播。
         """
         context = _context()
-        selected = context.options.get("$scripts", {}) if rules is None else rules
+        selected = (
+            context.options.get("crawler.response.scripts", {})
+            if rules is None
+            else rules
+        )
         if not isinstance(selected, Mapping):
             raise TypeError("conditional scripts must be a mapping")
         if not selected:
@@ -266,14 +270,15 @@ class After:
         """按 dev 形式执行默认、表达式、映射或 callable 成功判断。
 
         Args:
-            ok: 检查条件；缺省读取 options['$ok']，仍缺省时仅拒绝传输失败。
+            ok: 检查条件；缺省读取 context.ok_rule（执行配置 crawler.response.ok，form 另有段级 ok），
+                仍缺省时采用默认状态码规则。
 
         Raises:
             signals.Retry: 检查未通过。
             BaseException: 自定义动作、脚本或其他领域信号原样传播。
         """
         context = _context()
-        selected = context.options.get("$ok") if ok is None else ok
+        selected = context.ok_rule if ok is None else ok
         if selected is None:
             status = context.response.status_code
             if 200 <= status < 300:

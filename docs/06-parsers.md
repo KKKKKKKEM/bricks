@@ -1,6 +1,7 @@
 # 第六章：独立解析与批量规则
 
-`bricks.parsers` 直接处理内容，不依赖 Response、Items 或 Interlace 执行上下文。
+`bricks.parsers` 直接处理内容，不依赖 Response、Items 或 Interlace 执行上下文；`Response.get/extract` 是调用这些解析器的
+便捷入口，见[爬虫领域模型](02-crawler-models.md#response-与-cookie)。
 既可执行单个表达式，也可用 `match` 将多组字段规则转换成普通 `list[dict]`。
 
 ```bash

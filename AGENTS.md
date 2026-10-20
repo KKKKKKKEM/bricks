@@ -27,7 +27,7 @@
 2. 模型位于 `bricks.models`，下载协议与实现位于 `bricks.downloaders`，领域节点位于 `bricks.nodes`。
    独立内容解析和批量规则位于 `bricks.parsers`，不在顶层转导出。
    爬虫任务存储、初始化租约与公开任务 SPI 的装配适配器位于 `bricks.queues`，不在顶层转导出。
-   爬虫基类与领域 Context 位于 `bricks.spider`，共享声明位于 `bricks.hooks`，可复用领域插件位于
+   代码式 air 与配置式 form 爬虫基类及领域 Context 位于 `bricks.spider`，共享声明位于 `bricks.hooks`，可复用领域插件位于
    `bricks.plugins`；该插件包不包含 Interlace 的插件宿主或注册实现。
    爬虫流程信号位于 `bricks.signals`，由领域节点处理，不并入 Interlace 的执行控制异常。
    独立代理值、供应源、Clash 控制与按 Slot 装配的管理工具位于 `bricks.proxies`，不在顶层转导出。
@@ -104,6 +104,9 @@
    prepare 接受自身准备结果，实例不保存当前文档。自定义实现无需继承 BaseParser 即可使用公共 match。
 2. 解析器不依赖 Response、Items、Context 或 Runtime；输入、文档及其可变查询结果由调用方管理。
    BaseParser 仅提供可选的 extract_first 和 match 便捷方法，不建立注册表或动态字符串加载路径。
+   Response.get(expression, default) 对 json() 执行 JMESPath，结果为 None 时返回 default；Response.extract(engine, rules)
+   只接受 json、jsonpath、css、xpath、regex 固定引擎名，JSON 类读取 json()，其余读取 text，不接受动态加载路径。
+   css、xpath、jsonpath、re 及其 *_first 用同一来源规则执行单个表达式，*_first 仅对列表结果取首项，不缓存解析文档。
 3. CSS、XPath 使用有界编译缓存；HTML/XML 格式显式配置，XML 禁用 DTD 加载和实体展开。
    XML 在返回文档或查询前拒绝 DOCTYPE，现成元素按所属文档检查；含声明的 XML 字符串按 UTF-8 字节解析，
    标准实体与数字字符引用仍支持。CSS 输出节点、文本或属性必须明确选择，不自定义 ::text/::attr 语法；文本不自动去空白。
@@ -146,10 +149,11 @@
 
 ### 第六条：依赖与验证
 
-1. Interlace 使用显式、可复现的版本来源；Git 依赖固定完整提交 ID 并维护 `uv.lock`。
+1. Interlace 使用包索引发布的 `interlace-py` 并声明兼容的次版本范围，`uv.lock` 固定完整解析结果。
    PyPI/TestPyPI 上传前必须检查 wheel 的 METADATA 和 sdist 的 PKG-INFO，直接 URL 依赖明确阻止上传，不删除依赖绕过检查。
    正式发布先发布并验证 Interlace 的包索引版本，再更新依赖和锁文件；源码构建成功不代表可以上传。
-2. 正式依赖不得指向本地目录，不得通过隐式路径使测试通过；本地 Interlace 可编辑覆盖仅用于临时开发，测试与 CI 必须使用锁定的远端 Git 提交。
+2. 正式依赖不得指向本地目录或直接 URL，不得通过隐式路径使测试通过；本地 Interlace 可编辑覆盖仅用于临时开发，
+   测试与 CI 必须使用锁定的包索引版本。
 3. 核心变更先在 Interlace 验证和推送，再升级 Bricks 依赖并执行领域与跨包契约测试。
 
 ### 第七条：Pythonic 实现与中文注释
@@ -163,8 +167,10 @@
 
 ### 第八条：种子任务队列与分布式交付
 
-1. TaskQueue 是具名任务存储的窄协议；MemoryTaskQueue 与可选 RedisTaskQueue 提供相同的
-   put、claim、put_claim、renew、ack、retry、reject、get、counts、forget 和初始化租约操作；retry 返回 pending/dead。
+1. TaskQueue 是具名任务存储的窄协议；MemoryTaskQueue、SqliteTaskQueue 与可选 RedisTaskQueue 提供相同的
+   put、claim、put_claim、renew、ack、retry、reject、get、counts、forget、revive、revive_dead 和初始化租约操作；
+   retry 返回 pending/dead。revive 只把 dead 恢复为立即可领取的 pending，交付次数清零并清除错误与结果；
+   revive_dead 每次原子恢复有界数量，返回恢复数。
    QueueBackend 通过 Interlace 的公开 TaskBackend SPI 装配消费，并组合其公开内存后端管理线程及 Slot，
    不复制执行器或访问私有状态。Redis 通过 redis extra 安装，默认导入路径不加载 Redis 库。
 2. Work.id 是队列内的去重身份；入队内容和待领取索引必须原子写入。同 ID 同内容返回已存在，
@@ -191,8 +197,10 @@
 6. 初始化租约使用随机 token 与递增 fence；续租、进度写入、带租约入队与结束都校验当前有效凭据。
    接管保留 JSON 进度；成功初始化不重新申请，失败允许显式重新申请，新一轮业务使用新队列名称。
    进度提交与前一次入队不是跨调用事务，恢复时以稳定任务 ID 重放；初始化完成不代表消费完成。
-7. Redis 使用服务端时间和 Lua 原子迁移，同队列键使用同一 hash tag 以满足 Lua 多键同槽要求；仅支持同步 redis.Redis，
-   不支持 RedisCluster。MemoryTaskQueue 使用进程内锁与单调时间，不提供进程重启恢复。同名内存实例不共享数据；
+7. Redis 使用服务端时间和 Lua 原子迁移，同队列键使用同一 hash tag 以满足 Lua 多键同槽要求，死信使用独立有序集合索引；
+   仅支持同步 redis.Redis，不支持 RedisCluster。MemoryTaskQueue 使用进程内锁与单调时间，不提供进程重启恢复，
+   同名内存实例不共享数据。SqliteTaskQueue 使用标准库 sqlite3，每次操作独立连接并在 BEGIN IMMEDIATE 事务内迁移，
+   同机多进程共享同一文件并在重启后保留任务与断点；使用本机墙上时钟，拒绝内存数据库，不支持跨机器或网络文件系统。
    Redis 客户端与存储均由装配方管理。
 8. QueueBackend 每个绑定最多预取 concurrency 项并周期续租；交付结束会唤醒领取循环。Slot 分配及释放由 Interlace 管理。
    每次通过任务存储的根交付建立本地 Slot 链；submit_local 实现 Interlace 的可选本地发布 SPI，接管 Router
@@ -206,7 +214,7 @@
    可选 before_claim 同步门控返回 None 放行或非负秒数延后领取，延迟不能中断续租；
    before_execute 在已分配 Slot 的交付边界返回 None 继续 Graph，或返回显式 DeliveryResult 终结交付。
    有 Slot 时领取后 Hook 必须进入公开 SlotLease.execution 串行边界，不与同槽父 Graph 并发访问资源。
-9. MemoryTaskQueue 与 RedisTaskQueue 的 reserve(owner) 提供进入时领取的同步 with 上下文，
+9. 三种具体队列的 reserve(owner) 提供进入时领取的同步 with 上下文，
    hold(lease) 接管已领取凭据；TaskQueue 存储协议本身保持独立。无任务时 as 值为 None。
    每个队列实例的全部上下文共享一个惰性续租线程，按最早到期时间调度；最后一个占用退出时等待线程停止。
    同一实例不允许两个上下文同时管理同一 token，不建立全局线程或租约注册表；每个上下文只能进入一次。
@@ -243,6 +251,11 @@
    install(name, value, *, nx=False) 与 obtain(name, default=None) 只使用 Slot 内 Bricks 业务命名空间；同一 Slot
    在 Spider 生命周期内跨任务复用资源，不因物理线程变化失效，不同 Slot 互相隔离。
    Context 中的运行时对象不跨队列序列化，提交只接受 JSON 种子。
+   context.fetch(request) 与异步同义的 afetch 经 build_download_node() 的选择与当前 Slot 会话立即下载附加请求，
+   不经过请求插槽、代理插件或重试，非会话模式只使用 request.proxy；下载器同步异步类别不匹配时明确拒绝。
+   框架执行配置键统一使用 `crawler.` 前缀，不使用 `$` 前缀键。context.max_retry 按执行配置 crawler.retry.max、
+   form 段级 Download.max_retry、Spider max_retry 的顺序取重试上限；context.ok_rule 读取 crawler.response.ok，
+   form 另回退段级 Download.ok。重试耗尽一律进入 dead，不按成功丢弃。
 5. context.submit(*obj, affinity="current") 与初始化使用同一稳定 Work 构造规则，返回 Work 列表而不返回未来 Context。
    current 通过实例内本地 Event 交给 QueueBackend.put_claim，原子持久化并优先携带当前 SlotLease 执行；any 只 put
    到待领取队列，允许任意 Worker 领取。两者均持久化并按 Work.id 去重；显式 id 只用于单种子提交，配置从
@@ -319,7 +332,7 @@
    Redis 使用规范 JSON，string 身份由 row_keys 的 JSON 摘要生成。CSV 并发需调用方提供共享锁，
    CSV 追加和 Mongo 多文档写入不声称原子或自动幂等，Redis 事务不声称命令错误回滚。
 3. fake_ua 缺省展开请求头中的 @chrome、@edge、@mobile、@pc、@random/@get 预设，也接受显式同步工厂。
-   conditional_scripts 缺省读取 Context.options 的 `$scripts`；bypass 可从 `$ok` 读取动态检查。
+   conditional_scripts 缺省读取执行配置 crawler.response.scripts；bypass 未传 ok 时读取 context.ok_rule。
    scripts.is_success、turn_page 和 inject 的 match、pre、post、flow、action 支持可信 Python 字符串与同步
    callable 混合组合，并通过 Type/Generator 提供 define、choice、condition、code 步骤。
    脚本编译结果有界缓存，标准命名空间仅提供 context/ctx/request/response/items/seeds/signals/logger/time；
@@ -343,6 +356,21 @@
    插件模块可在新解释器中独立导入，不依赖蜘蛛包初始化顺序。
    插件必须有独立用例和 Air 组合验证，覆盖恢复位置、写入失败、不提前确认、Slot 隔离和重试资源保持。
 
+### 第十一条：配置式爬虫
+
+1. `bricks.spider.form.Spider` 继承 Air，以 Config(spider, init, events) 声明流程，复用 Air 消费图、队列、重试、插件与资源装配，
+   不另建执行图；旧 template 合并入 form，不保留 `$config` 轮换、`$signpost`/`$bookmark` 或 archive 标记。
+2. 每个 Download 开启一段，段内依次为下载后 Task、至多一个 Parse、解析后 Task 与按序执行的 Pipeline/Task；
+   首步必须为 Download，首段不得 each=True，非法顺序在打开时失败。Task 即 hooks.Task，Parse/Pipeline 函数遵循同一 Context 传入规则。
+   下载后 Task 在 AFTER_REQUEST 末尾执行并允许 Retry；Download 字符串中的 {name} 按种子渲染，整串占位符保留原类型，缺失字段报错。
+3. 每个 Work 只执行一段，段号保存在 Work.options 的 crawler.form.stage，不写入种子。AFTER_PIPELINE 开头经 context.submit
+   持久化下一段：each=False 沿用当前种子，each=True 对每条 Items 合并当前种子派发；Download.affinity 选择 current 或 any。
+   form.Context.submit 默认留在当前段；Success 结束当前种子不再推进。下一段在当前交付确认前持久化，中断后从未确认的段重放，
+   已持久化的段按稳定 Work ID 去重，段内副作用由业务幂等保证。
+4. Init 接受静态种子、种子列表或以 record 关键字接收恢复记录的同步函数；Layout 依次执行 default、show、factory、rename。
+   Download.max_retry 与 Download.ok 为段级重试上限与成功判断，执行配置同名键优先；ok 可为 callable，不随任务序列化。
+   form 必须有段推进、逐条派发、段内翻页、断点接管、段内 Retry、段级 ok/max_retry 与配置校验测试。
+
 ## 验证要求
 
 ```bash
@@ -361,5 +389,6 @@ Ruff、格式与 mypy 检查。只对有意为之的写法使用逐行 `noqa` �
 时间敏感测试使用带截止时间的轮询或事件同步，不依赖紧贴租约或超时的固定 sleep。
 文档变更还应检查本地链接、Markdown 围栏和发生变化的 Mermaid 图。
 队列分布式验证设置 `BRICKS_TEST_REDIS_URL` 指向专用测试 Redis 后运行队列测试；
-测试仅清理随机生成的独立前缀，禁止清空共享数据库。必须覆盖真实 Redis、竞争领取、旧租约写入拒绝与进程退出恢复。
+测试仅清理随机生成的独立前缀，禁止清空共享数据库。必须覆盖真实 Redis、竞争领取、旧租约写入拒绝与进程退出恢复；
+SQLite 队列与内存队列执行同一契约测试，并覆盖子进程退出后重新打开文件接管。
 Mongo 插件验证通过 `BRICKS_TEST_MONGO_URL` 指向专用实例，只删除测试创建的随机数据库；CI 装配专用 Redis 和 Mongo 服务。

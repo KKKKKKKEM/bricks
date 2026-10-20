@@ -12,7 +12,7 @@ from interlace import Event
 from interlace.engine import Slot
 from interlace.spi import Work
 
-from bricks import Items, Request, Response
+from bricks import AsyncDownloadNode, Items, Request, Response
 from bricks.proxies import Manager
 from bricks.queues import InitLease, TaskLease, TaskQueue
 from bricks.queues.models import LocalSubmission
@@ -26,6 +26,10 @@ _CURRENT_CONTEXT: ContextVar[CurrentContext | None] = ContextVar(
     "bricks.spider.current_context", default=None
 )  # 当前同步调用链或异步任务的领域 Context，不跨回调保留。
 _RESOURCES = "bricks.context.resources"  # Slot 内由业务按名称共享的资源映射。
+RETRY_OPTION = "crawler.retry.max"  # 执行配置中当前任务的下载重试上限，非负整数。
+OK_OPTION = (
+    "crawler.response.ok"  # 执行配置中当前任务的成功判断规则，语法同 bypass 的 ok。
+)
 Affinity = Literal["current", "any"]
 
 
@@ -510,6 +514,78 @@ class Context(CurrentContext, EngineContext):
             从零开始的重试次数，与实际下载 attempt 分开统计。
         """
         return self._task.retries
+
+    @property
+    def max_retry(self) -> int:
+        """取得当前任务的下载重试上限：执行配置 crawler.retry.max 优先，否则为 Spider 的 max_retry。
+
+        Returns:
+            首次下载之后允许的额外尝试次数。
+
+        Raises:
+            ValueError: 执行配置中的值不是非负整数。
+        """
+        value = self.options.get(RETRY_OPTION)
+        if value is None:
+            limit: int = self.target._max_retries
+            return limit
+        if type(value) is not int or value < 0:
+            raise ValueError(f"{RETRY_OPTION} must be a nonnegative integer")
+        return value
+
+    @property
+    def ok_rule(self) -> Any:
+        """取得当前任务的成功判断规则，读取执行配置 crawler.response.ok。
+
+        Returns:
+            字符串、映射或 callable 规则；未配置时为 None，bypass 使用默认状态码规则。
+        """
+        return self.options.get(OK_OPTION)
+
+    def fetch(self, request: Request) -> Response:
+        """用当前执行的下载器选择与 Slot 会话立即下载一个附加请求。
+
+        不经过请求插槽、代理注入、重试或 Items 流程；会话模式沿用当前 Slot 会话及其代理，
+        其他模式只使用 request.proxy。传输失败按下载器契约返回 status_code=-1 的响应。
+
+        Args:
+            request: 待下载的请求，调用方保留原对象。
+
+        Returns:
+            下载器返回的响应。
+
+        Raises:
+            TypeError: request 不是 Request，或 Spider 使用异步下载器（应调用 afetch）。
+            ExecutionControlError: 当前执行已取消或超时。
+        """
+        if not isinstance(request, Request):
+            raise TypeError("fetch requires a Request")
+        node = self.target.build_download_node()
+        if isinstance(node, AsyncDownloadNode):
+            raise TypeError("asynchronous downloaders require afetch")
+        response: Response = node.execute({"request": request}, self).value
+        return response
+
+    async def afetch(self, request: Request) -> Response:
+        """fetch 的异步版本，供使用异步下载器的 Spider 在异步回调中等待。
+
+        Args:
+            request: 待下载的请求，调用方保留原对象。
+
+        Returns:
+            下载器返回的响应。
+
+        Raises:
+            TypeError: request 不是 Request，或 Spider 使用同步下载器（应调用 fetch）。
+            ExecutionControlError: 当前执行已取消或超时。
+        """
+        if not isinstance(request, Request):
+            raise TypeError("afetch requires a Request")
+        node = self.target.build_download_node()
+        if not isinstance(node, AsyncDownloadNode):
+            raise TypeError("synchronous downloaders require fetch")
+        response: Response = (await node.execute({"request": request}, self)).value
+        return response
 
     def submit(
         self,

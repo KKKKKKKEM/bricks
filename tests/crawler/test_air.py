@@ -1816,3 +1816,79 @@ def test_auto_session_rejects_request_proxy_policies(options):
     with pytest.raises(ValueError, match="slot_session_reuse=False"):
         spider.open()
     spider.close()
+
+
+def test_context_fetch_reuses_current_slot_session_and_matches_downloader_kind(server):
+    """附加请求经当前 Slot 会话携带登录 Cookie；同步与异步入口各自拒绝不匹配的下载器。
+
+    Args:
+        server: 本地 HTTP 服务。
+    """
+    base, _, _ = server
+
+    class Login(SimpleSpider):
+        """登录后在解析中读取同一会话的附加页面。"""
+
+        def parse(self, context):
+            """用当前会话下载附加页面，并确认异步入口被拒绝。
+
+            Args:
+                context: 当前响应上下文。
+
+            Returns:
+                附加页面看到的 Cookie。
+            """
+            echo = context.fetch(Request(base + "/echo"))
+            with pytest.raises(TypeError, match="require fetch"):
+                context.afetch(Request(base + "/echo")).send(None)
+            return Items([{"cookie": echo.json()["cookie"]}])
+
+    spider = Login(downloader=CurlCffiDownloader(trust_env=False))
+    rows = spider.survey({"url": base + "/login/abc"}, extract=["items"])
+    assert rows[0]["items"].to_list() == [{"cookie": "account=abc"}]
+
+    class AsyncLogin(SimpleSpider):
+        """异步下载器只能使用 afetch。"""
+
+        async def parse(self, context):
+            """等待附加页面并确认同步入口被拒绝。
+
+            Args:
+                context: 当前响应上下文。
+
+            Returns:
+                附加页面路径。
+            """
+            with pytest.raises(TypeError, match="require afetch"):
+                context.fetch(Request(base + "/echo"))
+            echo = await context.afetch(Request(base + "/echo"))
+            return Items([{"path": echo.json()["path"]}])
+
+    spider = AsyncLogin(downloader=AsyncCurlCffiDownloader(trust_env=False))
+    rows = spider.survey({"url": base + "/echo"}, extract=["items"])
+    assert rows[0]["items"].to_list() == [{"path": "/echo"}]
+
+
+def test_task_options_override_retry_budget_and_success_rule():
+    """任务执行配置覆盖 Spider 的重试上限与默认成功规则，未覆盖的任务沿用默认值。"""
+    downloader = FakeDownloader()
+    queue = MemoryTaskQueue("options")
+    spider = SimpleSpider(
+        downloader=downloader, task_queue=queue, queue_name="options", max_retry=0
+    )
+    spider.submit(
+        {"url": "https://example.test/a/retry"}, options={"crawler.retry.max": 2}
+    )
+    spider.submit({"url": "https://example.test/b/retry"})
+    spider.submit(
+        {"url": "https://example.test/forbidden"},
+        options={"crawler.response.ok": "response.status_code == 403"},
+    )
+    with pytest.raises(Exception, match="retries exhausted"):
+        spider.run("spider", kwargs={"timeout": 5})
+    assert queue.counts() == {"pending": 0, "leased": 0, "acked": 2, "dead": 1}
+    assert {row["url"]: row["attempt"] for row in spider.stored} == {
+        "https://example.test/a/retry": 3,
+        "https://example.test/forbidden": 1,
+    }
+    assert downloader.attempts["https://example.test/b/retry"] == 1

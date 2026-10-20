@@ -7,14 +7,34 @@ import json
 from collections.abc import Iterable, Mapping
 from email.message import Message
 from http.cookiejar import Cookie, CookieJar
-from typing import Any
+from typing import Any, Literal
 
 from interlace.engine.errors import ExecutionControlError
 
+from ..parsers import (
+    BaseParser,
+    CssParser,
+    JmesPathParser,
+    JsonPathParser,
+    RegexParser,
+    XPathParser,
+)
+from ..parsers.rules import RuleSet
 from ._validation import duration, http_url
 from .cookies import Cookies
 from .headers import HeaderInput, Headers
 from .request import Request
+
+Engine = Literal["json", "jsonpath", "css", "xpath", "regex"]
+
+# 便捷提取使用的无状态解析器；JSON 类引擎读取 json()，其余读取 text。
+_ENGINES: dict[str, BaseParser] = {
+    "json": JmesPathParser(),
+    "jsonpath": JsonPathParser(),
+    "css": CssParser(),
+    "xpath": XPathParser(),
+    "regex": RegexParser(),
+}
 
 
 def _invalid_constant(value: str) -> Any:
@@ -304,6 +324,184 @@ class Response:
         """
 
         return 200 <= self.status_code < 400
+
+    def get(self, expression: str, default: Any = None) -> Any:
+        """对 json() 的解码结果执行 JMESPath 查询。
+
+        Args:
+            expression: JMESPath 表达式。
+            default: 查询结果为 None（字段缺失或值为 null）时返回的值。
+
+        Returns:
+            查询结果，结果为 None 时返回 default。
+
+        Raises:
+            UnicodeDecodeError: 内容无法按当前编码解码。
+            ValueError: 内容不是有效 JSON。
+            jmespath.exceptions.JMESPathError: 表达式不合法。
+        """
+
+        result = _ENGINES["json"].extract(self.json(), expression)
+        return default if result is None else result
+
+    def extract(self, engine: Engine, rules: RuleSet) -> list[dict[str, Any]]:
+        """用指定引擎按批量规则提取记录，等价于对应解析器的 match。
+
+        json 与 jsonpath 读取 json() 的解码结果，css、xpath 与 regex 读取 text；
+        需要 XML 格式、显式编码或自定义解析器时直接调用解析器的 match。
+
+        Args:
+            engine: json（JMESPath）、jsonpath、css、xpath 或 regex。
+            rules: 字段映射、Rows、Product 或规则序列，语法见 `bricks.parsers.match`。
+
+        Returns:
+            提取出的记录列表。
+
+        Raises:
+            ValueError: engine 不受支持，或内容无法按引擎解码。
+            UnicodeDecodeError: JSON 内容无法按当前编码解码。
+        """
+
+        if engine not in _ENGINES:
+            raise ValueError(f"unsupported extract engine: {engine!r}")
+        return _ENGINES[engine].match(self._source(engine), rules)
+
+    def css(self, expression: str, **options: Any) -> list[Any]:
+        """对 text 执行 CSS 选择，输出形式由 options 显式选择。
+
+        Args:
+            expression: CSS 选择器。
+            **options: 传给 CssParser.extract 的选项，例如 output="text" 或 attribute="href"。
+
+        Returns:
+            命中结果列表。
+        """
+        return self._first_or_all("css", expression, options)
+
+    def css_first(self, expression: str, default: Any = None, **options: Any) -> Any:
+        """取 css 结果的首项。
+
+        Args:
+            expression: CSS 选择器。
+            default: 没有命中时的返回值。
+            **options: 传给 CssParser.extract 的选项。
+
+        Returns:
+            首项或 default。
+        """
+        return self._first_or_all(
+            "css", expression, options, first=True, default=default
+        )
+
+    def xpath(self, expression: str, **options: Any) -> Any:
+        """对 text 执行 XPath，保留列表、文本、数字或布尔结果。
+
+        Args:
+            expression: XPath 表达式。
+            **options: 传给 XPathParser.extract 的选项，例如 variables。
+
+        Returns:
+            XPath 原始结果。
+        """
+        return self._first_or_all("xpath", expression, options)
+
+    def xpath_first(self, expression: str, default: Any = None, **options: Any) -> Any:
+        """取列表形式 XPath 结果的首项。
+
+        Args:
+            expression: 结果为列表的 XPath 表达式。
+            default: 没有命中时的返回值。
+            **options: 传给 XPathParser.extract 的选项。
+
+        Returns:
+            首项或 default。
+
+        Raises:
+            TypeError: 表达式结果不是列表，例如 count() 或 string()。
+        """
+        return self._first_or_all(
+            "xpath", expression, options, first=True, default=default
+        )
+
+    def jsonpath(self, expression: str) -> list[Any]:
+        """对 json() 的解码结果执行严格 JSONPath。
+
+        Args:
+            expression: JSONPath 表达式。
+
+        Returns:
+            命中值列表。
+        """
+        return self._first_or_all("jsonpath", expression, {})
+
+    def jsonpath_first(self, expression: str, default: Any = None) -> Any:
+        """取 jsonpath 结果的首项。
+
+        Args:
+            expression: JSONPath 表达式。
+            default: 没有命中时的返回值。
+
+        Returns:
+            首项或 default。
+        """
+        return self._first_or_all(
+            "jsonpath", expression, {}, first=True, default=default
+        )
+
+    def re(self, pattern: str, **options: Any) -> list[Any]:
+        """对 text 执行正则，默认返回完整匹配。
+
+        Args:
+            pattern: 正则表达式。
+            **options: 传给 RegexParser.extract 的选项，例如 group 或 flags。
+
+        Returns:
+            匹配结果列表。
+        """
+        return self._first_or_all("regex", pattern, options)
+
+    def re_first(self, pattern: str, default: Any = None, **options: Any) -> Any:
+        """取正则结果的首项。
+
+        Args:
+            pattern: 正则表达式。
+            default: 没有匹配时的返回值。
+            **options: 传给 RegexParser.extract 的选项。
+
+        Returns:
+            首项或 default。
+        """
+        return self._first_or_all(
+            "regex", pattern, options, first=True, default=default
+        )
+
+    def _source(self, engine: str) -> Any:
+        """按引擎选择解析输入：JSON 类读取 json()，其余读取 text。
+
+        Returns:
+            每次重新解码的输入。
+        """
+        return self.json() if engine in ("json", "jsonpath") else self.text
+
+    def _first_or_all(
+        self,
+        engine: str,
+        expression: str,
+        options: Mapping[str, Any],
+        *,
+        first: bool = False,
+        default: Any = None,
+    ) -> Any:
+        """用内置解析器执行单个表达式，按需取首项。
+
+        Returns:
+            原始结果，或列表首项及空列表时的 default。
+        """
+        parser = _ENGINES[engine]
+        source = self._source(engine)
+        if first:
+            return parser.extract_first(source, expression, default=default, **options)
+        return parser.extract(source, expression, **options)
 
     def copy(self, **changes: Any) -> Response:
         """复制响应，保留异常对象身份及原始异常链。

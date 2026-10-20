@@ -110,8 +110,8 @@ uv sync --locked --extra redis --extra mongo
 - `After.show_response` 保留 `handle`、`fmt`；默认记录响应摘要。`fmt=1` 仅列出请求头名称及请求体是否存在，
   不输出任何请求头值或请求体内容；代理认证、请求 URL 中的认证信息、查询参数值及片段均脱敏。
   方法、状态、字节数和脱敏后的 URL/代理仍可用于诊断。
-- `After.bypass(ok=...)`：默认及映射未命中均采用 2xx 接受、-1/429/5xx 有限重试、其他状态 Failure；字符串、映射或 callable 可覆盖，省略时读取 `$ok`。
-- `After.conditional_scripts(rules=None)`：按序执行全部命中动作；省略 rules 时读取 execution options 的 `$scripts`。
+- `After.bypass(ok=...)`：默认及映射未命中均采用 2xx 接受、-1/429/5xx 有限重试、其他状态 Failure；字符串、映射或 callable 可覆盖，省略时读取 `context.ok_rule`（执行配置 `crawler.response.ok`，form 另有段级 `Download.ok`）。
+- `After.conditional_scripts(rules=None)`：按序执行全部命中动作；省略 rules 时读取执行配置 `crawler.response.scripts`。
 - 动态脚本仅暴露 `context/ctx/request/response/items/seeds/signals/logger/time` 与调用方显式传入对象，不读取插件模块全局命名空间。
 - `scripts.is_success(match, pre=None, post=None, flow=None)`：参数顺序贴近 dev，失败缺省抛出 Retry。
 - `scripts.turn_page(..., success=False)`：只有匹配且确实提交下一页后，`success=True` 才提前结束当前任务；否则继续解析和 pipeline。

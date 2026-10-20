@@ -295,3 +295,59 @@ def test_cookie_mapping_domain_supports_local_hosts(url):
 
     cookies = Cookies({"a": "b"}, url=url)
     assert cookies.to_string(url=url) == "a=b"
+
+
+def test_get_queries_json_and_returns_default_for_missing_or_null():
+    """验证 get 对 JSON 执行 JMESPath，缺失与 null 都回退默认值，假值原样返回。"""
+
+    response = Response(b'{"code": 0, "data": {"list": [{"id": 1}]}, "none": null}')
+    assert response.get("code") == 0
+    assert response.get("data.list[0].id") == 1
+    assert response.get("missing", "d") == "d"
+    assert response.get("none", "d") == "d"
+
+
+def test_extract_selects_source_by_engine():
+    """验证 JSON 引擎读取解码值，标记与正则引擎读取按响应编码解码的文本。"""
+
+    from bricks.parsers import Rows
+
+    data = Response(b'{"list": [{"id": 1}, {"id": 2}]}')
+    assert data.extract("json", Rows("list", {"uid": "id"})) == [{"uid": 1}, {"uid": 2}]
+    assert data.extract("jsonpath", {"ids": "$.list[*].id"}) == [{"ids": [1, 2]}]
+    page = Response(
+        "<ul><li>甲</li><li>乙</li></ul>".encode("gbk"),
+        headers={"Content-Type": "text/html; charset=gbk"},
+    )
+    assert page.extract("xpath", Rows("//li", {"t": "string(.)"})) == [
+        {"t": "甲"},
+        {"t": "乙"},
+    ]
+    assert page.extract("regex", {"items": "<li>(.*?)</li>"}) == [
+        {"items": ["<li>甲</li>", "<li>乙</li>"]}
+    ]
+    with pytest.raises(ValueError, match="unsupported extract engine"):
+        data.extract("JSON", {})
+
+
+def test_single_expression_shortcuts_and_first_defaults():
+    """验证 css/xpath/jsonpath/re 返回全部结果，*_first 取首项且空结果回退 default。"""
+
+    page = Response(
+        b'<ul><li><a href="/1">one</a></li><li><a href="/2">two</a></li></ul>',
+        headers={"Content-Type": "text/html"},
+    )
+    assert page.css("a", attribute="href") == ["/1", "/2"]
+    assert page.css_first("a", output="text") == "one"
+    assert page.css_first("p", "none", output="text") == "none"
+    assert page.xpath("//a/text()") == ["one", "two"]
+    assert page.xpath("count(//li)") == 2.0
+    assert page.xpath_first("//a/@href") == "/1"
+    with pytest.raises(TypeError):
+        page.xpath_first("count(//li)")
+    assert page.re(r"/(\d)", group=1) == ["1", "2"]
+    assert page.re_first(r"/(\d)") == "/1"
+    assert page.re_first("missing", "d") == "d"
+    data = Response(b'{"list": [{"id": 1}, {"id": 2}]}')
+    assert data.jsonpath("$.list[*].id") == [1, 2]
+    assert data.jsonpath_first("$.missing", 0) == 0

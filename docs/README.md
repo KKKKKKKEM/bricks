@@ -17,6 +17,7 @@ Bricks 基于 Interlace 的公开 Graph API 构建爬虫领域组件。
 10. [代理管理](10-proxies.md)：固定/API/Redis/Clash 供应源、Slot 缓存、阈值、会话约束与资源生命周期。
 11. [从 dev 迁移](11-dev-migration.md)：旧插件与代理工具的新入口、调用方式和行为调整。
 12. [Hook 节点与 signals](12-hooks-and-signals.md)：显式阶段节点、信号路由、生命周期与领取边界。
+13. [配置式爬虫](13-form-spider.md)：以 Download 切分的步骤段、逐条派发、断点接管与旧 form/template 迁移。
 
 Graph、Event、Execution、Slot、Runtime 与插件协议的规范和教程由
 [Interlace 手册](https://github.com/KKKKKKKEM/interlace/blob/main/docs/README.md)维护。

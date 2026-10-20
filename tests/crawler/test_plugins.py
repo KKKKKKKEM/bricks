@@ -525,7 +525,7 @@ def test_dynamic_plugins_keep_dev_parameters_and_callable_flexibility():
                     },
                 )(),
                 options={
-                    "$scripts": {
+                    "crawler.response.scripts": {
                         "response.status_code == 200": (
                             "context.target.observed.append('options')"
                         )

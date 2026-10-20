@@ -90,6 +90,18 @@ class MemoryTaskQueue(_Queue):
         record["lease_seq"] = self._sequence
         heapq.heappush(self._active, (record["deadline"], self._sequence, task_id))
 
+    def _revive(self, record: dict[str, Any], task_id: str, now: float) -> None:
+        """把 dead 记录恢复为立即可领取，交付次数清零。
+
+        Args:
+            record: 内部任务记录。
+            task_id: 队列任务 ID。
+            now: 当前存储时间。
+        """
+        self._status(record, "pending")
+        record.update(attempt=0, error="", result=None)
+        self._index_ready(record, task_id, now)
+
     def _call(self, operation: str, **args: Any) -> Any:
         """在单一临界区迁移状态，并复制返回记录。
 
@@ -261,6 +273,20 @@ class MemoryTaskQueue(_Queue):
             self._counts[record["status"]] -= 1
             del self._records[args["id"]]
             return True
+        if op == "revive":
+            if record is None or record["status"] != "dead":
+                return False
+            self._revive(record, args["id"], now)
+            return True
+        if op == "revive_dead":
+            dead = [
+                task_id
+                for task_id, item in self._records.items()
+                if item["status"] == "dead"
+            ][: args["limit"]]
+            for task_id in dead:
+                self._revive(self._records[task_id], task_id, now)
+            return len(dead)
         if op in ("renew", "ack", "retry", "reject"):
             if not self._valid(record, args, now):
                 return {"failure": "lease"}
