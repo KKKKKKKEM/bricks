@@ -131,6 +131,7 @@ class MySpider(Spider):
 ```
 
 业务方法支持普通 def 与 async def；异步 make_seeds 应返回同步种子集合，不使用异步生成器。
+只有 make_seeds 可以写成生成器；parse 不能 yield，生成式写法用 `return Items(... for ...)`，后续请求用 `context.submit()`。
 同步方法由引擎的执行线程调用，Awaitable 交给引擎的异步运行器等待，不将全部同步业务放入异步循环。
 默认 item_pipeline 正常返回 None，不替应用持久化数据，实际爬虫应重写它。
 Request、Response、Items 和 TaskQueue 使用当前包的模型与协议，不按字符串动态加载函数或按名称注入任意参数。

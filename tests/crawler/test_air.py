@@ -2130,3 +2130,29 @@ def test_spider_settings_cannot_be_set_per_task():
         spider.submit(
             {"url": "https://example.test/"}, options={"spider.run.strict": True}
         )
+
+
+def test_generator_parse_is_rejected_with_rewrite_hint():
+    """parse 返回生成器时不隐式收集，按程序错误抛出并提示改写方式。"""
+    started = []
+
+    class Yielding(SimpleSpider):
+        """parse 误写为生成器函数。"""
+
+        def parse(self, context):
+            """以 yield 产出记录。
+
+            Args:
+                context: 当前响应上下文。
+
+            Yields:
+                单条记录。
+            """
+            started.append(True)
+            yield {"url": context.request.url}
+
+    spider = Yielding([{"url": "https://example.com/one"}], downloader=FakeDownloader())
+    with pytest.raises(ExecutionError, match=r"return Items\(\.\.\.\) or a list"):
+        spider.run(kwargs={"timeout": 5})
+    assert started == [] and spider.stored == []
+    assert spider.report().rejected == {}

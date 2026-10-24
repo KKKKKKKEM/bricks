@@ -396,6 +396,13 @@ class CrawlNode(Node):
                     raise TypeError("download node must return Output")
                 context.response = value.value
             elif self._stage == "parse":
+                if inspect.isgenerator(value):
+                    # 不隐式收集生成器，只给出明确的改写方式。
+                    value.close()
+                    raise TypeError(
+                        "parse returned a generator; return Items(...) or a list "
+                        "instead, and use context.submit() for follow-up requests"
+                    )
                 context.items = value
             elif value is not None:
                 raise TypeError(f"{self._stage} must return None")
