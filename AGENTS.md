@@ -36,7 +36,7 @@
    自定义任务后端经 `interlace.runtime.LocalInfrastructurePlugin(tasks=...)` 装配，不直接构造 Router 或 Worker。
 4. 新能力优先组合现有模型、普通函数、领域节点与窄协议，避免不必要的包装和全局注册表。
 5. curl_cffi 是默认传输和正式依赖；HTTPX、requests、wreq、primp、requests-go、playwright、camoufox
-   通过同名 extra 安装，默认导入路径不加载可选库。
+   通过同名 extra 安装，Spider.serve 依赖的 interlace-py[service] 通过 service extra 安装，默认导入路径不加载可选库。
    DownloadNode() / AsyncDownloadNode() 默认装配对应 curl_cffi 临时下载器；跨请求复用仍由调用方按 Slot 装配。
    wreq 仅支持 Python 3.11 以上，extra 使用环境标记；Bricks 的其他实现仍支持 Python 3.10。
 
@@ -58,6 +58,8 @@
    SlotPool 不负责关闭值中的资源；Air 自动装配的同步会话由 Spider 在执行停止后关闭，其他调用方装配的 Client
    仍由调用方关闭；异步 Client 在使用它的事件循环内关闭。
    会话代理、TLS 与重定向上限由 Client 构造配置，Request.proxy 在会话模式下明确拒绝。
+   `bricks.downloaders.proxy_sessions.ProxySessions` 组合同步会话工厂，在一个 Slot 内按 Request.proxy 懒建并复用
+   固定代理的独立会话，转发前清除请求代理；超过 max_sessions 时关闭最久未使用的会话，Cookie 按"Slot × 代理"隔离。
 9. 会话策略从 Context.options 的 crawler.session.reuse 读取，仅接受布尔值，默认 True。
    False 使用节点显式装配的 isolated_downloaders，同名选择规则保持一致；未装配则报配置错误。
    临时下载器每次 fetch 自行创建并关闭资源，不读取 Slot 会话；该分支无需 Slot。
@@ -214,6 +216,8 @@
    可选 before_claim 同步门控返回 None 放行或非负秒数延后领取，延迟不能中断续租；
    before_execute 在已分配 Slot 的交付边界返回 None 继续 Graph，或返回显式 DeliveryResult 终结交付。
    有 Slot 时领取后 Hook 必须进入公开 SlotLease.execution 串行边界，不与同槽父 Graph 并发访问资源。
+   可选 raise_dead(work, error) 只在结束决定已写入死信后调用，返回 False 的错误保留在死信记录中、不交给
+   wait_idle 与 close；租约丢失与存储错误不经此判定，判定函数自身失败替代原错误传播。
 9. 三种具体队列的 reserve(owner) 提供进入时领取的同步 with 上下文，
    hold(lease) 接管已领取凭据；TaskQueue 存储协议本身保持独立。无任务时 as 值为 None。
    每个队列实例的全部上下文共享一个惰性续租线程，按最早到期时间调度；最后一个占用退出时等待线程停止。
@@ -230,10 +234,11 @@
    concurrency 默认 1，forever 默认 False；poll_interval 暴露给 QueueBackend，默认 0.05 秒。
    下载器按 fetch 协议注入，queue_name 必须与已注入任务存储的 name 一致；proxy 接受固定地址、ProxyProvider 或 Manager，
    固定地址显式规范为 URL，供应源由实例装配成 Manager。未注入 slots、同步 downloader 实现 SessionDownloader 且未声明
-   slot_session_reuse=False 时，框架按 concurrency 创建长期 Slot、自动 prepare_session(proxy=...)、装配 DownloadNode
-   并在停止执行后 close_session；此模式拒绝含 auth、threshold 或 ttl 的所选代理，clear_proxy 不支持热切换会话代理。
-   同步浏览器、异步 Session 或自定义多资源 Slot 仍由调用方显式装配。
-2. 运行仅装配初始化和消费两张领域 Graph。公开 Spider API 与生命周期编排位于 `bricks.spider.air`，
+   slot_session_reuse=False 时，框架按 concurrency 创建长期 Slot，每个 Slot 装配 ProxySessions(max_sessions=session_proxies，
+   默认 4) 与 DownloadNode，在停止执行后关闭；托管代理的 auth、threshold、ttl 照常按请求生效，轮换地址即路由到对应会话。
+   同步浏览器、异步 Session 或自定义多资源 Slot 仍由调用方显式装配。plugins 接受 Interlace 插件并在打开时装入自有 Runtime，
+   不能再提供任务后端；指标等扩展经此装配，Spider 不内置统计方法。
+2. 运行装配初始化、消费与同步调用三张领域 Graph。公开 Spider API 与生命周期编排位于 `bricks.spider.air`，
    `_graphs` 负责图装配，`_initialization` 驱动初始化租约和断点，`_resources` 管理自有 Slot、会话、代理及运行时资源。
    业务 Hook 的每个插槽必须是独立 HookNode，节点按 index 执行该阶段回调快照，不通过 Interlace 节点中间件装配业务插槽。
    初始化逐项或逐批通过 make_seeds、next_seed、submit、checkpoint 推进，消费通过
@@ -252,10 +257,11 @@
    在 Spider 生命周期内跨任务复用资源，不因物理线程变化失效，不同 Slot 互相隔离。
    Context 中的运行时对象不跨队列序列化，提交只接受 JSON 种子。
    context.fetch(request) 与异步同义的 afetch 经 build_download_node() 的选择与当前 Slot 会话立即下载附加请求，
-   不经过请求插槽、代理插件或重试，非会话模式只使用 request.proxy；下载器同步异步类别不匹配时明确拒绝。
-   框架执行配置键统一使用 `crawler.` 前缀，不使用 `$` 前缀键。context.max_retry 按执行配置 crawler.retry.max、
-   form 段级 Download.max_retry、Spider max_retry 的顺序取重试上限；context.ok_rule 读取 crawler.response.ok，
-   form 另回退段级 Download.ok。重试耗尽一律进入 dead，不按成功丢弃。
+   不经过请求插槽、代理插件或重试，会话模式按 request.proxy 选择 Slot 内会话；下载器同步异步类别不匹配时明确拒绝。
+   框架执行配置键统一使用 `crawler.` 前缀，不使用 `$` 前缀键；`bricks.models.CrawlerOptions` 一次解析并校验全部
+   crawler.* 键，未知键在构造 Work 与节点读取时明确报错，to_options() 只生成非默认键。context.max_retry 按执行配置
+   crawler.retry.max、form 段级 Download.max_retry、Spider max_retry 的顺序取重试上限；context.ok_rule 读取
+   crawler.response.ok，form 另回退段级 Download.ok。重试耗尽一律进入 dead，不按成功丢弃。
 5. context.submit(*obj, affinity="current") 与初始化使用同一稳定 Work 构造规则，返回 Work 列表而不返回未来 Context。
    current 通过实例内本地 Event 交给 QueueBackend.put_claim，原子持久化并优先携带当前 SlotLease 执行；any 只 put
    到待领取队列，允许任意 Worker 领取。两者均持久化并按 Work.id 去重；显式 id 只用于单种子提交，配置从
@@ -290,10 +296,13 @@
 9. run(task_name="all", args=None, kwargs=None) 分派 all/init/spider 并在结束时关闭资源。
    run_init、run_spider 可在 with Spider(...) 中分开运行；forever=True 时消费者保持服务直到外部关闭。
    初始化调用线程等待 Execution 时定期续租，不为每条种子新增线程。失败记录与检查点受初始化 token/fence 保护。
-   初始化失败仍允许已提交种子排空，原始失败继续传播；run 在已接受任务排空后仍报告任务失败，单项 Failure 也会使 run 抛错。
+   初始化失败仍允许已提交种子排空，原始失败继续传播；run 在已接受任务排空后仍报告任务失败。
+   strict 默认 True，单项 Failure 或重试耗尽也会使 run 抛错；strict=False 只把这两类业务拒绝写入死信并记入
+   RunReport.rejections（本进程最近 20 条），程序错误、存储错误与初始化失败仍然抛出。
 10. Spider 关闭自建 Runtime、QueueBackend、SlotPool 及框架自动创建的同步下载会话；注入的 Slot 资源、
     显式会话与 Redis 客户端由调用方在停止执行后关闭。关闭协作式取消初始化并排空已接受的消费，
-    不强杀同步函数；禁止在自身业务或插件回调中重入阻塞生命周期方法。RunReport 返回队列快照，不替代跨进程错误收集。
+    不强杀同步函数；禁止在自身业务或插件回调中重入阻塞生命周期方法。RunReport 返回队列快照与本进程业务拒绝摘要，
+    不替代跨进程错误收集。
     Spider 记录自建 Slot，并在执行停止后归还其中的托管代理；借用 Slot 内的代理由调用方归还。
     关闭先停止 QueueBackend 领取并排空本地交付，再等待运行入口退出；等待使用完整超时预算，
     不以捕获通用 TimeoutError 的短轮询方式吞掉存储或非图 Hook 的真实超时。
@@ -307,14 +316,21 @@
 12. BEFORE_PUT_SEEDS、AFTER_PUT_SEEDS 是初始化图中的真实节点，只覆盖初始化迭代批次；
     AFTER_PUT_SEEDS 之后才提交恢复记录，失败时按稳定 Work ID 重放。Skip 表示有意跳过当前批次，
     仍执行 after 插槽和进度提交；普通 context.submit 不伪装成初始化投放。
-13. build_init_graph 独立装配生产流程；build_crawl_plan 从同一消费定义选择正式 pipeline 或 survey_pipeline，
-    声明完整出口并保留前后 Hook 和重试回路。build_graphs 使用公开 Graph.compose 装配所选节点和边，
-    队列消费继续通过正常 Work/Slot/ACK 契约执行，不复制执行器或把 Plan 写入 JSON 任务信封。
+13. build_init_graph 独立装配生产流程；build_crawl_plan 从同一消费定义选择正式 pipeline、survey_pipeline 或
+    同步调用分支，声明完整出口并保留前后 Hook 和重试回路。build_graphs 与 build_call_graph 使用公开 Graph.compose
+    装配所选节点和边，队列消费继续通过正常 Work/Slot/ACK 契约执行，不复制执行器或把 Plan 写入 JSON 任务信封。
 14. survey(*seeds, extract=None, timeout=None) 是新实例的手动消费入口，要求 forever=False，结束后关闭。
     跳过 make_seeds 和默认 item_pipeline，保留下载、重试、解析、前后插件与动态种子提交及消费。
     默认实例使用独立内存队列；显式装配队列时也消费原有任务，不宣称只消费本次传入的种子或没有副作用。
     完成节点收集 Context，按完成顺序返回，可提取指定属性；提前 Success 尚未产生的 request/response/items 提取为 None。
     后置插件失败不确认任务；Context 仅供读取完成结果，不作为可继续执行或持有活跃会话的句柄。
+15. 打开时注册 `<queue_name>.call` 同步调用图：跳过默认 item_pipeline，保留下载、重试、解析与前后插件，完成节点输出
+    seeds、request（method/url）、response（status_code/url/text）、items、attempts 与 retries 的 JSON；提前 Success
+    尚未产生的部分为 None。call(seed, options=None) 经 Runtime.start(slots=...) 在本实例 SlotPool 内执行，复用 Slot
+    会话；调用没有根 Work，不 ACK、不写死信，失败原样抛出。调用中 current 亲和的 submit/emit 明确拒绝，any 照常持久化。
+    serve() 在同一 Runtime 上以 Interlace GraphService 提供 HTTP/JSON-RPC 与可选 /metrics，传入本实例 SlotPool，
+    服务期间运行队列消费者，服务器退出后关闭实例。远程 options 仅接受 allowed_options，默认 crawler.retry.max 与
+    crawler.fingerprint.impersonate；crawler.response.ok/scripts 执行可信 Python，不得默认开放给远程请求。
 
 ### 第十条：可复用领域插件与代理管理
 
@@ -345,7 +361,7 @@
    Redis、Mongo 或 YAML，可选依赖分别通过 redis、mongo 和 clash extra 安装，缺少 YAML 时给出安装提示。
 5. Manager 不创建全局注册表、单例或线程局部状态，get/now/use/recover/clear/fresh 明确接收 Slot。
    不同管理器在同一 Slot 使用不同命名空间；阈值按新请求次数与明确 ttl 秒数计算，use 只登记，
-   下一次 get 才回收。Air 自动会话拒绝带 auth、threshold 或 ttl 的代理；请求级轮换须关闭 Slot 会话复用。
+   下一次 get 才回收。Air 自动会话按请求代理路由到 Slot 内对应会话，auth、threshold 与 ttl 照常生效。
    Air 已选 Request.proxy 在重试中保留，不自动更换会话或代理。context.clear_proxy 显式丢弃请求代理并清除地址。
    供应源无可用代理时报错，不静默直连；程序错误、取消、认证和回收失败不转换为空代理。
 6. 会话代理仍在 prepare_session 时固定，托管请求代理不热切现有会话。Clash 控制器是共享出口，
@@ -355,6 +371,10 @@
    Context.get_context() 仅为当前回调的 ContextVar 视图，不改变 Graph 数据传递和资源所有权；共享内部状态通过具名内部模块导入，
    插件模块可在新解释器中独立导入，不依赖蜘蛛包初始化顺序。
    插件必须有独立用例和 Air 组合验证，覆盖恢复位置、写入失败、不提前确认、Slot 隔离和重试资源保持。
+8. `plugins.metrics.crawler_metrics` 是不提供 capability 的 Interlace 插件，只订阅 NODE_INSPECT 并经 METRIC 通知
+   crawler.requests{status}、crawler.download.seconds、crawler.retries、crawler.items、crawler.seeds.completed、
+   crawler.seeds.rejected{stage} 与 crawler.seeds.submitted{source}；current/any/init 派生由 submit 经 Context.hooks 记录。
+   插件不改变节点、请求或交付结果，聚合与导出由 interlace.metrics.Metrics 等 METRIC 处理函数负责，标签只含有界分类。
 
 ### 第十一条：配置式爬虫
 

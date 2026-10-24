@@ -12,7 +12,7 @@ provider = ApiProxy(
     "https://proxy-provider.example/api",
     handle_response=lambda response: response.json()["addresses"],
 )
-spider = MySpider(proxy=provider, slot_session_reuse=False)
+spider = MySpider(proxy=provider)
 spider.run()
 ```
 
@@ -20,9 +20,9 @@ spider.run()
 缓存保存在当前 Slot。`Request.proxy` 的显式地址优先；已选地址在同一请求重试时保留。
 `threshold` 是允许的新请求次数，`ttl` 是最大占用秒数，两者都可以为 None。
 达到阈值不会中断正在重试的请求，下一次获取代理时才轮换。
-Air 自动会话在创建时固定代理；该模式拒绝带 `auth`、`threshold` 或 `ttl` 的代理值。需要按请求轮换时，
-设置 `slot_session_reuse=False` 使用独立请求下载器。业务明确判定代理失效时，可在 `on_retry(context)` 中
-调用 `context.clear_proxy()`；默认重试不会调用它。此方法不关闭或热切调用方装配的固定代理会话。
+Air 自动会话模式按 `Request.proxy` 把请求路由到当前 Slot 内对应地址的会话（见 `ProxySessions`），
+托管代理按请求轮换，`auth`、`threshold` 与 `ttl` 照常生效。业务明确判定代理失效时，可在 `on_retry(context)` 中
+调用 `context.clear_proxy()`：它丢弃请求代理与管理器选择，下一次请求取得新地址及对应会话；默认重试不会调用它。
 
 | 供应源 | 行为 |
 | --- | --- |
@@ -61,7 +61,7 @@ Redis 代理供应源使用弹出/归还语义，不是任务队列租约，进�
 
 ## 与会话配合
 
-代理管理工具不会热切已有 HTTP 或浏览器会话的代理。会话仍在创建时固定地址：
+单个会话仍在 prepare_session 时固定地址，代理管理工具不会修改已有 HTTP 或浏览器会话的代理：
 
 ```python
 from bricks.downloaders.curl_cffi import CurlCffiDownloader
@@ -72,10 +72,11 @@ session = factory.prepare_session(proxy=proxy.proxy)
 slot["crawler.downloaders"] = {"default": session}
 ```
 
-Air 使用自建 Slot 和同步 SessionDownloader 时会自动完成取得代理、创建会话、运行、关闭会话、归还代理，
-请求代理插件不会再给固定会话设置 Request.proxy。直接使用 [Slot 会话下载节点](03-crawler-download.md)、
+Air 使用自建 Slot 和同步 SessionDownloader 时，每个 Slot 装配一个
+[`ProxySessions`](03-crawler-download.md#按代理分会话)：按请求代理惰性创建会话，转发前清除 Request.proxy，
+超过 `session_proxies` 时关闭最久未用的会话，执行停止后关闭全部会话并归还代理。Cookie 按“Slot × 代理”隔离，
+更换代理即使用另一会话，Cookie 不迁移。直接使用 [Slot 会话下载节点](03-crawler-download.md)、
 异步 Session 或注入自定义 SlotPool 时，调用方仍按上述顺序显式管理。
-更换代理应在原会话不再使用后明确重建，Cookie 是否迁移由业务决定。
 
 ## Clash 控制与订阅
 

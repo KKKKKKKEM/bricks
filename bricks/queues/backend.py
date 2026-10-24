@@ -59,6 +59,7 @@ class _Binding:
         _claim_lock: 串行化领取操作与交付结束标记。
         _before_claim: 领取前同步门控，返回延迟秒数时暂缓领取，None 放行。
         _before_execute: 获得 Slot 后、执行 Graph 前的同步交付决策。
+        _raise_dead: 判断已写入死信的交付错误是否交给等待方，None 全部交给等待方。
     """
 
     def __init__(
@@ -72,6 +73,7 @@ class _Binding:
         before_claim: Callable[[TaskQueue], float | None] | None = None,
         before_execute: Callable[[TaskLease, Delivery], DeliveryResult | None]
         | None = None,
+        raise_dead: Callable[[Work, BaseException], bool] | None = None,
     ) -> None:
         """装配本地执行器，不复制引擎或 Slot 调度逻辑。
 
@@ -84,6 +86,7 @@ class _Binding:
             interval: 轮询间隔秒数。
             before_claim: 可选领取前门控，不执行异步回调。
             before_execute: 可选交付前决策，在本地执行线程运行，续租继续。
+            raise_dead: 可选死信错误判定，返回 False 时只保留存储中的死信记录。
         """
         self.queue = queue
         self.local = LocalBackend(max_delivery_attempts=1)
@@ -108,6 +111,7 @@ class _Binding:
         self._retired = False
         self._before_claim = before_claim
         self._before_execute = before_execute
+        self._raise_dead = raise_dead
         self._unbind = self.local.bind(
             queue.name, self._handle, concurrency=concurrency, slots=slots
         )
@@ -129,6 +133,7 @@ class _Binding:
 
         failure: BaseException | None = None
         error_text = ""
+        dead = False  # 本次结束决定已成功写入死信。
         try:
             current = Delivery(
                 delivery.work, lease.attempt, slot_lease=delivery.slot_lease
@@ -180,6 +185,7 @@ class _Binding:
                     ),
                 )
                 if status == "dead":
+                    dead = True
                     failure = (
                         failure
                         or result.error
@@ -195,10 +201,18 @@ class _Binding:
                         else f"{type(result.error).__name__}: {result.error}"
                     ),
                 )
+                dead = True
                 failure = result.error
         except BaseException as exc:
             failure = failure or exc
         finally:
+            if dead and failure is not None and self._raise_dead is not None:
+                # 判定函数自身失败时以其异常替代，原错误经 __context__ 保留。
+                try:
+                    if not self._raise_dead(delivery.work, failure):
+                        failure = None
+                except BaseException as exc:
+                    failure = exc
             with self.lock:
                 if failure is not None:
                     self.errors.append(failure)
@@ -495,6 +509,7 @@ class QueueBackend:
         _local_cursor: 相同通道多个 binding 之间的本地延续轮询位置。
         _before_claim: 可选领域领取前门控。
         _before_execute: 可选已领取交付的前置决策。
+        _raise_dead: 可选死信错误判定，返回 False 的错误不交给 wait_idle 与 close。
     """
 
     def __init__(
@@ -506,6 +521,7 @@ class QueueBackend:
         before_claim: Callable[[TaskQueue], float | None] | None = None,
         before_execute: Callable[[TaskLease, Delivery], DeliveryResult | None]
         | None = None,
+        raise_dead: Callable[[Work, BaseException], bool] | None = None,
     ) -> None:
         """装配明确的命名队列，不创建隐藏的默认队列。
 
@@ -515,6 +531,8 @@ class QueueBackend:
             poll_interval: 空轮询间隔秒数，默认 0.05。
             before_claim: 同步函数返回 None 放行，非负秒数推迟下一次领取。
             before_execute: 在本地 Slot 已分配后调用，None 进入 Graph，否则使用明确交付结果。
+            raise_dead: 交付错误已写入死信后调用；返回 False 时该错误只保留在存储的死信记录中，
+                不交给 wait_idle 与 close。租约丢失和存储错误不经此判定，None 全部传播。
 
         Raises:
             ValueError: 配置非法或通道名称不匹配。
@@ -531,7 +549,7 @@ class QueueBackend:
         self._close_lock = RLock()
         self._errors: deque[BaseException] = deque()
         self._local_cursor = 0
-        for callback in (before_claim, before_execute):
+        for callback in (before_claim, before_execute, raise_dead):
             if callback is not None and (
                 not callable(callback)
                 or inspect.iscoroutinefunction(callback)
@@ -540,6 +558,7 @@ class QueueBackend:
                 raise TypeError("queue callbacks must be synchronous callables")
         self._before_claim = before_claim
         self._before_execute = before_execute
+        self._raise_dead = raise_dead
 
     def _queue(self, name: str) -> TaskQueue:
         """在持锁入口校验生命周期与队列名。
@@ -653,6 +672,7 @@ class QueueBackend:
                 self._interval,
                 self._before_claim,
                 self._before_execute,
+                self._raise_dead,
             )
             try:
                 binding.thread.start()

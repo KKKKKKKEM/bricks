@@ -21,7 +21,7 @@ classifiers = [
 ]
 requires-python = ">=3.10,<3.14"
 dependencies = [
-    "interlace-py>=0.2.0,<0.3",
+    "interlace-py>=0.3.0,<0.4",
     "urllib3>=2,<3",
     "curl-cffi>=0.16.3,<0.17",
     "lxml>=6,<7",
@@ -42,6 +42,7 @@ wreq = ["wreq>=0.12.1,<0.13; python_version >= '3.11'"]
 primp = ["primp==2.0.0"]
 playwright = ["playwright==1.62.0"]
 camoufox = ["camoufox==0.5.6", "playwright==1.62.0"]
+service = ["interlace-py[service]>=0.3.0,<0.4"]
 
 [dependency-groups]
 dev = [
@@ -59,6 +60,7 @@ dev = [
     "requests-go==1.0.9",
     "wreq>=0.12.1,<0.13; python_version >= '3.11'",
     "primp==2.0.0",
+    "interlace-py[service]>=0.3.0,<0.4",
 ]
 
 browser = [

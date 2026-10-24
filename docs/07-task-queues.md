@@ -216,6 +216,10 @@ Interlace 当前 GraphWorker 对普通执行失败返回 REJECT，因此并不�
 处理器的取消和 Interlace 执行控制异常先按任务次数限制重投，再向等待方传播；其他处理器异常按 REJECT 规则进入死信。
 非法返回值及存储写回失败会向等待方传播，不因本地执行结束而谎报存储已经确认。
 
+可选参数 `raise_dead: Callable[[Work, BaseException], bool] | None` 在死信决定写入之后才调用；
+返回 False 时错误只保留在存储的 dead 记录中，不经 wait_idle/close 向等待方传播。租约丢失与存储错误不经此判定，
+判定函数自身失败会替代原错误传播。Air 的 `strict=False` 即基于此把业务拒绝转为 RunReport 摘要。
+
 每次经过任务存储的交付都建立新的本地 Slot 链，包括使用 MemoryTaskQueue 时。
 QueueBackend 实现 Interlace 的 `LocalTaskPublisher.submit_local`：本地 Router 已为分支 retain SlotLease，
 backend 通过 `put_claim` 原子完成同内容去重、持久化和指定任务领取，并将领取返回的 Work 快照交给本地调度器，
@@ -254,5 +258,9 @@ BRICKS_TEST_REDIS_URL=redis://127.0.0.1:6379/0 uv run --locked pytest tests/craw
 以及 Worker 进程退出后的恢复；SQLite 另验证子进程领取后退出、重新打开文件接管。
 with 契约还验证共享线程数量、长任务占用、延后确认、异常释放、过期凭据拒绝和单项续租失败隔离。
 未配置地址时跳过 Redis 用例，内存与 SQLite 契约仍执行。
+
+参考数据（扇出基准：200 个父任务各提交 5 个子任务，假下载器，concurrency=4）：MemoryTaskQueue 约 370–383 种子/秒，
+dev LocalQueue 约 178–205；SQLite 约 121–167，dev 约 116–160。`affinity="current"` 不慢于 `"any"`。
+结果随机器与负载变化，仅用于数量级比较。
 
 [返回目录](README.md)

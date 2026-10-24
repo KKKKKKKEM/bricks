@@ -10,6 +10,7 @@ from interlace.runtime import LocalInfrastructurePlugin
 from interlace.spi import SlotProvider
 
 from bricks.downloaders import SessionDownloader
+from bricks.downloaders.proxy_sessions import ProxySessions
 from bricks.proxies import Manager
 from bricks.queues import QueueBackend
 
@@ -54,7 +55,7 @@ def close_preserving(spider: Any, primary: BaseException | None) -> None:
 
 
 def close_owned_sessions(spider: Any) -> list[BaseException]:
-    """逆序关闭框架创建的同步下载会话。
+    """逆序关闭框架为各 Slot 创建的代理会话路由及其会话。
 
     Args:
         spider: Air Spider 实例。
@@ -64,9 +65,9 @@ def close_owned_sessions(spider: Any) -> list[BaseException]:
     """
     failures: list[BaseException] = []
     while spider._owned_sessions:
-        factory, session = spider._owned_sessions.pop()
+        sessions = spider._owned_sessions.pop()
         try:
-            factory.close_session(session)
+            sessions.close()
         except BaseException as error:
             failures.append(error)
     return failures
@@ -97,13 +98,14 @@ def release_slot_resources(spider: Any) -> list[BaseException]:
     return failures
 
 
-def open_resources(spider: Any, initial: Graph, crawl: Graph) -> None:
+def open_resources(spider: Any, initial: Graph, crawl: Graph, call: Graph) -> None:
     """构造并注册 Runtime 及其自有消费资源，失败时统一回滚。
 
     Args:
         spider: Air Spider 实例。
         initial: 已构造的初始化图。
         crawl: 已构造的消费图。
+        call: 已构造的同步调用图。
 
     Raises:
         BaseException: 装配失败，原异常继续传播，清理错误作为 cause。
@@ -113,26 +115,16 @@ def open_resources(spider: Any, initial: Graph, crawl: Graph) -> None:
     runtime: Runtime | None = None
 
     def make_slot() -> Slot:
-        """创建自建槽并按需自动装配同步下载会话。"""
+        """创建自建槽，并按需装配按请求代理路由的同步会话。"""
         slot = Slot()
         spider._owned_proxy_slots.append(slot)
         if spider._auto_session:
-            factory = cast(SessionDownloader[Any], spider.downloader)
-            proxy = (
-                spider.proxy.get(slot) if isinstance(spider.proxy, Manager) else None
+            sessions = ProxySessions(
+                cast(SessionDownloader[Any], spider.downloader),
+                max_sessions=spider._session_proxies,
             )
-            address = proxy.proxy if proxy is not None else spider.proxy
-            if proxy is not None and any(
-                value is not None for value in (proxy.auth, proxy.threshold, proxy.ttl)
-            ):
-                raise ValueError(
-                    "automatic session proxy cannot use auth, threshold or ttl; "
-                    "set slot_session_reuse=False"
-                )
-            session = factory.prepare_session(proxy=cast(str | None, address))
-            slot["crawler.downloaders"] = {"default": session}
-            slot["crawler.session.proxy"] = cast(str | None, address)
-            spider._owned_sessions.append((factory, session))
+            slot["crawler.downloaders"] = {"default": sessions}
+            spider._owned_sessions.append(sessions)
         return slot
 
     try:
@@ -144,10 +136,14 @@ def open_resources(spider: Any, initial: Graph, crawl: Graph) -> None:
             poll_interval=spider._poll_interval,
             before_claim=spider._before_claim,
             before_execute=spider._after_claim,
+            raise_dead=spider._raise_dead,
         )
-        runtime = Runtime(plugins=[LocalInfrastructurePlugin(tasks=backend)])
+        runtime = Runtime(
+            plugins=[LocalInfrastructurePlugin(tasks=backend), *spider._plugins]
+        )
         runtime.register(spider.init_graph_name, initial)
         runtime.register(spider.crawl_graph_name, crawl)
+        runtime.register(spider.call_graph_name, call)
         runtime.route(
             spider.local_submission_event_name,
             graph=spider.crawl_graph_name,

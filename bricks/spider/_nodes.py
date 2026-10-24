@@ -260,6 +260,7 @@ class CrawlNode(Node):
         _callback: 业务方法或 None。
         _download: 已装配的领域下载节点。
         _retry_delay: 默认重试等待秒数。
+        _summarize: 完成阶段替代默认摘要的同步函数，None 输出 items/attempts/retries 计数。
     """
 
     inputs = {"task": _Task}  # 同一执行的数据载体。
@@ -272,6 +273,7 @@ class CrawlNode(Node):
         *,
         download: DownloadNode | AsyncDownloadNode | None = None,
         retry_delay: float = 0,
+        summarize: Callable[[Any], dict[str, Any]] | None = None,
     ) -> None:
         """固定业务操作、资源与输出类型。
 
@@ -281,9 +283,11 @@ class CrawlNode(Node):
             callback: 显式接收 Context 的方法。
             download: 借用下载节点。
             retry_delay: 默认等待秒数。
+            summarize: 完成阶段从 Context 生成 summary 端口值的函数。
         """
         self._owner, self._stage, self._callback = owner, stage, callback
         self._download, self._retry_delay = download, retry_delay
+        self._summarize = summarize
         ports: dict[str, type[Any]] = {"task": _Task, "complete": _Task}
         if stage == "download":
             ports["retry"] = _Task
@@ -328,6 +332,8 @@ class CrawlNode(Node):
                         raise TypeError(
                             "completion collector must return None synchronously"
                         )
+                if self._summarize is not None:
+                    return self._summarize(current)
                 return {
                     "items": 0 if task.items is None else len(task.items),
                     "attempts": task.attempt,

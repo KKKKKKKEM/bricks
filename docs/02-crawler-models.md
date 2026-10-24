@@ -194,4 +194,27 @@ records = result.to_list()
 去重支持嵌套列表和字典；不可哈希值使用逐项比较，大集合优先指定 URL 等可哈希字段。
 可哈希性不改变相等语义，例如相等的 set 和 frozenset 字段也会合并，并保留首次出现的记录。
 
+## 执行配置 CrawlerOptions
+
+`bricks.models.CrawlerOptions` 是 `crawler.*` 执行配置的冻结数据类，字段与默认值如下：
+
+| 字段 | 配置键与默认值 |
+| --- | --- |
+| session_reuse | `crawler.session.reuse`，默认 True |
+| impersonate | `crawler.fingerprint.impersonate`，默认 None |
+| retry_max | `crawler.retry.max`，默认 None |
+| response_ok | `crawler.response.ok`，字符串或 `Mapping[str, str]`，默认 None |
+| response_scripts | `crawler.response.scripts`，`Mapping[str, str]`，默认空 |
+| form_stage | `crawler.form.stage`，form 当前段序号，非负整数，默认 0 |
+
+```python
+from bricks.models import CrawlerOptions
+
+parsed = CrawlerOptions.parse({"crawler.retry.max": 3, "my.key": 1})
+options = {**CrawlerOptions(retry_max=3).to_options(), "my.key": 1}
+```
+
+`parse(options)` 校验全部 `crawler.*` 键，未知的 `crawler.*` 键抛出 ValueError，其他业务键不受影响；
+`to_options()` 只返回非默认键，可直接与业务键合并后传给 Spider 或 Runtime。
+
 [上一章：架构与依赖](01-architecture.md) · [文档目录](README.md) · [下一章：爬虫下载](03-crawler-download.md)

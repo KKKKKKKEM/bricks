@@ -33,10 +33,13 @@
 | `BEFORE_PIPELINE` 中的 Skip | 跳过 pipeline，仍执行 AFTER_PIPELINE；其他 before 阶段按明确替代数据规则处理 |
 | 启停、领取和错误插槽 | 以 HookContext 在真实边界同步执行；物理线程启停和 ON_* 状态标记不作为 Air 插槽 |
 | `bricks.lib.proxies.*` | `bricks.proxies`；固定/API/Redis/Clash 供应源和 Manager 已迁入 |
-| `context.clear_proxy()` | 普通 Slot 显式丢弃请求代理；自动会话模式拒绝热切固定会话代理 |
+| `context.clear_proxy()` | 显式丢弃请求代理与管理器选择；自动会话模式下下一次请求取得新地址并路由到对应会话 |
 | 代理 `ref` 字符串配置 | 直接构造供应源对象并传给 Spider 或 Manager |
 | Clash 构造时改全局模式 | 改为显式 configure；拒绝占用期间切换共享出口 |
 | Clash 订阅工具 | 独立 extract_nodes/fetch_subscription/cfg_tpl/subscribe，解析与联网分开 |
+| 爬虫 `Rpc`、`$futureType` | `spider.call(seed)` 进程内同步调用，`spider.serve(...)` 提供 HTTP/JSON-RPC 服务（`service` extra）；返回字典形状与 dev 不同，见[同步调用与 RPC 服务](08-air-spider.md#同步调用与-rpc-服务) |
+| 统计计数器 | 安装 `interlace.metrics.Metrics` 与 `bricks.plugins.metrics.crawler_metrics` 插件，见[指标插件](09-domain-plugins.md#指标插件) |
+| `disable_statistics` | 删除；不安装指标插件即不采集 |
 
 ## 执行与可靠性调整
 
@@ -52,6 +55,7 @@ Context.success/failure/retry、ResponseAction 和 action/stop 标志已移除�
 
 `on_retry(context)` 可能运行在首次下载之前，因此 `context.response` 并非始终可用。
 有界重试耗尽会让 `run()` 在已接受任务排空后抛出失败；单个 Failure（例如 404）也会使本次运行失败。
+构造 `strict=False` 时两者仍进入死信，但只记入 `RunReport.rejections`，不抛出。
 `survey(extract=...)` 对提前 Success 尚未产生的 request、response 或 items 返回 None。
 
 初始化断点不是消费图每个步骤的持久快照。种子读取的稳定排序、Mongo 业务唯一索引、外部写入幂等、
@@ -62,8 +66,9 @@ SQLite 原生连接有线程亲和性，源迭代器若交给 Air，应由调用
 
 ## 当前范围
 
-本轮完成的是 Air、配置式 form（合并旧 template）、SQLite 任务队列、死信恢复、旧领域插件和代理管理工具的迁移；
-旧爬虫 RPC/CLI、RocksDB/Smart/Cache 任务队列、优先级插队、旧 DB 包装器和部分传输实现尚不属于当前公开能力。
+本轮完成的是 Air、配置式 form（合并旧 template）、SQLite 任务队列、死信恢复、旧领域插件、代理管理工具、
+同步调用与 RPC 服务及指标插件的迁移；旧 CLI、RocksDB/Smart/Cache 任务队列、优先级插队、旧 DB 包装器和部分传输实现
+尚不属于当前公开能力。
 动态脚本和 Flow 已作为领域插件恢复，但不恢复动态类路径、旧数据库包装器或进程级全局状态。
 
 完整示例见 [Air 爬虫](08-air-spider.md)、[领域插件](09-domain-plugins.md)、[代理管理](10-proxies.md)

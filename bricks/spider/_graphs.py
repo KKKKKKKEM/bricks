@@ -35,7 +35,30 @@ class GraphAssembly:
             初始化图和消费图。
         """
         plan = self.build_crawl_plan(survey=self.spider._survey_results is not None)
-        crawl = Graph.compose(
+        return self.build_init_graph(), self._compose(plan)
+
+    def build_call_graph(self) -> Graph:
+        """构造同步调用图：跳过默认存储，完成节点输出种子、请求、响应摘要与 Items。
+
+        Returns:
+            使用调用 Context 工厂的独立消费图。
+        """
+        return self._compose(
+            self.build_crawl_plan(call=True), self.spider._call_context
+        )
+
+    @staticmethod
+    def _compose(plan: ExecutionPlan, context_factory: Any = None) -> Graph:
+        """按计划选中的节点与边组装普通 Graph。
+
+        Args:
+            plan: 已校验出口的消费计划。
+            context_factory: 替代原图的 Context 工厂，None 沿用原图。
+
+        Returns:
+            新的未冻结 Graph。
+        """
+        return Graph.compose(
             nodes={
                 name: node
                 for name, node in plan.graph.nodes.items()
@@ -43,9 +66,8 @@ class GraphAssembly:
             },
             entrypoint=plan.entrypoint,
             edges=plan.edges,
-            context_factory=plan.graph.context_factory,
+            context_factory=context_factory or plan.graph.context_factory,
         )
-        return self.build_init_graph(), crawl
 
     def build_init_graph(self) -> Graph:
         """装配种子生产、入队与恢复记录流程。
@@ -100,20 +122,26 @@ class GraphAssembly:
             initial.connect(source, target, source_port="skip", target_port="initial")
         return initial
 
-    def build_crawl_plan(self, *, survey: bool = False) -> ExecutionPlan:
-        """从共享消费定义选择正式存储或手动消费分支。
+    def build_crawl_plan(
+        self, *, survey: bool = False, call: bool = False
+    ) -> ExecutionPlan:
+        """从共享消费定义选择正式存储、手动消费或同步调用分支。
 
         Args:
-            survey: 是否选择无默认存储的手动分支。
+            survey: 是否选择无默认存储并收集 Context 的手动分支。
+            call: 是否选择无默认存储、完成节点输出 JSON 调用结果的分支。
 
         Returns:
             校验完整出口的消费计划。
 
         Raises:
-            TypeError: survey 不是 bool。
+            TypeError: survey 或 call 不是 bool。
+            ValueError: 同时选择 survey 与 call。
         """
-        if type(survey) is not bool:
-            raise TypeError("survey must be boolean")
+        if type(survey) is not bool or type(call) is not bool:
+            raise TypeError("survey and call must be boolean")
+        if survey and call:
+            raise ValueError("survey and call are exclusive")
         spider = self.spider
         hook = spider._hook_node
         crawl_nodes = {
@@ -142,7 +170,10 @@ class GraphAssembly:
                 spider, "retry_wait", retry_delay=spider._retry_delay
             ),
             "complete": CrawlNode(
-                spider, "complete", spider._collect_survey if survey else None
+                spider,
+                "complete",
+                spider._collect_survey if survey else None,
+                summarize=spider._call_result if call else None,
             ),
         }
         crawl = Graph(
@@ -195,7 +226,7 @@ class GraphAssembly:
             ("before_pipeline", "after_pipeline"),
         ):
             crawl.connect(source, target, source_port="skip", target_port="task")
-        excluded = "pipeline" if survey else "survey_pipeline"
+        excluded = "pipeline" if survey or call else "survey_pipeline"
         return crawl.plan(
             include=set(crawl_nodes) - {excluded},
             outputs={("complete", "summary")},

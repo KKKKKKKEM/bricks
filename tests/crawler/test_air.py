@@ -27,7 +27,7 @@ from interlace.spi import ExecutionLimits
 from bricks import DownloadNode, Items, Request, Response, hooks, signals
 from bricks.downloaders.curl_cffi import AsyncCurlCffiDownloader, CurlCffiDownloader
 from bricks.plugins import on_request, scripts
-from bricks.proxies import CustomProxy, Manager
+from bricks.proxies import BaseProxy, Manager
 from bricks.queues import MemoryTaskQueue
 from bricks.spider import Context, Spider
 
@@ -202,7 +202,11 @@ def test_two_graphs_stream_seeds_before_source_finishes():
 
     spider = Streaming(queue_name="stream@v1")
     with spider:
-        assert set(spider.runtime.graphs()) == {"stream@v1.init", "stream@v1.crawl"}
+        assert set(spider.runtime.graphs()) == {
+            "stream@v1.init",
+            "stream@v1.crawl",
+            "stream@v1.call",
+        }
         report = spider.run(kwargs={"timeout": 5})
     assert report.initialization.status == "succeeded"
     assert report.counts == {"pending": 0, "leased": 0, "acked": 2, "dead": 0}
@@ -1517,7 +1521,8 @@ def test_framework_manages_slot_sessions_and_context_resources():
     factory = Factory()
     spider = Managed(downloader=factory, concurrency=2)
     assert spider.run(kwargs={"timeout": 5}).counts["acked"] == 2
-    assert len(factory.sessions) == 2
+    # 会话在 Slot 首次下载时按代理懒建；两页沿同一 Slot 执行，只建一个会话。
+    assert len(factory.sessions) == 1
     assert factory.closed == list(reversed(factory.sessions))
     assert factory.temporary_calls == 0
     assert observed[1][1]["cookie_before"] == "account=A"
@@ -1799,23 +1804,133 @@ def test_survey_local_http_example_follows_pages_without_default_database(tmp_pa
     assert not database.exists()
 
 
-@pytest.mark.parametrize(
-    "options",
-    [
-        {"auth": lambda request: None},
-        {"threshold": 1},
-        {"ttl": 1},
-    ],
-)
-def test_auto_session_rejects_request_proxy_policies(options):
-    """自动固定会话代理拒绝只适用于请求级代理的策略。"""
-    spider = SimpleSpider(
-        downloader=CurlCffiDownloader(),
-        proxy=Manager(CustomProxy("proxy.test:8080", **options)),
+def test_auto_session_routes_rotating_proxies_to_per_proxy_sessions():
+    """自动会话按请求代理懒建会话：托管轮换、认证回调与 Slot 内会话上限均生效。"""
+
+    class Rotating(BaseProxy):
+        """每次取得时轮换地址，每个占用只允许一个新请求。"""
+
+        def __init__(self):
+            """固定两个轮换地址和请求头认证回调。"""
+            super().__init__(threshold=1, auth=self.sign)
+            self.keys = iter(["a.test:1", "b.test:1", "a.test:1"])
+
+        @staticmethod
+        def sign(request):
+            """为请求写入代理认证头。
+
+            Args:
+                request: 当前请求。
+            """
+            request.headers["X-Proxy-Auth"] = "token"
+
+        def get(self, timeout=30):
+            """返回下一个地址。
+
+            Args:
+                timeout: 不阻塞。
+
+            Returns:
+                代理值。
+            """
+            return self._make(next(self.keys))
+
+    class Session:
+        """记录本会话固定代理和收到的请求。"""
+
+        def __init__(self, proxy):
+            """绑定固定代理。
+
+            Args:
+                proxy: 准备时固定的代理地址。
+            """
+            self.proxy = proxy
+
+        def fetch(self, request):
+            """会话模式拒绝请求代理，并返回本会话代理。
+
+            Args:
+                request: 已清除代理的请求。
+
+            Returns:
+                携带会话代理与认证头的响应。
+            """
+            assert request.proxy is None
+            body = {"session": self.proxy, "auth": request.headers.get("X-Proxy-Auth")}
+            return Response(json.dumps(body).encode(), request=request)
+
+    class Factory:
+        """记录按代理准备与关闭的会话。"""
+
+        def __init__(self):
+            """初始化观察列表。"""
+            self.prepared = []
+            self.closed = []
+
+        def prepare_session(self, *, proxy=None):
+            """为一个代理地址准备会话。
+
+            Args:
+                proxy: 会话固定代理。
+
+            Returns:
+                新会话。
+            """
+            self.prepared.append(proxy)
+            return Session(proxy)
+
+        def close_session(self, session):
+            """记录关闭的会话代理。
+
+            Args:
+                session: 停止使用的会话。
+            """
+            self.closed.append(session.proxy)
+
+        def fetch(self, request):
+            """复用模式不得走临时下载。
+
+            Args:
+                request: 当前请求。
+
+            Raises:
+                AssertionError: 总是。
+            """
+            raise AssertionError("temporary downloader must not be used")
+
+    class Routed(SimpleSpider):
+        """记录每页使用的会话代理。"""
+
+        def parse(self, context):
+            """保存会话观察值和请求代理。
+
+            Args:
+                context: 消费上下文。
+
+            Returns:
+                观察记录。
+            """
+            return Items([{**context.response.json(), "proxy": context.request.proxy}])
+
+    factory = Factory()
+    spider = Routed(
+        seeds=[{"url": f"https://example.com/{index}"} for index in range(3)],
+        downloader=factory,
+        proxy=Manager(Rotating()),
+        session_proxies=1,
     )
-    with pytest.raises(ValueError, match="slot_session_reuse=False"):
-        spider.open()
-    spider.close()
+    spider.run(kwargs={"timeout": 5})
+    rows = spider.stored
+    assert [row["session"] for row in rows] == [
+        "http://a.test:1",
+        "http://b.test:1",
+        "http://a.test:1",
+    ]
+    assert all(row["session"] == row["proxy"] for row in rows)
+    assert {row["auth"] for row in rows} == {"token"}
+    # 上限为 1：每次换代理都关闭上一个会话，停止时关闭最后一个。
+    assert factory.prepared == [row["session"] for row in rows]
+    assert factory.closed == factory.prepared
 
 
 def test_context_fetch_reuses_current_slot_session_and_matches_downloader_kind(server):
@@ -1892,3 +2007,23 @@ def test_task_options_override_retry_budget_and_success_rule():
         "https://example.test/forbidden": 1,
     }
     assert downloader.attempts["https://example.test/b/retry"] == 1
+
+
+def test_non_strict_run_reports_business_rejections_but_raises_program_errors():
+    """strict=False 时业务拒绝只进入死信和报告，程序错误仍让运行入口抛错。"""
+    queue = MemoryTaskQueue("lenient")
+    spider = SimpleSpider(task_queue=queue, max_retry=0, strict=False)
+    spider.submit({"url": "https://example.test/ok"})
+    spider.submit({"url": "https://example.test/fail"})
+    spider.submit({"url": "https://example.test/forbidden"})
+    report = spider.run("spider", kwargs={"timeout": 5})
+    assert report.counts == {"pending": 0, "leased": 0, "acked": 1, "dead": 2}
+    assert len(report.rejections) == 2
+    assert any("retries exhausted" in line for line in report.rejections)
+    assert any("status=403" in line for line in report.rejections)
+
+    broken = SimpleSpider(task_queue=MemoryTaskQueue("broken"), strict=False)
+    broken.submit({"url": "https://example.test/boom"})
+    with pytest.raises(Exception, match="downloader configuration broken"):
+        broken.run("spider", kwargs={"timeout": 5})
+    assert broken.report().rejections == ()

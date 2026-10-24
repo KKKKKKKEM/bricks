@@ -48,6 +48,9 @@ spider.run()
 | lease_seconds / init_timeout | 交付和初始化租约秒数，以及初始化图的执行超时 |
 | poll_interval | 队列空轮询间隔秒数，默认 0.05；任务完成会唤醒领取循环 |
 | slot_session_reuse | 是否自动装配并复用每 Slot 同步会话，默认 True；False 使用下载器的独立请求路径 |
+| session_proxies | 自动会话模式下每个 Slot 的 ProxySessions 上限，默认 4；按代理地址各建一个会话，超出时关闭最久未用的 |
+| strict | 默认 True，业务拒绝使 run()/run_spider() 抛错；False 时只记入死信与 RunReport.rejections |
+| plugins | 安装到 Spider 自建 Runtime 的 Interlace 插件序列，默认空；不能提供任务后端 |
 | slots | 借用的本地 SlotProvider，资源归调用方管理 |
 
 这些配置应在打开实例前确定，不在运行中修改。不同进程使用同一队列名称时，必须注册相同版本的业务流程和配置。
@@ -66,6 +69,19 @@ spider = MySpider(options={"crawler.response.ok": {"response.status_code == 404"
 因此与单任务配置同级，优先于 form 的段级设置。执行配置只接受 JSON 值，callable 规则通过 `bypass(ok=...)`
 参数或 form 的 `Download(ok=...)` 声明。重试耗尽时任务进入 dead，可用队列的 `revive_dead` 重新投放。
 执行配置的框架键统一使用 `crawler.` 前缀。
+
+`bricks.models.CrawlerOptions` 是 `crawler.*` 键的冻结数据类：session_reuse（默认 True）、impersonate、retry_max、
+response_ok（字符串或映射）、response_scripts（映射）与 form_stage。`CrawlerOptions.parse(options)` 校验全部
+`crawler.*` 键，未知键抛出 ValueError；`to_options()` 只返回非默认键，可与业务键合并：
+
+```python
+from bricks.models import CrawlerOptions
+
+spider = MySpider(options={**CrawlerOptions(retry_max=3).to_options(), "my.key": 1})
+```
+
+Spider 在构造时和每次构建 Work（submit）时校验，DownloadNode 在每次 firing 时校验；
+`context.crawler_options` 返回当前执行的解析快照。
 
 | 业务方法 | 返回值及职责 |
 | --- | --- |
@@ -110,7 +126,8 @@ HookNode 捕获领域 signals 并输出到已声明的路由；不再通过 chec
 完成节点只输出条数、下载次数和重试次数，避免把整个响应体作为终端结果长期保留。
 详细插槽、信号和图内外边界见[Hook 节点与 signals](12-hooks-and-signals.md)。
 
-`build_init_graph()` 装配初始化流程；`build_crawl_plan(survey=False)` 返回消费执行计划。
+`build_init_graph()` 装配初始化流程；`build_crawl_plan(survey=False, call=False)` 返回消费执行计划，两个开关互斥，
+`call=True` 选择同步调用分支，`build_call_graph()` 装配对应的 `<queue_name>.call` 图。
 共享定义包含正式 `pipeline` 和无默认存储的 `survey_pipeline` 两个备选分支，计划只选择其中一个，
 并以 `outputs={("complete", "summary")}` 校验出口，避免重试或跳过端口因裁剪变成普通结果。
 `build_graphs()` 用公开的 `Graph.compose` 将计划选定的节点、入口和连接装配成队列消费图。
@@ -148,7 +165,7 @@ survey 是手动消费，不是副作用沙箱。默认内存队列按实例隔�
 
 省略 extract 或传空序列返回完成节点的 Context 列表；指定字段时返回属性映射，均按完成顺序排列。
 提前 Success 产生的结果可能尚未经过下载或解析；提取缺失属性时对应值为 None，不影响批次中其他结果。
-run() 会在已接受任务排空后报告任务失败，单项 Failure（例如 404）也会使本次 run() 抛出错误。
+默认 strict=True 时，run() 会在已接受任务排空后报告任务失败，单项 Failure（例如 404）也会使本次 run() 抛出错误。
 异步 Graph 路径的 ERROR_OCCURRED Hook 同步运行在共享事件循环线程；阻塞型回调会暂停其他 Slot 的异步任务。
 返回的 Context 仅用于读取结果，执行和自建资源已经结束；不是继续提交、发事件或复用已关闭会话的句柄。
 后置插件失败仍传播异常且不 ACK。forever=True 不适合一次性结果收集，survey 会明确拒绝。
@@ -170,8 +187,8 @@ seeds 的修改只影响当前交付，不回写原始队列任务或自动重�
 后续根任务若再次取得它，也能看到尚未清除的资源。
 
 `context.fetch(request)` 在业务方法或插件中立即下载一个附加请求，返回 Response，适合在存储前补充接口数据。它复用
-`build_download_node()` 的下载器选择与当前 Slot 会话（含会话 Cookie 与会话代理），但不经过请求插槽、代理插件、
-UA 预设或下载重试；非会话模式只使用 request.proxy，需要沿用主请求代理时显式设置
+`build_download_node()` 的下载器选择与当前 Slot 会话（含会话 Cookie），会话模式下按 `request.proxy` 路由到同 Slot
+对应代理的会话；不经过请求插槽、代理插件、UA 预设或下载重试，需要沿用主请求代理时显式设置
 `request.proxy = context.request.proxy`。使用异步下载器的 Spider 在异步回调中改用 `await context.afetch(request)`，
 两者在下载器类别不匹配时抛出 TypeError。
 
@@ -262,7 +279,7 @@ Hook 自身的 match 不支持表达式字符串或动态函数路径；需要�
 或 `After.conditional_scripts`。当前 Context 只在回调作用域内可见，不是事件或资源注册表。
 
 异步 Graph 路径的 `ERROR_OCCURRED` 同步运行在共享事件循环线程；阻塞型错误钩子会暂停所有 Slot 的异步工作。
-`run()` 在排空已接受的任务后报告失败；一项失败任务（例如 HTTP 404 被 bypass 判为 Failure）会使整体运行抛错。
+`run()` 在排空已接受的任务后报告失败；strict=True 时一项失败任务（例如 HTTP 404 被 bypass 判为 Failure）会使整体运行抛错。
 
 图内支持 BEFORE/AFTER_MAKE_SEEDS、BEFORE/AFTER_PUT_SEEDS、BEFORE/AFTER_MAKE_REQUEST、
 BEFORE/AFTER_REQUEST、BEFORE/AFTER_RETRY、BEFORE/AFTER_PARSE、BEFORE/AFTER_PIPELINE。
@@ -287,8 +304,13 @@ forever=True 的消费者在空队列时仍保持运行，外部 close 会通知
 初始化失败会记录断点并允许已经提交的种子排空，原始异常仍向调用方传播。
 InitRecord 表示生产状态，RunReport.counts 表示当前共享队列快照，不替代各 Worker 的异常收集或外部生产者的结束协议。
 
-未注入 slots 且同步 downloader 支持 SessionDownloader 时，Air 按 concurrency 自动创建长期 Slot 和独立 Session，
-并在执行停止后关闭会话；爬虫作者无需构造 SlotPool 或重写 build_download_node。
+`strict=False` 时，Failure 信号和重试耗尽仍写入死信，但 run()/run_spider() 不因此抛错，而是记入
+`RunReport.rejections`：本进程最近 20 条 `"work_id: error"` 字符串。程序错误、存储错误与初始化失败仍然抛出。
+`RunReport(initialization, counts, rejections=())` 只是本进程摘要，不替代跨进程错误收集。
+
+未注入 slots 且同步 downloader 支持 SessionDownloader 时，Air 按 concurrency 自动创建长期 Slot，并为每个 Slot 装配
+`ProxySessions`：首次下载时才惰性创建会话，每个代理地址一个，数量上限为 session_proxies；执行停止后关闭全部会话。
+爬虫作者无需构造 SlotPool 或重写 build_download_node。
 异步 Session 与自定义多资源 Slot 可参考[会话示例](../examples/crawler_session.py)显式装配。
 注入的 SlotPool、显式会话和 Redis 客户端由调用方在 Spider 停止后关闭；
 异步客户端必须在使用它的事件循环中关闭，基类不会跨线程关闭调用方的浏览器会话。
@@ -296,6 +318,46 @@ InitRecord 表示生产状态，RunReport.counts 表示当前共享队列快照�
 
 同步取消仍是协作式语义，close 不强杀阻塞函数。不要从自身业务或插件回调调用 run/open/close 等阻塞生命周期方法，
 框架会拒绝这类重入；回调需要结束当前种子时显式抛出 signals.Success 或 signals.Failure。
+
+## 同步调用与 RPC 服务
+
+打开时 Spider 注册 `<queue_name>.call` 同步调用图，名称见 `spider.call_graph_name`：
+
+```python
+with MySpider() as spider:
+    result = spider.call({"url": "https://example.com/item/1"}, options={"crawler.retry.max": 1})
+```
+
+`call(seed, *, options=None)` 在本实例 SlotPool 内进程内执行，复用 Slot 会话与 Cookie；跳过默认 item_pipeline，
+保留下载、重试、解析与前后插件。返回字典包含 seeds、request（method/url）、response（status_code/url/text）、
+items、attempts 与 retries，提前 Success 尚未产生的部分为 None。调用没有根 Work，不 ACK、不写死信，失败原样抛出。
+
+调用中 `context.submit(..., affinity="current")` 与 `context.emit(..., affinity="current")` 抛出 RuntimeError，
+提示改用 `affinity="any"`；any 照常持久化到队列，但 call() 不启动消费者。因此 form 爬虫的多段
+`Download(affinity="current")` 无法在调用内推进后续段，需要时改用 any。
+
+```bash
+pip install "bricks-py[service]"
+```
+
+```python
+spider = MySpider(concurrency=4)
+spider.serve(host="127.0.0.1", port=8000, token="secret")
+```
+
+`serve(*, host="127.0.0.1", port=8000, token=None, allowed_hosts=None,
+allowed_options=("crawler.retry.max", "crawler.fingerprint.impersonate"), max_active_executions=128, metrics=None)`
+打开爬虫、启动队列消费者并提供 Interlace GraphService（不采集节点输入输出诊断），阻塞到服务退出后关闭爬虫：
+
+| 接口 | 用法 |
+| --- | --- |
+| `POST /api/call` | `{"graph": "<queue>.call", "inputs": {"seeds": {...}}, "options": {...}}` |
+| `POST /rpc` | JSON-RPC 方法 `graph.call` |
+| `GET /metrics` | 仅传入 metrics 时提供，见[领域插件](09-domain-plugins.md#指标插件) |
+
+请求 options 中不在 allowed_options 内的键返回 422 InvalidRequestError。`crawler.response.ok` 与
+`crawler.response.scripts` 会执行可信 Python 表达式，不要为不可信客户端加入 allowed_options；
+监听非回环地址时必须设置 token。
 
 ## 分布式验证
 

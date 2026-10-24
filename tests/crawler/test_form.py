@@ -10,10 +10,10 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from bricks import Response, signals
+from bricks.models.options import FORM_STAGE as STAGE_OPTION
 from bricks.parsers import Rows
 from bricks.queues import MemoryTaskQueue
 from bricks.spider import form
-from bricks.spider.form import STAGE_OPTION
 
 BASE = "http://example.test"
 

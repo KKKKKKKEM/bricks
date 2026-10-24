@@ -142,6 +142,37 @@ SlotLease，适合复用代理、Cookie、连接池或 Slot Session。`call_late
 重试仍只能发生在规定的下载前后阶段。
 完整规则见[Hook 节点与 signals](12-hooks-and-signals.md)。
 
+## 指标插件
+
+指标采集以插件安装，核心不内置计数器；不安装插件即不采集。Interlace 0.3 提供 `interlace.metrics.Metrics` 聚合插件，
+记录 interlace.executions、interlace.execution.seconds、interlace.node.firings、interlace.node.seconds、
+interlace.works、interlace.works.submitted 与 interlace.events。Bricks 的 `bricks.plugins.metrics.crawler_metrics`
+只观察 Air 图的 NODE_INSPECT，不改变节点、请求或交付结果：
+
+| 指标 | 含义 |
+| --- | --- |
+| `crawler.requests{status}` | 下载次数，status 为 2xx/3xx/4xx/5xx/error/other |
+| `crawler.download.seconds` | 下载耗时直方图，取自 response.cost |
+| `crawler.retries` / `crawler.items` | 重试次数与解析条数 |
+| `crawler.seeds.completed` | 完成的种子数 |
+| `crawler.seeds.rejected{stage}` | 被拒绝的种子数，stage 为节点 id |
+| `crawler.seeds.submitted{source}` | 提交的种子数，source 为 current/any/init |
+
+```python
+from interlace.metrics import Metrics
+from bricks.plugins.metrics import crawler_metrics
+
+metrics = Metrics()
+spider = MySpider(plugins=[metrics.plugin, crawler_metrics])
+spider.run()
+print(metrics.snapshot())
+print(metrics.prometheus())
+```
+
+也可以用 `spider.serve(metrics=metrics)` 在 `GET /metrics` 提供 Prometheus 抓取，见[同步调用与 RPC 服务](08-air-spider.md#同步调用与-rpc-服务)。
+OpenTelemetry 导出安装 `interlace-py[otel]` 后使用 `Metrics(exporters=[otel_exporter(meter)])`，
+其中 `otel_exporter` 位于 `interlace.metrics.otel`。聚合只在本进程内进行，跨进程汇总由导出后端负责。
+
 ## 验证
 
 ```bash

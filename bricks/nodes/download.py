@@ -16,39 +16,9 @@ from ..downloaders import (
     Downloader,
     FingerprintDownloader,
 )
-from ..models import Request, Response
+from ..models import CrawlerOptions, Request, Response
 
 _D = TypeVar("_D", Downloader, AsyncDownloader)
-_IMPERSONATE_OPTION = "crawler.fingerprint.impersonate"  # 当前执行的预设指纹覆盖键。
-
-
-def _reuse_session(context: Context) -> bool:
-    """读取当前执行的会话策略，不改变 Slot 或请求数据。
-
-    Args:
-        context: 含执行配置的公开上下文。
-
-    Returns:
-        默认 True；False 使用装配好的临时下载器，指纹不改变会话策略。
-
-    Raises:
-        TypeError: 会话开关或指纹值的类型错误。
-        ValueError: 指纹名称为空或含首尾空白。
-    """
-
-    reuse = context.options.get("crawler.session.reuse", True)
-    if type(reuse) is not bool:
-        raise TypeError("crawler.session.reuse must be a boolean")
-    if _IMPERSONATE_OPTION in context.options:
-        impersonate = context.options[_IMPERSONATE_OPTION]
-        if impersonate is not None:
-            if not isinstance(impersonate, str):
-                raise TypeError(f"{_IMPERSONATE_OPTION} must be a string or None")
-            if not impersonate.strip() or impersonate != impersonate.strip():
-                raise ValueError(
-                    f"{_IMPERSONATE_OPTION} must be non-empty without whitespace"
-                )
-    return reuse
 
 
 def _resolve(
@@ -56,6 +26,7 @@ def _resolve(
     context: Context,
     default: str,
     *,
+    reuse: bool,
     asynchronous: bool,
     isolated: Mapping[str, _D] | None,
 ) -> Mapping[str, _D]:
@@ -65,6 +36,7 @@ def _resolve(
         source: 固定映射或从 Slot 读取资源的同步函数。
         context: 提供当前执行槽的公开上下文。
         default: 必须存在的默认下载器名称。
+        reuse: 当前执行是否复用 Slot 会话。
         asynchronous: 是否要求异步下载器。
         isolated: 调用方装配的临时下载器映射，None 表示不支持禁用复用。
 
@@ -77,7 +49,7 @@ def _resolve(
         ValueError: 注册名称、默认项或临时下载器配置非法。
     """
 
-    if not _reuse_session(context):
+    if not reuse:
         if isolated is None:
             raise ValueError("session reuse disabled without isolated_downloaders")
         return isolated
@@ -276,22 +248,24 @@ class DownloadNode(Node):
 
         Raises:
             TypeError: 执行配置类型错误、下载器不支持指纹或违反协议。
-            ValueError: 所选下载器未注册、临时下载器未装配或指纹值非法。
+            ValueError: 所选下载器未注册、临时下载器未装配、指纹值非法或存在未知 crawler.* 配置。
             RuntimeError: 使用 Slot 解析函数，但当前执行没有 Slot。
             ExecutionControlError: 执行已取消或超时；下载器自身异常继续传播。
         """
 
         context.checkpoint()
+        options = CrawlerOptions.parse(context.options)
         request = inputs["request"].copy()
         downloaders = _resolve(
             self._downloaders,
             context,
             self._default,
+            reuse=options.session_reuse,
             asynchronous=False,
             isolated=self._isolated_downloaders,
         )
         downloader = _select(downloaders, self._default, request, self._select)
-        impersonate = context.options.get(_IMPERSONATE_OPTION)
+        impersonate = options.impersonate
         if impersonate is not None:
             if not isinstance(
                 downloader, FingerprintDownloader
@@ -374,7 +348,7 @@ class AsyncDownloadNode(Node):
 
         Raises:
             TypeError: 执行配置类型错误、下载器不支持指纹或违反协议。
-            ValueError: 所选下载器未注册、临时下载器未装配或指纹值非法。
+            ValueError: 所选下载器未注册、临时下载器未装配、指纹值非法或存在未知 crawler.* 配置。
             RuntimeError: 使用 Slot 解析函数，但当前执行没有 Slot。
             asyncio.CancelledError: 异步下载被取消。
             ExecutionControlError: 执行已取消或超时；下载器自身异常继续传播。
@@ -382,15 +356,17 @@ class AsyncDownloadNode(Node):
 
         context.checkpoint()
         request = inputs["request"].copy()
+        options = CrawlerOptions.parse(context.options)
         downloaders = _resolve(
             self._downloaders,
             context,
             self._default,
+            reuse=options.session_reuse,
             asynchronous=True,
             isolated=self._isolated_downloaders,
         )
         downloader = _select(downloaders, self._default, request, self._select)
-        impersonate = context.options.get(_IMPERSONATE_OPTION)
+        impersonate = options.impersonate
         if impersonate is not None:
             if not isinstance(
                 downloader, AsyncFingerprintDownloader

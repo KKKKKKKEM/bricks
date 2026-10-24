@@ -4,7 +4,16 @@ from .body import UploadFile
 from .cookies import Cookies
 from .headers import Headers
 from .items import Items
+from .options import CrawlerOptions
 from .request import Request
 from .response import Response
 
-__all__ = ["Cookies", "Headers", "Items", "Request", "Response", "UploadFile"]
+__all__ = [
+    "Cookies",
+    "CrawlerOptions",
+    "Headers",
+    "Items",
+    "Request",
+    "Response",
+    "UploadFile",
+]

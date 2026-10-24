@@ -125,13 +125,6 @@ class Before:
         context = _context()
         if context.request.proxy is not None:
             return
-        reuse = context.options.get("crawler.session.reuse", True)
-        if (
-            reuse is True
-            and context.slot is not None
-            and "crawler.session.proxy" in context.slot
-        ):
-            return
         source = context.target.proxy
         if isinstance(source, Manager):
             if context.slot is None:
@@ -204,11 +197,7 @@ class After:
             BaseException: 脚本错误和领域信号原样传播。
         """
         context = _context()
-        selected = (
-            context.options.get("crawler.response.scripts", {})
-            if rules is None
-            else rules
-        )
+        selected = context.crawler_options.response_scripts if rules is None else rules
         if not isinstance(selected, Mapping):
             raise TypeError("conditional scripts must be a mapping")
         if not selected:

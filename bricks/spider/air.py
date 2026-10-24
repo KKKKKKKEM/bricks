@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import inspect
 import time
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from threading import Event as ThreadEvent
-from threading import RLock
+from threading import Lock, RLock
 from typing import Any, cast
 
 from interlace import Context as EngineContext
@@ -16,7 +17,10 @@ from interlace.engine import Execution, ExecutionPlan, Slot
 from interlace.engine.errors import (
     ExecutionCancelledError,
     ExecutionControlError,
+    ExecutionError,
 )
+from interlace.metrics import Metrics
+from interlace.plugins import Plugin
 from interlace.spi import (
     Delivery,
     DeliveryResult,
@@ -37,7 +41,10 @@ from bricks import (
 from bricks import hooks as hook_api
 from bricks.downloaders import SessionDownloader
 from bricks.downloaders.curl_cffi import CurlCffiDownloader
+from bricks.downloaders.proxy_sessions import ProxySessions
 from bricks.hooks import Binding, Task
+from bricks.models import CrawlerOptions
+from bricks.models.options import IMPERSONATE, RETRY_MAX
 from bricks.plugins import on_request
 from bricks.proxies import Manager, ProxyProvider, format_proxy
 from bricks.queues import (
@@ -67,6 +74,9 @@ from .context import (
 __all__ = ["Context", "InitContext", "HookContext", "RunReport", "Spider"]
 
 
+_REJECTION_LIMIT = 20  # RunReport 保留的最近业务拒绝条数。
+
+
 @dataclass(frozen=True)
 class RunReport:
     """当前队列的运行快照，不替代分布式 Worker 的错误收集。
@@ -74,10 +84,28 @@ class RunReport:
     Attributes:
         initialization: 当前初始化记录，未初始化时为 None。
         counts: pending、leased、acked 和 dead 数量，调用方拥有独立副本。
+        rejections: strict=False 时本进程未抛出的最近业务拒绝，格式为 "Work ID: 错误"，
+            最多保留 20 条；完整死信仍在任务存储中。
     """
 
     initialization: InitRecord | None
     counts: dict[str, int]
+    rejections: tuple[str, ...] = ()
+
+
+def _business_rejection(error: BaseException) -> bool:
+    """判断错误是否为 Failure 信号或重试耗尽产生的业务拒绝。
+
+    Args:
+        error: 已写入死信的交付错误。
+
+    Returns:
+        错误本身或其 Graph 执行错误的直接原因是 ResponseRejectedError 时为 True。
+    """
+    return isinstance(error, domain.ResponseRejectedError) or (
+        isinstance(error, ExecutionError)
+        and isinstance(error.__cause__, domain.ResponseRejectedError)
+    )
 
 
 def _extract_attribute(context: Context, name: str) -> Any:
@@ -122,9 +150,14 @@ class Spider:
         _start_allowed: BEFORE_START 是否允许启动初始化和消费。
         _runtime: 自有 Runtime，尚未打开时为 None。
         _backend: 自有队列消费适配器，存储由调用方管理。
-        _auto_session: 是否由框架为每个自建 Slot 装配同步下载会话。
+        _auto_session: 是否由框架为每个自建 Slot 装配按请求代理路由的同步会话。
+        _session_proxies: 自动会话模式下每个 Slot 同时保留的代理会话数量上限。
         _poll_interval: QueueBackend 领取循环的轮询间隔秒数。
-        _owned_sessions: 框架创建并在执行停止后关闭的会话及其工厂。
+        _owned_sessions: 框架创建并在执行停止后关闭的各 Slot 代理会话路由。
+        _strict: 业务拒绝进入死信后是否让运行入口抛错。
+        _rejections: strict=False 时最近的业务拒绝摘要，按发生顺序保留最多 20 条。
+        _rejections_lock: 保护 _rejections，交付线程与查询方并发访问。
+        _plugins: 构造时复制的 Interlace 插件，打开时装入自有 Runtime，由 Runtime 关闭时卸载。
         _init_execution: 当前初始化执行，便于 close 协作式取消。
         _operation: 串行化公开运行入口，不限制各种子执行并发。
         _lifecycle: 保护启动、关闭及运行资源引用。
@@ -157,6 +190,9 @@ class Spider:
         init_timeout: float | None = None,
         poll_interval: float = 0.05,
         slot_session_reuse: bool = True,
+        session_proxies: int = 4,
+        strict: bool = True,
+        plugins: Sequence[Plugin] = (),
     ) -> None:
         """沿用业务参数命名，构造时不启动消费者或生成种子。
 
@@ -175,10 +211,15 @@ class Spider:
             lease_seconds: 初始化和交付租约秒数，默认 30。
             poll_interval: 队列轮询间隔秒数，默认 0.05。
             slot_session_reuse: 是否为自建 Slot 自动复用同步会话，默认 True。
+            session_proxies: 自动会话模式下每个 Slot 按代理地址保留的会话上限，默认 4，
+                超过时关闭最久未使用的会话。
+            strict: 默认 True，Failure 或重试耗尽进入死信后运行入口抛错；False 只把业务拒绝
+                记入 RunReport.rejections，程序错误、存储错误和初始化失败仍然抛出。
+            plugins: 打开时装入自有 Runtime 的 Interlace 插件，例如指标聚合；不能再提供任务后端。
 
         Raises:
             TypeError: 参数不符合公开协议。
-            ValueError: 名称、并发、重试次数或时间非法。
+            ValueError: 名称、并发、重试次数、会话上限、时间或 crawler.* 执行配置非法。
         """
         default_name = (
             task_queue.name
@@ -198,6 +239,10 @@ class Spider:
             raise TypeError("forever must be boolean")
         if type(slot_session_reuse) is not bool:
             raise TypeError("slot_session_reuse must be boolean")
+        if type(strict) is not bool:
+            raise TypeError("strict must be boolean")
+        if type(session_proxies) is not int or session_proxies < 1:
+            raise ValueError("session_proxies must be a positive integer")
         if isinstance(proxy, str):
             proxy = format_proxy(proxy)
         elif proxy is not None and not isinstance(proxy, Manager):
@@ -214,6 +259,7 @@ class Spider:
         ):
             raise TypeError("downloader must be an instance with fetch")
         validated = make_work(self.crawl_graph_name, {}, options=options, limits=limits)
+        CrawlerOptions.parse(validated.options)
         self.task_queue = (
             MemoryTaskQueue(self.queue_name) if task_queue is None else task_queue
         )
@@ -229,7 +275,12 @@ class Spider:
             and isinstance(self.downloader, SessionDownloader)
             and getattr(self.downloader, "slot_session_reuse", True) is True
         )
-        self._owned_sessions: list[tuple[SessionDownloader[Any], Downloader]] = []
+        self._session_proxies = session_proxies
+        self._owned_sessions: list[ProxySessions] = []
+        self._strict = strict
+        self._rejections: deque[str] = deque(maxlen=_REJECTION_LIMIT)
+        self._rejections_lock = Lock()
+        self._plugins = tuple(plugins)
         self._owned_proxy_slots: list[Slot] = []
         self._options = dict(validated.options)
         self._limits = validated.limits
@@ -272,6 +323,15 @@ class Spider:
             名称前缀加 .crawl。
         """
         return f"{self.queue_name}.crawl"
+
+    @property
+    def call_graph_name(self) -> str:
+        """返回同步调用图的稳定名称，RPC 与 call() 使用此图。
+
+        Returns:
+            名称前缀加 .call。
+        """
+        return f"{self.queue_name}.call"
 
     @property
     def local_submission_event_name(self) -> str:
@@ -371,17 +431,20 @@ class Spider:
 
         Raises:
             TypeError: 种子或配置类型非法。
+            ValueError: 存在未知或非法的 crawler.* 执行配置。
         """
         if type(seed) is not dict:
             raise TypeError("seed must be a JSON object")
         if options is not None and not isinstance(options, Mapping):
             raise TypeError("options must be a mapping")
+        merged = {**self._options, **({} if options is None else options)}
+        CrawlerOptions.parse(merged)
         return make_work(
             self.crawl_graph_name,
             seed,
             id=id,
             limits=self._limits,
-            options={**self._options, **({} if options is None else options)},
+            options=merged,
         )
 
     def _submit(
@@ -530,19 +593,80 @@ class Spider:
         """
         return GraphAssembly(self).build_init_graph()
 
-    def build_crawl_plan(self, *, survey: bool = False) -> ExecutionPlan:
-        """选择正式消费或手动 survey 的执行计划。
+    def build_crawl_plan(
+        self, *, survey: bool = False, call: bool = False
+    ) -> ExecutionPlan:
+        """选择正式消费、手动 survey 或同步调用的执行计划。
 
         Args:
-            survey: 是否选择无默认存储的手动分支。
+            survey: 是否选择无默认存储并收集 Context 的手动分支。
+            call: 是否选择无默认存储并输出 JSON 调用结果的分支。
 
         Returns:
             校验完整出口的消费计划。
 
         Raises:
             RuntimeError: 尚未打开，插件尚未安装且插槽未固定。
+            ValueError: 同时选择 survey 与 call。
         """
-        return GraphAssembly(self).build_crawl_plan(survey=survey)
+        return GraphAssembly(self).build_crawl_plan(survey=survey, call=call)
+
+    def build_call_graph(self) -> Graph:
+        """构造同步调用图，跳过默认存储并输出调用结果。
+
+        Returns:
+            使用调用 Context 工厂的消费图。
+
+        Raises:
+            RuntimeError: 尚未打开，插件尚未安装且插槽未固定。
+        """
+        return GraphAssembly(self).build_call_graph()
+
+    def _call_context(
+        self, base: EngineContext, inputs: Mapping[str, Any]
+    ) -> domain.Context:
+        """构造同步调用的消费 Context，并标记不允许 current 亲和提交。
+
+        Args:
+            base: 引擎基础 Context。
+            inputs: 本次端口输入。
+
+        Returns:
+            本次独立的调用 Context。
+        """
+        context = self._crawl_context(base, inputs)
+        context._call = True
+        return context
+
+    @staticmethod
+    def _call_result(context: domain.Context) -> dict[str, Any]:
+        """生成同步调用的 JSON 结果；提前成功时尚未产生的部分为 None。
+
+        Args:
+            context: 完成节点的上下文。
+
+        Returns:
+            含 seeds、request、response、items、attempts、retries 的新字典。
+        """
+        request = _extract_attribute(context, "request")
+        response = _extract_attribute(context, "response")
+        items = _extract_attribute(context, "items")
+        return {
+            "seeds": dict(context.seeds),
+            "request": None
+            if request is None
+            else {"method": request.method, "url": request.real_url},
+            "response": None
+            if response is None
+            else {
+                "status_code": response.status_code,
+                "url": response.url,
+                "text": response.text,
+            },
+            "items": None if items is None else items.to_list(),
+            "attempts": context.attempt,
+            "retries": context.retries,
+        }
 
     @staticmethod
     def _survey_pipeline(context: domain.Context) -> None:
@@ -824,7 +948,7 @@ class Spider:
         return None
 
     def open(self) -> Spider:
-        """装配 Runtime、两张图及回调，尚不启动消费。
+        """装配 Runtime、初始化图、消费图与同步调用图及回调，尚不启动消费。
 
         Returns:
             当前实例。
@@ -864,7 +988,7 @@ class Spider:
                         f"{type(signal).__name__} is not allowed in BEFORE_START"
                     ) from signal
                 initial, crawl = self.build_graphs()
-                open_resources(self, initial, crawl)
+                open_resources(self, initial, crawl, self.build_call_graph())
             except BaseException:
                 self._state = "new"
                 raise
@@ -898,9 +1022,29 @@ class Spider:
         """读取初始化与任务交付状态，关闭后仍可查询借用存储。
 
         Returns:
-            当前队列的独立快照。
+            当前队列的独立快照，附带本进程最近未抛出的业务拒绝。
         """
-        return RunReport(self.task_queue.initialization(), self.task_queue.counts())
+        with self._rejections_lock:
+            rejections = tuple(self._rejections)
+        return RunReport(
+            self.task_queue.initialization(), self.task_queue.counts(), rejections
+        )
+
+    def _raise_dead(self, work: Work, error: BaseException) -> bool:
+        """决定已写入死信的交付错误是否交给运行入口抛出。
+
+        Args:
+            work: 进入死信的任务。
+            error: 交付错误。
+
+        Returns:
+            strict 或非业务拒绝时为 True；否则记录摘要并返回 False。
+        """
+        if self._strict or not _business_rejection(error):
+            return True
+        with self._rejections_lock:
+            self._rejections.append(f"{work.id}: {error}")
+        return False
 
     def run_spider(self, *, timeout: float | None = None) -> RunReport:
         """消费已有种子直到当前队列排空，不隐式生成初始种子。
@@ -922,6 +1066,117 @@ class Spider:
             self._consume()
             self._wait_idle(timeout)
             return self.report()
+
+    def call(
+        self,
+        seed: dict[str, Any],
+        *,
+        options: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """在当前进程同步消费一个种子并返回调用结果，不经过任务队列和默认存储。
+
+        执行在自有或注入的 SlotPool 中租用一个 Slot，复用该 Slot 的会话与资源；下载、重试、
+        解析与前后插件照常运行。调用没有根 Work，不确认或写入死信；current 亲和的派生会被拒绝，
+        any 派生持久化后等待消费者领取，本方法不启动消费者。
+
+        Args:
+            seed: JSON 种子对象。
+            options: 覆盖 Spider 默认值的执行配置。
+
+        Returns:
+            含 seeds、request、response（status_code/url/text）、items、attempts、retries 的字典；
+            提前 Success 尚未产生的部分为 None。
+
+        Raises:
+            TypeError: 种子或配置类型非法。
+            ValueError: crawler.* 配置非法。
+            RuntimeError: BEFORE_START 以 Success 跳过了本实例。
+            BaseException: 执行失败、Failure 信号或重试耗尽的原始错误。
+        """
+        external(self)
+        work = self._make_work(seed, options=options)
+        self.open()
+        if not self._start_allowed:
+            raise RuntimeError("spider startup was skipped by BEFORE_START")
+        execution = self.runtime.start(
+            self.call_graph_name,
+            work.inputs,
+            options=work.options,
+            max_steps=self._limits.max_steps,
+            timeout=self._limits.timeout,
+            max_queued=self._limits.max_queued,
+            slots=self._slots,
+        )
+        result: dict[str, Any] = execution.result()[0].value
+        return result
+
+    def serve(
+        self,
+        *,
+        host: str = "127.0.0.1",
+        port: int = 8000,
+        token: str | None = None,
+        allowed_hosts: Sequence[str] | None = None,
+        allowed_options: Sequence[str] = (RETRY_MAX, IMPERSONATE),
+        max_active_executions: int = 128,
+        metrics: Metrics | None = None,
+    ) -> None:
+        """以 Interlace GraphService 提供 HTTP/JSON-RPC 同步调用，同时消费队列，阻塞到服务器退出。
+
+        调用方通过 `/api/call` 或 JSON-RPC `graph.call` 以 `{"graph": call_graph_name,
+        "inputs": {"seeds": {...}}}` 提交种子，结果同 call()。服务提交的执行使用本实例的 SlotPool；
+        队列消费者在服务期间运行，处理 any 派生和其他生产者的任务。服务器退出后关闭本实例。
+        crawler.response.ok 与 crawler.response.scripts 会执行可信 Python 代码，不应加入 allowed_options。
+
+        Args:
+            host: 监听地址，默认仅本机。
+            port: HTTP 端口。
+            token: 可选 Bearer 令牌；监听非回环地址时应设置。
+            allowed_hosts: 允许的 Host 头，None 使用服务默认值。
+            allowed_options: 远程请求允许携带的执行配置键，默认重试上限与预设指纹。
+            max_active_executions: 服务允许同时存在的活跃执行数。
+            metrics: 可选指标聚合器，提供时开放 GET /metrics；其插件需已通过 plugins 装入。
+
+        Raises:
+            ModuleNotFoundError: 未安装 bricks-py[service]。
+            BaseException: 打开、服务或关闭失败。
+        """
+        external(self)
+        try:
+            from interlace.service import GraphService
+        except ModuleNotFoundError as exc:
+            raise ModuleNotFoundError(
+                "Spider.serve requires bricks-py[service]"
+            ) from exc
+        with self._operation:
+            primary: BaseException | None = None
+            try:
+                self.open()
+                if not self._start_allowed:
+                    return
+                self._consume()
+                service = GraphService(
+                    self.runtime,
+                    slots=self._slots,
+                    allowed_options=allowed_options,
+                    max_active_executions=max_active_executions,
+                    diagnostics=False,
+                )
+                try:
+                    service.serve(
+                        host=host,
+                        port=port,
+                        token=token,
+                        allowed_hosts=allowed_hosts,
+                        metrics=metrics,
+                    )
+                finally:
+                    service.close()
+            except BaseException as exc:
+                primary = exc
+                raise
+            finally:
+                close_preserving(self, primary)
 
     def survey(
         self,

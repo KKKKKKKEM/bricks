@@ -10,9 +10,11 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar
 from interlace import Context as EngineContext
 from interlace import Event
 from interlace.engine import Slot
+from interlace.metrics import count
 from interlace.spi import Work
 
 from bricks import AsyncDownloadNode, Items, Request, Response
+from bricks.models import CrawlerOptions
 from bricks.proxies import Manager
 from bricks.queues import InitLease, TaskLease, TaskQueue
 from bricks.queues.models import LocalSubmission
@@ -26,10 +28,6 @@ _CURRENT_CONTEXT: ContextVar[CurrentContext | None] = ContextVar(
     "bricks.spider.current_context", default=None
 )  # 当前同步调用链或异步任务的领域 Context，不跨回调保留。
 _RESOURCES = "bricks.context.resources"  # Slot 内由业务按名称共享的资源映射。
-RETRY_OPTION = "crawler.retry.max"  # 执行配置中当前任务的下载重试上限，非负整数。
-OK_OPTION = (
-    "crawler.response.ok"  # 执行配置中当前任务的成功判断规则，语法同 bypass 的 ok。
-)
 Affinity = Literal["current", "any"]
 
 
@@ -205,6 +203,7 @@ class Context(CurrentContext, EngineContext):
         form: 当前业务步骤或插件阶段名称。
         _task: 当前输入携带的图内状态。
         _input: 工厂看到的原始输入，用于识别后续 Hook 的显式替换。
+        _call: 是否属于同步调用图；调用执行没有根 Work，拒绝 current 亲和的派生。
     """
 
     def __init__(
@@ -228,6 +227,7 @@ class Context(CurrentContext, EngineContext):
         self.form = form
         self._task = task
         self._input: Mapping[str, Any] = {}
+        self._call = False
 
     @classmethod
     def make(
@@ -316,17 +316,11 @@ class Context(CurrentContext, EngineContext):
         return self.target.queue_name
 
     def clear_proxy(self) -> None:
-        """显式丢弃当前请求代理，使下次请求重新选择地址。
+        """显式丢弃当前请求代理，使下次请求重新选择地址及其对应会话。
 
         Raises:
-            RuntimeError: 自动会话固定了代理，或托管代理缺少 Slot。
+            RuntimeError: 托管代理缺少 Slot。
         """
-        if (
-            self.options.get("crawler.session.reuse", True) is True
-            and self.slot is not None
-            and "crawler.session.proxy" in self.slot
-        ):
-            raise RuntimeError("session proxy cannot be hot-switched")
         manager = self.target.proxy
         if isinstance(manager, Manager):
             if self.slot is None:
@@ -353,9 +347,14 @@ class Context(CurrentContext, EngineContext):
 
         Raises:
             ValueError: affinity 不是 current 或 any。
-            RuntimeError: 普通发布时 Spider Runtime 尚未打开。
+            RuntimeError: 同步调用中使用 current，或普通发布时 Spider Runtime 尚未打开。
         """
         if _affinity(affinity) == "current":
+            if self._call:
+                raise RuntimeError(
+                    "affinity='current' is unavailable in synchronous calls; "
+                    "use affinity='any'"
+                )
             return super().emit(event_type, payload)
         return self.target.runtime.emit(event_type, payload)
 
@@ -516,6 +515,19 @@ class Context(CurrentContext, EngineContext):
         return self._task.retries
 
     @property
+    def crawler_options(self) -> CrawlerOptions:
+        """解析当前执行配置中的 crawler.* 键。
+
+        Returns:
+            已校验的配置快照。
+
+        Raises:
+            TypeError: 配置值类型错误。
+            ValueError: 存在未知 crawler.* 键或配置值非法。
+        """
+        return CrawlerOptions.parse(self.options)
+
+    @property
     def max_retry(self) -> int:
         """取得当前任务的下载重试上限：执行配置 crawler.retry.max 优先，否则为 Spider 的 max_retry。
 
@@ -523,14 +535,12 @@ class Context(CurrentContext, EngineContext):
             首次下载之后允许的额外尝试次数。
 
         Raises:
-            ValueError: 执行配置中的值不是非负整数。
+            ValueError: 执行配置中的 crawler.* 值非法。
         """
-        value = self.options.get(RETRY_OPTION)
+        value = self.crawler_options.retry_max
         if value is None:
             limit: int = self.target._max_retries
             return limit
-        if type(value) is not int or value < 0:
-            raise ValueError(f"{RETRY_OPTION} must be a nonnegative integer")
         return value
 
     @property
@@ -540,12 +550,12 @@ class Context(CurrentContext, EngineContext):
         Returns:
             字符串、映射或 callable 规则；未配置时为 None，bypass 使用默认状态码规则。
         """
-        return self.options.get(OK_OPTION)
+        return self.crawler_options.response_ok
 
     def fetch(self, request: Request) -> Response:
         """用当前执行的下载器选择与 Slot 会话立即下载一个附加请求。
 
-        不经过请求插槽、代理注入、重试或 Items 流程；会话模式沿用当前 Slot 会话及其代理，
+        不经过请求插槽、代理注入、重试或 Items 流程；会话模式按 request.proxy 选择当前 Slot 内对应的会话，
         其他模式只使用 request.proxy。传输失败按下载器契约返回 status_code=-1 的响应。
 
         Args:
@@ -622,6 +632,8 @@ class Context(CurrentContext, EngineContext):
                 )
             else:
                 self.task_queue.put(work)
+        if works:
+            count(self.hooks, "crawler.seeds.submitted", len(works), source=affinity)
         return works
 
 
@@ -738,7 +750,10 @@ class InitContext(CurrentContext, EngineContext):
         self.checkpoint()
         if id is not None and len(obj) != 1:
             raise ValueError("explicit id requires exactly one seed")
-        return [
+        works = [
             self.target._submit(seed, id=id, options=options, init=self._initial.lease)
             for seed in obj
         ]
+        if works:
+            count(self.hooks, "crawler.seeds.submitted", len(works), source="init")
+        return works

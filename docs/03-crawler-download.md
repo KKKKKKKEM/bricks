@@ -103,8 +103,9 @@ uv run python -m examples.crawler_download https://example.com
 开发依赖组包含可选传输及类型声明，`uv sync --no-dev` 只安装默认运行依赖。
 
 Air 提供更高层的自动装配：未传 slots 且同步 downloader 实现 SessionDownloader 时，Spider 按 concurrency
-创建长期 Slot，为每个 Slot 调用 `prepare_session(proxy=...)`，并在停止后配对 close_session。普通 Air 爬虫
-只需配置 concurrency；直接使用 DownloadNode、异步 Session 或组合多种 Slot 资源时仍按本章显式装配。
+创建长期 Slot，为每个 Slot 装配一个 [ProxySessions](#按代理分会话)，首次下载时按请求代理惰性 prepare_session，
+并在停止后配对 close_session。普通 Air 爬虫只需配置 concurrency；直接使用 DownloadNode、异步 Session 或组合多种
+Slot 资源时仍按本章显式装配。
 同步 Playwright/Camoufox 会话受创建线程约束，明确退出 Air 自动 Slot Session，仍由调用方在正确线程装配。
 
 ## curl_cffi 实现边界
@@ -249,6 +250,8 @@ HTTPS 超时在原生库中只有整数秒精度，None 被替换为默认 15 �
 设置为 `False` 时使用构造器注入的 `isolated_downloaders`，避免改变原 Slot 会话。
 该映射应使用与会话映射一致的下载器名称，`select(request)` 在选中的映射中继续生效。
 普通 `CurlCffiDownloader` 每次 fetch 创建并关闭临时 Session，适合作为临时下载器。
+执行配置也可以用 `bricks.models.CrawlerOptions(session_reuse=False, impersonate="chrome").to_options()` 生成，
+DownloadNode 每次 firing 用 `CrawlerOptions.parse` 校验全部 `crawler.*` 键，未知键抛出 ValueError，见[爬虫领域模型](02-crawler-models.md#执行配置-crawleroptions)。
 
 ```python
 downloader = CurlCffiDownloader()
@@ -373,6 +376,22 @@ node = DownloadNode(slot_downloaders)
 节点不再为这类下载器逐次建立会话。会话的代理、TLS、环境配置、连接池限制与最大重定向次数由 Client 设置；
 每次 Request 的 timeout 和 allow_redirects 仍生效。Request.proxy 非 None 会抛出 ValueError，
 需要多个代理时装配多个会话并通过 select 选择，不能在共享 Client 上临时改代理。
+
+### 按代理分会话
+
+`bricks.downloaders.proxy_sessions.ProxySessions(factory, *, max_sessions=4)` 包装一个同步 SessionDownloader，
+本身满足 Downloader 与指纹下载协议，适合作为单个 Slot 的下载器：
+
+```python
+from bricks.downloaders.curl_cffi import CurlCffiDownloader
+from bricks.downloaders.proxy_sessions import ProxySessions
+
+slot["crawler.downloaders"] = {"default": ProxySessions(CurlCffiDownloader(), max_sessions=4)}
+```
+
+它按 `Request.proxy` 地址惰性准备会话（None 为直连），转发前清除请求代理，并在 `response.request` 上恢复；
+超过 max_sessions 时关闭最久未用的会话，`close()` 关闭全部会话。Cookie 按“Slot × 代理”隔离；
+实例不跨 Slot 共享，每个 Slot 装配各自的 ProxySessions。
 
 Slot 跟随逻辑执行链，不绑定操作系统线程。同进程跨 Graph 的事件延续保持 Slot，同槽 Graph execution 串行，
 不同 Slot 可以并发。因此这里提供的是逻辑链隔离，不是 thread-local，也不适合要求固定线程的第三方会话。

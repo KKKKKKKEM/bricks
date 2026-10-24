@@ -10,8 +10,8 @@ uv sync --locked --no-group browser
 uv run python -m examples.crawler_download https://example.com
 ```
 
-当前源码通过 Git 依赖固定到经过验证的 Interlace 提交，不要求本地存在另一个源码目录。
-此分支的拆分版本尚未发布到 PyPI。
+Interlace 依赖为包索引发布的 `interlace-py>=0.3.0,<0.4`，`uv.lock` 固定完整解析结果。
+同步调用 HTTP/JSON-RPC 服务需要 `service` extra（`pip install "bricks-py[service]"`）。
 
 ## 下载一张页面
 
@@ -82,6 +82,9 @@ QueueBackend 通过 Interlace SPI 接入执行。运行 `uv run --locked python 
 插槽位置和合法信号见 [Hook 节点与 signals](docs/12-hooks-and-signals.md)。
 `bricks.spider.form.Spider` 以 Download、Parse、Task、Pipeline 步骤声明流程，每个 Download 开启一段并作为独立
 Work 持久化，中断后从当前段恢复，列表到详情可用 `Download(each=True)` 逐条派发，见[配置式爬虫](docs/13-form-spider.md)。
+`spider.call(seed)` 在进程内同步运行一次消费流程，`spider.serve(...)` 以 HTTP/JSON-RPC 对外提供，
+指标通过 `interlace.metrics.Metrics` 与 `bricks.plugins.metrics.crawler_metrics` 插件采集，
+见[同步调用与 RPC 服务](docs/08-air-spider.md#同步调用与-rpc-服务)和[指标插件](docs/09-domain-plugins.md#指标插件)。
 
 `bricks.plugins` 提供 CSV、SQLite、Mongo、Redis、范围种子源，以及存储、分页、条件动作和 UA 插件，
 见[领域插件](docs/09-domain-plugins.md)。`bricks.proxies` 提供固定、API、Redis、Clash 供应源和按 Slot

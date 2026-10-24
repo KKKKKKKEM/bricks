@@ -23,13 +23,14 @@ from bricks import Items, Request, hooks
 from bricks.hooks import Task
 from bricks.models.body import BodyInput, BodyType
 from bricks.models.headers import HeaderInput
+from bricks.models.options import FORM_STAGE
 from bricks.models.request import HttpMethod, QueryInput
 from bricks.models.response import Engine
 from bricks.parsers.rules import RuleSet
 
 from . import air
 from ._hooks import run_hooks
-from .context import RETRY_OPTION, Affinity, _affinity
+from .context import Affinity, _affinity
 
 __all__ = [
     "Config",
@@ -43,7 +44,6 @@ __all__ = [
     "Task",
 ]
 
-STAGE_OPTION = "crawler.form.stage"  # Work.options 中保存的当前步骤段序号，从 0 开始。
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")  # 按种子字段渲染的 {name} 占位符。
 _ENGINES = frozenset(get_args(Engine))  # Parse 接受的内置解析引擎名称。
 
@@ -569,7 +569,7 @@ class Context(air.Context):
         Returns:
             首次下载之后允许的额外尝试次数。
         """
-        if RETRY_OPTION not in self.options:
+        if self.crawler_options.retry_max is None:
             limit = cast("Spider", self.target)._stage(self).download.max_retry
             if limit is not None:
                 return limit
@@ -597,10 +597,7 @@ class Context(air.Context):
         Raises:
             ValueError: Work 中保存的段号不是非负整数。
         """
-        value = self.options.get(STAGE_OPTION, 0)
-        if type(value) is not int or value < 0:
-            raise ValueError(f"{STAGE_OPTION} must be a non-negative integer")
-        return value
+        return self.crawler_options.form_stage
 
     def submit(
         self,
@@ -620,7 +617,7 @@ class Context(air.Context):
         Returns:
             已接受或去重命中的 Work 列表。
         """
-        merged = {STAGE_OPTION: self.stage, **({} if options is None else options)}
+        merged = {FORM_STAGE: self.stage, **({} if options is None else options)}
         return super().submit(*obj, affinity=affinity, id=id, options=merged)
 
 
@@ -814,5 +811,5 @@ class Spider(air.Spider):
             context.submit(
                 *seeds,
                 affinity=download.affinity,
-                options={STAGE_OPTION: index + 1},
+                options={FORM_STAGE: index + 1},
             )
