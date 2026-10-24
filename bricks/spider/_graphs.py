@@ -164,7 +164,6 @@ class GraphAssembly:
             "after_pipeline": hook(hook_api.AFTER_PIPELINE),
             "retry": CrawlNode(spider, "retry"),
             "before_retry": hook(hook_api.BEFORE_RETRY),
-            "retry_prepare": CrawlNode(spider, "retry_prepare", spider.on_retry),
             "after_retry": hook(hook_api.AFTER_RETRY),
             "retry_wait": CrawlNode(spider, "retry_wait"),
             "complete": CrawlNode(
@@ -203,7 +202,6 @@ class GraphAssembly:
         retry_chain = (
             "retry",
             "before_retry",
-            "retry_prepare",
             "after_retry",
             "retry_wait",
             "before_request",

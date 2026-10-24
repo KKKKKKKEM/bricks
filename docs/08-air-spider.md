@@ -112,10 +112,10 @@ Spider 在构造时和每次构建 Work（submit）时校验，DownloadNode 在�
 | make_request(context) | 返回当前 Request；默认执行 Request(**context.seeds) |
 | parse(context) | 返回 Items 或 list[dict]；默认返回请求和响应快照 |
 | item_pipeline(context) | 执行存储并正常返回 None，继续后置插槽与确认收尾 |
-| on_retry(context) | 可选的业务重试准备，响应可能尚不存在；返回 None，预算和调度由图负责 |
 | is_proxy_error(context) | 同步返回 bool，判断上一次下载失败是否由代理引起；命中时先消耗 crawler.proxy.retry |
 
-`on_retry(context)` 可能在首次下载前运行，因此 `response` 尚不存在；重试耗尽错误包含最后响应状态码，或无响应时的重试触发类型。
+重试前需要调整请求时，注册 `BEFORE_RETRY` 或 `AFTER_RETRY` Hook；Spider 不另设 on_retry 方法。下载前触发的 Retry
+也会经过这两个插槽，此时 `response` 尚不存在。重试耗尽错误包含最后响应状态码，或无响应时的重试触发类型。
 
 默认 `is_proxy_error` 要求响应为传输失败（status_code=-1）、请求带代理，且异常类名为 ProxyError 或错误信息含
 proxy（例如 curl 的 `Failed to connect ... over proxy`）。命中且 `context.proxy_retries` 未达 `crawler.proxy.retry` 时，
@@ -148,7 +148,7 @@ Request、Response、Items 和 TaskQueue 使用当前包的模型与协议，不
       → before_parse → parse → after_parse
       → before_pipeline → pipeline → after_pipeline → complete
 
-重试：retry → before_retry → retry_prepare → after_retry → retry_wait → before_request
+重试：retry → before_retry → after_retry → retry_wait → before_request
 
 子任务：context.submit(seed, affinity="current") → 持久化并本地优先执行
 ```
@@ -210,8 +210,8 @@ survey 是手动消费，不是副作用沙箱。默认内存队列按实例隔�
 
 ## Context 与种子提交
 
-`air.Context` 提供 seeds、request、response、items、target、task_queue、queue_name、form、attempt、retries 和 proxy_retries。
-代理插件经 `context.assign_proxy(address)` 写入可在重试时轮换的代理，`context.proxy_spent` 表示该代理已用于下载。
+`air.Context` 提供 seeds、request、response、items、target、task_queue、queue_name、phase、attempt、retries 和 proxy_retries；
+phase 是当前插槽或业务步骤名称，例如 `"AFTER_REQUEST"`。
 request/response/items 在对应阶段完成之前不可读取。数据在同一图内沿 Output 传递，不保存在共享 Spider 或 Node 上。
 seeds 的修改只影响当前交付，不回写原始队列任务或自动重算 ID。
 
@@ -220,7 +220,7 @@ seeds 的修改只影响当前交付，不回写原始队列任务或自动重�
 仍指向同一次 firing，回调结束后立即恢复；在回调外或使用错误的 Context 类别会抛出 RuntimeError。
 显式参数仍适合需要清楚依赖或复用测试的函数，当前 Context 适合直接 use 的简洁插件，两者可按场景混用。
 
-`context.install(name, value, *, nx=False)` 将进程内业务资源写入当前 Slot，`nx` 只能按关键字传入；`context.obtain(name, default=None)`
+`context.slot_set(name, value, *, nx=False)` 将进程内业务资源写入当前 Slot，`nx` 只能按关键字传入；`context.slot_get(name, default=None)`
 只读取 Slot 业务命名空间。`concurrency=N` 时框架维护 N 个长期 Slot，作用类似 dev 的 N 份线程变量，
 但资源身份不绑定物理线程：同一 Slot 即共享，不同 Slot 即隔离。本地优先子任务继续使用原 Slot；Slot 归还池后，
 后续根任务若再次取得它，也能看到尚未清除的资源。
@@ -253,7 +253,7 @@ submit 返回已接受或去重命中的 Work 列表，不返回尚未执行的 
 跨图派生使用相同口径：`context.emit("detail.parse", payload, affinity="current")` 让目标 Work 持久化并优先复用
 当前 Slot，any 则普通发布等待目标通道领取。目标事件仍须通过 Runtime 注册明确 route；跨图 Event 不自动
 继承源 options，领域配置应放入 payload 或目标 Graph 配置。当前 execution 内无需声明复用，直接通过
-`context.install/obtain` 访问 Slot 资源。
+`context.slot_set/slot_get` 访问 Slot 资源。
 
 流程控制使用 `from bricks import signals` 与 `raise signals.Retry()`、`raise signals.Success()`、
 `raise signals.Failure()`。信号立即退出回调；Success 跳到 complete，Failure 明确拒绝任务。
@@ -261,7 +261,7 @@ submit 返回已接受或去重命中的 Work 列表，不返回尚未执行的 
 Success 是显式提前结束，会跳过尚未执行的存储与后置插槽，不应用于“继续执行但预先登记成功”。
 队列 acked 表示交付完成，业务数据及其幂等状态由存储步骤负责。
 
-`air.InitContext` 提供 target、task_queue、queue_name、seeds、form 和 record。
+`air.InitContext` 提供 target、task_queue、queue_name、seeds、phase 和 record。
 make_seeds 的 kwargs["record"] 与开始生产时的 context.record 为同一个恢复对象；
 在产出种子前推进记录，框架在提交成功之后保存它。更换 context.record 对象时，已有的 Python 局部引用不会随之更换。
 
@@ -303,7 +303,7 @@ is_success(context) 是应用定义的同步布尔判断。False 抛出 Retry；
 因此同一个判断函数可以通过参数注册到多个爬虫，也可在不同子类的 install 中复用。
 show_response 保留 handle、fmt 参数，默认使用标准 logger.debug，fmt=0 为单行摘要，fmt=1 为多行元数据。
 
-use(form, *events) 接受 Task 或包含 func、args、kwargs、index、match 的字典；
+use(phase, *events) 接受 Task 或包含 func、args、kwargs、index、match 的字典；
 同阶段入口和出口都按 index 升序执行，同索引保持声明顺序。
 回调可在首个参数显式接收领域 Context，也可以不声明 Context 参数并在函数内调用对应类型的 `get_context()`；
 后者尤其适合直接注册的通用插件。若函数签名同时兼容两种形式，优先显式传入 Context；后续仍是 args 和 kwargs，
@@ -335,11 +335,15 @@ install 在首次打开时执行一次，可调用 super().install() 扩展默�
 ```python
 combined.run()                                    # 完整生产与消费实例
 producer.run("init")                              # 只初始化的实例
-worker.run("spider", kwargs={"timeout": 60})        # 只消费已有任务的实例
+worker.run("spider", timeout=60)                  # 只消费已有任务的实例
 ```
 
 每次示例调用使用独立 Spider 实例；关闭后的实例不可重新打开。
+`run(mode="all", *, timeout=None)` 的 mode 为 all、init 或 spider，结束后关闭实例；init 只初始化，不接受 timeout。
+run、run_all、run_init 与 run_spider 都返回 RunReport，初始化记录在 `report.initialization`。
 需要分开运行两阶段时，可以在同一个 with Spider(...) 作用域中调用 run_init()、run_spider()。
+`spider.submit(*seeds, id=None, options=None)` 在运行前或运行中提交种子，与 `context.submit` 一样返回 Work 列表，
+整批先校验再入队，但没有 affinity。
 forever=True 的消费者在空队列时仍保持运行，外部 close 会通知等待入口退出，再停止领取并清理当前交付。
 初始化失败会记录断点并允许已经提交的种子排空，原始异常仍向调用方传播。
 InitRecord 表示生产状态，RunReport.counts 表示当前共享队列快照，不替代各 Worker 的异常收集或外部生产者的结束协议。

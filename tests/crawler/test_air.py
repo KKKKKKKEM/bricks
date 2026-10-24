@@ -208,7 +208,7 @@ def test_two_graphs_stream_seeds_before_source_finishes():
             "stream@v1.crawl",
             "stream@v1.call",
         }
-        report = spider.run(kwargs={"timeout": 5})
+        report = spider.run(timeout=5)
     assert report.initialization.status == "succeeded"
     assert report.counts == {"pending": 0, "leased": 0, "acked": 2, "dead": 0}
     assert len(spider.stored) == 2 and spider.source_closed
@@ -257,7 +257,7 @@ def test_local_child_claim_hook_waits_for_parent_slot_graph():
     spider = ParentChildSpider(concurrency=2)
     spider.submit({"url": "https://example.com/parent", "page": "parent"})
     try:
-        report = spider.run(kwargs={"timeout": 5})
+        report = spider.run(timeout=5)
         assert report.counts["acked"] == 2
         assert child_hook_entered.is_set()
         assert hook_busy_values == [False]
@@ -297,7 +297,7 @@ def test_http_response_dynamic_seeds_and_default_option_boundary(server):
         downloader=CurlCffiDownloader(trust_env=False),
     )
     spider.submit({"url": base + "/parent"}, options={"mode": "parent"})
-    report = spider.run(kwargs={"timeout": 5})
+    report = spider.run(timeout=5)
     assert report.counts["acked"] == 2
     assert sorted(path for _, path, _, _ in seen) == ["/child", "/parent"]
     records = {record["url"]: record for record in spider.stored}
@@ -313,7 +313,7 @@ def test_download_retries_are_bounded_before_parse_and_storage():
         downloader=downloader,
         options={"crawler.retry.delay": 0.01},
     )
-    report = spider.run(kwargs={"timeout": 5})
+    report = spider.run(timeout=5)
     assert report.counts["acked"] == 1
     assert len(downloader.calls) == 3
     assert len({id(request) for request in downloader.calls}) == 3
@@ -338,11 +338,11 @@ def test_download_failure_rejects_and_does_not_store(path, expected, rejected):
         downloader=downloader,
     )
     if rejected:
-        report = spider.run(kwargs={"timeout": 5})
+        report = spider.run(timeout=5)
         assert sum(report.rejected.values()) == 1
     else:
         with pytest.raises(ExecutionError):
-            spider.run(kwargs={"timeout": 5})
+            spider.run(timeout=5)
     assert len(downloader.calls) == expected
     assert spider.stored == []
     assert spider.report().counts["dead"] == 1
@@ -371,7 +371,7 @@ def test_pipeline_failure_does_not_ack_or_retry_download():
         downloader=downloader,
     )
     with pytest.raises(ExecutionError, match="storage broken"):
-        spider.run(kwargs={"timeout": 5})
+        spider.run(timeout=5)
     assert spider.report().counts["acked"] == 0
     assert spider.report().counts["dead"] == 1
     assert len(downloader.calls) == 1
@@ -440,10 +440,10 @@ def test_hook_order_conditions_mutations_and_instance_isolation():
             raise AssertionError("condition was ignored")
 
     first, second = Hooked(), Hooked()
-    first.run(kwargs={"timeout": 5})
+    first.run(timeout=5)
     assert first.trace == ["before-1", "before-2", "after-1", "after-2"]
     assert second.trace == []
-    second.run(kwargs={"timeout": 5})
+    second.run(timeout=5)
     assert second.trace == first.trace
     assert len(first.stored) == len(second.stored) == 1
 
@@ -503,7 +503,7 @@ def test_async_methods_and_async_downloader_preserve_cancellation():
         limits=ExecutionLimits(timeout=0.1),
     )
     with pytest.raises(ExecutionTimeoutError):
-        spider.run(kwargs={"timeout": 5})
+        spider.run(timeout=5)
     assert cleaned.is_set()
     assert spider.report().counts["dead"] == 1
 
@@ -537,11 +537,11 @@ def test_separate_phases_and_custom_context_factory():
     )
     spider.Context = CustomContext
     with spider:
-        initial = spider.run_init()
+        initial = spider.run_init().initialization
         assert initial.status == "succeeded" and initial.progress == {"next": 1}
         assert spider.report().counts["pending"] == 1
         assert spider.stored == []
-        assert spider.run_init().status == "succeeded"
+        assert spider.run_init().initialization.status == "succeeded"
         assert spider.run_spider(timeout=5).counts["acked"] == 1
     assert all(context.label == "custom" for context in constructed)
     assert len(constructed) == len({id(context) for context in constructed})
@@ -576,7 +576,7 @@ def test_partial_initialization_failure_drains_and_can_resume():
 
     first = FailingSource(queue_name="resume@v1", task_queue=queue)
     with pytest.raises(ExecutionError, match="source broken"):
-        first.run(kwargs={"timeout": 5})
+        first.run(timeout=5)
     assert first.source_closed and len(first.stored) == 1
     assert queue.initialization().status == "failed"
     second = SimpleSpider(
@@ -584,7 +584,7 @@ def test_partial_initialization_failure_drains_and_can_resume():
         queue_name="resume@v1",
         task_queue=queue,
     )
-    assert second.run(kwargs={"timeout": 5}).counts["acked"] == 2
+    assert second.run(timeout=5).counts["acked"] == 2
     assert [record["url"] for record in second.stored] == ["https://example.com/two"]
 
 
@@ -651,7 +651,7 @@ def test_unsupported_hook_and_callback_lifecycle_reentry_fail_explicitly():
 
     spider = Reentrant([{"url": "https://example.com/one"}])
     with pytest.raises(ExecutionError, match="cannot run inside"):
-        spider.run(kwargs={"timeout": 5})
+        spider.run(timeout=5)
 
 
 def test_dev_parameters_seed_shapes_and_record_kwargs():
@@ -714,7 +714,7 @@ def test_dev_parameters_seed_shapes_and_record_kwargs():
         forever=False,
     )
     assert spider.concurrency == 2 and spider.downloader is downloader
-    report = spider.run("all", args=[], kwargs={"timeout": 5})
+    report = spider.run("all", timeout=5)
     assert report.counts["acked"] == 3
     assert report.initialization.progress == {"page": 2}
     assert all(request.proxy == "http://127.0.0.1:7890" for request in downloader.calls)
@@ -764,8 +764,8 @@ def test_reusable_response_plugins_registered_with_use():
         [{"url": "https://example.com/forbidden"}], queue_name="plugin-second"
     )
     assert not hasattr(first, "check_response")
-    assert first.run(kwargs={"timeout": 5}).counts["acked"] == 1
-    assert second.run(kwargs={"timeout": 5}).counts["acked"] == 1
+    assert first.run(timeout=5).counts["acked"] == 1
+    assert second.run(timeout=5).counts["acked"] == 1
     assert checks == ["plugin-first", "plugin-second"]
     assert len(messages) == 2 and all("status=403" in message for message in messages)
 
@@ -815,7 +815,7 @@ def test_use_plugins_can_read_isolated_current_context_without_parameter():
         ],
         concurrency=2,
     )
-    assert spider.run(kwargs={"timeout": 5}).counts["acked"] == 2
+    assert spider.run(timeout=5).counts["acked"] == 2
     assert {(marker, url) for marker, url, _ in seen} == {
         ("sync", "https://example.com/first"),
         ("async", "https://example.com/first"),
@@ -852,7 +852,7 @@ def test_success_and_failure_signals_skip_download():
                 raise signals.Success()
 
     first = StopEarly([{"url": "https://example.com/skip"}], downloader=downloader)
-    assert first.run(kwargs={"timeout": 5}).counts["acked"] == 1
+    assert first.run(timeout=5).counts["acked"] == 1
     assert downloader.calls == [] and first.stored == []
     second = StopEarly(
         [{"url": "https://example.com/skip", "failed": True}],
@@ -860,7 +860,7 @@ def test_success_and_failure_signals_skip_download():
         options={"spider.run.strict": True},
     )
     with pytest.raises(RejectedTasksError, match="seed marked as failed x1"):
-        second.run(kwargs={"timeout": 5})
+        second.run(timeout=5)
     assert second.report().counts["dead"] == 1
     assert downloader.calls == []
 
@@ -965,7 +965,7 @@ def _distributed_worker(redis_url, queue_name, prefix, barrier):
     )
     try:
         barrier.wait(10)
-        spider.run("spider", kwargs={"timeout": 15})
+        spider.run("spider", timeout=15)
     finally:
         spider.close()
         client.close()
@@ -994,7 +994,7 @@ def test_redis_two_process_spiders_consume_http_seeds(server):
         task_queue=queue,
         queue_name=queue_name,
     )
-    initial = producer.run("init")
+    initial = producer.run("init").initialization
     assert initial.status == "succeeded"
     process_context = multiprocessing.get_context("spawn")
     barrier = process_context.Barrier(2)
@@ -1087,7 +1087,7 @@ def test_static_class_plugins_and_inheritance_override():
                 context: 当前上下文。
                 marker: 显式注册参数。
             """
-            trace.append((marker, context.form))
+            trace.append((marker, context.phase))
 
         @hooks.on(hooks.AFTER_REQUEST, kwargs={"marker": "class"}, index=2)
         @classmethod
@@ -1099,9 +1099,9 @@ def test_static_class_plugins_and_inheritance_override():
                 marker: 显式注册参数。
             """
             assert cls is Child
-            trace.append((marker, context.form))
+            trace.append((marker, context.phase))
 
-    Child([{"url": "https://example.com/one"}]).run(kwargs={"timeout": 5})
+    Child([{"url": "https://example.com/one"}]).run(timeout=5)
     assert trace == [("static", hooks.AFTER_REQUEST), ("class", hooks.AFTER_REQUEST)]
 
 
@@ -1123,7 +1123,7 @@ def test_core_middleware_replacement_rebinds_domain_inputs():
         )
 
     spider = SimpleSpider()
-    work = spider.submit({"url": "https://example.com/original"})
+    [work] = spider.submit({"url": "https://example.com/original"})
     with spider:
         spider.runtime.hooks.on(
             NODE_CALL,
@@ -1177,7 +1177,7 @@ def test_initialization_lease_is_renewed_during_slow_seed_factory(renewals):
                 assert queue.acquire_init("competitor") is None
             finally:
                 release.set()
-            assert running.result(5).status == "succeeded"
+            assert running.result(5).initialization.status == "succeeded"
     finally:
         release.set()
         spider.close()
@@ -1211,7 +1211,7 @@ def test_failure_signal_prevents_default_pipeline():
             raise signals.Failure()
 
     spider = Failed(downloader=FakeDownloader())
-    report = spider.run(kwargs={"timeout": 5})
+    report = spider.run(timeout=5)
     assert report.rejected == {"seed marked as failed": 1}
     assert spider.report().counts["dead"] == 1
 
@@ -1280,7 +1280,7 @@ def test_native_async_download_and_business_methods_complete(server):
             stored.extend(context.items)
 
     spider = AsyncBusiness(downloader=AsyncCurlCffiDownloader(trust_env=False))
-    assert spider.run(kwargs={"timeout": 5}).counts["acked"] == 1
+    assert spider.run(timeout=5).counts["acked"] == 1
     assert len(loops) == 1 and stored[0]["path"] == "/echo"
 
 
@@ -1375,7 +1375,7 @@ def test_borrowed_slot_session_is_reused_and_remains_caller_owned(server):
 
     try:
         spider = SessionSpider(downloader=factory, slots=pool)
-        assert spider.run(kwargs={"timeout": 5}).counts["acked"] == 2
+        assert spider.run(timeout=5).counts["acked"] == 2
         assert stored[-1]["cookie"] == "account=account"
         assert len(slot_ids) == 2 and len(set(slot_ids)) == 1
         assert (
@@ -1519,19 +1519,19 @@ def test_framework_manages_slot_sessions_and_context_resources():
                 context: 当前页 Context。
             """
             if context.seeds["page"] == 1:
-                assert context.install("account", "A", nx=True) == "A"
+                assert context.slot_set("account", "A", nx=True) == "A"
             observed.append(
                 (
                     context.seeds["page"],
                     context.items[0],
-                    context.obtain("account"),
+                    context.slot_get("account"),
                     id(context.slot),
                 )
             )
 
     factory = Factory()
     spider = Managed(downloader=factory, concurrency=2)
-    assert spider.run(kwargs={"timeout": 5}).counts["acked"] == 2
+    assert spider.run(timeout=5).counts["acked"] == 2
     # 会话在 Slot 首次下载时按代理懒建；两页沿同一 Slot 执行，只建一个会话。
     assert len(factory.sessions) == 1
     assert factory.closed == list(reversed(factory.sessions))
@@ -1588,7 +1588,7 @@ def test_context_emit_selects_slot_reuse_for_arbitrary_target_graph():
     )
     spider.runtime.route("child.local", graph="child@v1", queue=spider.queue_name)
     spider.runtime.route("child.any", graph="child@v1", queue=spider.queue_name)
-    assert spider.run(kwargs={"timeout": 5}).counts["acked"] == 3
+    assert spider.run(timeout=5).counts["acked"] == 3
     identities = dict(observed)
     assert identities["local"] == identities["source"]
     assert set(identities) == {"source", "local", "any"}
@@ -1930,7 +1930,7 @@ def test_auto_session_routes_rotating_proxies_to_per_proxy_sessions():
         proxy=Manager(Rotating()),
         options={"spider.session.proxies": 1},
     )
-    spider.run(kwargs={"timeout": 5})
+    spider.run(timeout=5)
     rows = spider.stored
     assert [row["session"] for row in rows] == [
         "http://a.test:1",
@@ -2013,7 +2013,7 @@ def test_task_options_override_retry_budget_and_success_rule():
         {"url": "https://example.test/forbidden"},
         options={"crawler.response.ok": "response.status_code == 403"},
     )
-    report = spider.run("spider", kwargs={"timeout": 5})
+    report = spider.run("spider", timeout=5)
     assert report.rejected == {"download retries exhausted; last status=500": 1}
     assert queue.counts() == {"pending": 0, "leased": 0, "acked": 2, "dead": 1}
     assert {row["url"]: row["attempt"] for row in spider.stored} == {
@@ -2030,7 +2030,7 @@ def test_business_rejections_do_not_interrupt_but_program_errors_raise():
     spider.submit({"url": "https://example.test/fail"})
     spider.submit({"url": "https://example.test/forbidden"})
     spider.submit({"url": "https://example.test/ok"})
-    report = spider.run("spider", kwargs={"timeout": 5})
+    report = spider.run("spider", timeout=5)
     assert report.counts == {"pending": 0, "leased": 0, "acked": 1, "dead": 2}
     assert len(report.rejections) == 2
     assert report.rejected == {
@@ -2041,7 +2041,7 @@ def test_business_rejections_do_not_interrupt_but_program_errors_raise():
     broken = SimpleSpider(task_queue=MemoryTaskQueue("broken"))
     broken.submit({"url": "https://example.test/boom"})
     with pytest.raises(Exception, match="downloader configuration broken"):
-        broken.run("spider", kwargs={"timeout": 5})
+        broken.run("spider", timeout=5)
     assert broken.report().rejections == ()
 
 
@@ -2054,7 +2054,7 @@ def test_strict_run_drains_queue_before_reporting_rejections():
     for index in range(5):
         spider.submit({"url": f"https://example.test/ok/{index}"})
     with pytest.raises(RejectedTasksError) as caught:
-        spider.run("spider", kwargs={"timeout": 5})
+        spider.run("spider", timeout=5)
     assert queue.counts() == {"pending": 0, "leased": 0, "acked": 5, "dead": 3}
     assert caught.value.report.rejected == {"response rejected: status=403": 3}
     assert "3 task(s) rejected" in str(caught.value)
@@ -2153,6 +2153,31 @@ def test_generator_parse_is_rejected_with_rewrite_hint():
 
     spider = Yielding([{"url": "https://example.com/one"}], downloader=FakeDownloader())
     with pytest.raises(ExecutionError, match=r"return Items\(\.\.\.\) or a list"):
-        spider.run(kwargs={"timeout": 5})
+        spider.run(timeout=5)
     assert started == [] and spider.stored == []
     assert spider.report().rejected == {}
+
+
+def test_run_modes_return_reports_and_validate_arguments():
+    """run 只接受三种模式，init 不接受 timeout，三种入口都返回 RunReport。"""
+    with pytest.raises(ValueError, match="mode must be"):
+        SimpleSpider().run("crawl")
+    with pytest.raises(ValueError, match="timeout does not apply"):
+        SimpleSpider().run("init", timeout=1)
+    report = SimpleSpider([{"url": "https://example.com/one"}]).run("init")
+    assert report.initialization.status == "succeeded"
+    assert report.counts["pending"] == 1
+
+
+def test_spider_submit_accepts_several_seeds_atomically():
+    """Spider.submit 与 Context.submit 签名一致，非法种子使整批都不入队。"""
+    spider = SimpleSpider()
+    works = spider.submit(
+        {"url": "https://example.com/a"}, {"url": "https://example.com/b"}
+    )
+    assert len(works) == 2 and spider.report().counts["pending"] == 2
+    with pytest.raises(TypeError):
+        spider.submit({"url": "https://example.com/c"}, ["not a seed"])
+    assert spider.report().counts["pending"] == 2
+    with pytest.raises(ValueError, match="exactly one seed"):
+        spider.submit({"url": "https://example.com/d"}, {"url": "x"}, id="d")

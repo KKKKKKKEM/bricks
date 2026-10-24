@@ -73,7 +73,7 @@ QueueBackend 通过 Interlace SPI 接入执行。运行 `uv run --locked python 
 同一队列实例的占用共享续租线程，退出时执行显式确认或释放。
 
 `bricks.spider.air.Spider` 提供种子初始化与消费两张图，保留 `downloader/task_queue/queue_name` 等业务参数，
-按 concurrency 自动管理同步 Slot Session，并通过 `Context.install/obtain` 共享 Slot 资源；
+按 concurrency 自动管理同步 Slot Session，并通过 `Context.slot_set/slot_get` 共享 Slot 资源；
 `Context.submit/emit(affinity="current")` 将派生 Work 持久化并优先延续当前 Slot。
 可复用的 `bricks.plugins.on_request` 插件处理响应检查、展示与代理设置。
 运行 `uv run --locked python -m examples.air_spider --output products.sqlite3` 可验证分页、详情发现与幂等存储，

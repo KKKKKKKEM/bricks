@@ -13,8 +13,7 @@ flowchart LR
     After -->|正常| Parse[before_parse HookNode]
     After -->|Retry| Budget[retry 检查预算]
     Budget --> BR[before_retry HookNode]
-    BR --> Prepare[retry_prepare]
-    Prepare --> AR[after_retry HookNode]
+    BR --> AR[after_retry HookNode]
     AR --> Wait[retry_wait]
     Wait --> Before
     After -->|Success| Complete[complete]
@@ -47,7 +46,7 @@ class MySpider(Spider):
             raise signals.Failure("页面不存在")
 ```
 
-也可使用 `spider.use(form, {"func": callback, "kwargs": ..., "index": ...})`。
+也可使用 `spider.use(phase, {"func": callback, "kwargs": ..., "index": ...})`。
 声明在打开时固定，同索引保持注册顺序，实例方法、静态方法、类方法和继承覆盖沿用相同规则。
 match 必须同步返回 bool，普通 Hook 必须返回 None，不能返回节点名或 Output。
 
@@ -105,7 +104,7 @@ Signal 继承 BaseException，因此业务代码中的 `except Exception` 不会
 | 初始化 | BEFORE/AFTER_PUT_SEEDS | 当前批次提交前后 HookNode |
 | 消费 | BEFORE/AFTER_MAKE_REQUEST | 请求构造前后 HookNode |
 | 消费 | BEFORE/AFTER_REQUEST | 下载前后 HookNode |
-| 重试 | BEFORE/AFTER_RETRY | 有界重试分支内，on_retry 前后 HookNode |
+| 重试 | BEFORE/AFTER_RETRY | 有界重试分支内的前后 HookNode，重试前调整请求在此注册 |
 | 消费 | BEFORE/AFTER_PARSE | 解析前后 HookNode |
 | 消费 | BEFORE/AFTER_PIPELINE | 存储前后 HookNode |
 | 实例 | BEFORE_START | 首次打开完成装配前，以同步 HookContext 调用 |
@@ -115,7 +114,7 @@ Signal 继承 BaseException，因此业务代码中的 `except Exception` 不会
 | 错误 | ERROR_OCCURRED | 业务及插槽普通异常，以同步 HookContext 通知 |
 
 生命周期和领取插槽不塞入已经开始的消费图，也不声称拥有不存在的 Graph execution。
-它们的 `HookContext` 提供 target、form、task_queue、queue_name；领取后另有 lease、seeds 和 slot。
+它们的 `HookContext` 提供 target、phase、task_queue、queue_name；领取后另有 lease、seeds 和 slot。
 错误插槽提供原异常 error 和原上下文 source。回调不可自行确认或续租 lease，也不能恢复原异常。
 
 非图插槽只接受同步回调，异步声明在注册阶段失败，运行中返回的 Awaitable 也明确拒绝。

@@ -121,10 +121,10 @@ from bricks import Request
 from bricks.proxies import extract_nodes, fetch_subscription, subscribe
 
 # 已有 YAML 或 Base64 VMess 内容，用纯解析函数。
-nodes = extract_nodes(subscription_text, form="clash")
+nodes = extract_nodes(subscription_text, kind="clash")
 # 网络订阅必须显式调用，不把内容字符串自动解释成 URL 或路径。
 remote_nodes = fetch_subscription(
-    Request("https://provider.example/subscription", timeout=20), form="clash"
+    Request("https://provider.example/subscription", timeout=20), kind="clash"
 )
 config_text = subscribe(nodes, remote_nodes, http_port=7890, socks_port=7891)
 ```

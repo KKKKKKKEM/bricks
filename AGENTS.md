@@ -248,17 +248,19 @@
    业务 Hook 的每个插槽必须是独立 HookNode，节点按 index 执行该阶段回调快照，不通过 Interlace 节点中间件装配业务插槽。
    初始化逐项或逐批通过 make_seeds、next_seed、submit、checkpoint 推进，消费通过
    make_request、download、parse、pipeline、complete 推进，并显式连接对应 before/after 插槽。
-   retry、before_retry、retry_prepare、after_retry、retry_wait 构成回到 before_request 的重试分支。
+   retry、before_retry、after_retry、retry_wait 构成回到 before_request 的重试分支；重试前的业务调整只经
+   BEFORE_RETRY/AFTER_RETRY 插槽，Spider 不另设 on_retry 方法。
    普通返回值沿 Output 传递，不隐式发布 Event；不保留 check_response、ResponseAction 或 action/stop 路由。
 3. 业务入口为 make_seeds(context, **kwargs)、make_request(context)、parse(context)、item_pipeline(context)。
    make_seeds 的 record 关键字携带恢复记录，接受 None、单个 dict、记录列表或同步迭代器，迭代器可产出一批记录；
    parse 明确接受 Items 或 list[dict]。业务方法可以返回 Awaitable，但不接受异步生成器或隐式函数参数注入。
-4. air.Context 的 seeds/request/response/items/target/task_queue/queue_name/form 为领域接口，
-   它与 air.InitContext 均通过 Context(parent=base) 组合核心执行能力；Spider.Context 可替换并重写 make。
+4. air.Context 的 seeds/request/response/items/target/task_queue/queue_name/phase 为领域接口，phase 是当前插槽或
+   业务步骤名称；`form` 只用作配置式爬虫模块名，不作为阶段或其他参数名。
+   air.Context 与 air.InitContext 均通过 Context(parent=base) 组合核心执行能力；Spider.Context 可替换并重写 make。
    当前数据由图内载体传递，实例每次 firing 独立创建；核心节点中间件替换输入后节点绑定最终输入。
    业务方法与 Hook 实际调用期间通过 ContextVar 绑定当前领域 Context；Context、InitContext 和 HookContext
    的 get_context() 提供同类别的便捷访问，按同步调用链与异步任务隔离，回调结束后恢复上一层绑定。
-   install(name, value, *, nx=False) 与 obtain(name, default=None) 只使用 Slot 内 Bricks 业务命名空间；同一 Slot
+   slot_set(name, value, *, nx=False) 与 slot_get(name, default=None) 只使用 Slot 内 Bricks 业务命名空间；同一 Slot
    在 Spider 生命周期内跨任务复用资源，不因物理线程变化失效，不同 Slot 互相隔离。
    Context 中的运行时对象不跨队列序列化，提交只接受 JSON 种子。
    context.fetch(request) 与异步同义的 afetch 经 build_download_node() 的选择与当前 Slot 会话立即下载附加请求，
@@ -273,7 +275,8 @@
 5. context.submit(*obj, affinity="current") 与初始化使用同一稳定 Work 构造规则，返回 Work 列表而不返回未来 Context。
    current 通过实例内本地 Event 交给 QueueBackend.put_claim，原子持久化并优先携带当前 SlotLease 执行；any 只 put
    到待领取队列，允许任意 Worker 领取。两者均持久化并按 Work.id 去重；显式 id 只用于单种子提交，配置从
-   Spider 默认值加本次覆盖构造。父执行后续失败不撤回已接受子任务；本地进程异常后由租约恢复且不保证原 Slot。
+   Spider 默认值加本次覆盖构造。Spider.submit(*seeds, id=None, options=None) 使用相同签名与返回值但没有 affinity，
+   整批先校验再入队。父执行后续失败不撤回已接受子任务；本地进程异常后由租约恢复且不保证原 Slot。
    context.emit(type, payload, affinity="current") 为跨图通用入口：current 使用核心本地 emitter 并由 QueueBackend
    持久化目标 Work，any 通过 Runtime 普通发布；目标 Event 路由仍显式装配，跨图不继承源 options。
 6. 业务流程通过 `bricks.signals` 的 Retry、Success、Failure、Skip、Pass 明确中断回调；
@@ -292,8 +295,8 @@
    show_response 两种格式均隐藏 URL/代理认证、查询值及片段；详细格式仅列请求头名称，不输出头值或请求体内容。
    Script namespace 仅含 context/ctx/request/response/items/seeds/signals/logger/time 及调用方显式传入对象；
    ERROR_OCCURRED 在异步路径也同步运行于共享事件循环线程，阻塞 Hook 会阻塞其他 Slot。
-8. 共享 Hook 使用 on(form, index, args, kwargs, match) 与 Task(func, args, kwargs, index, match)，
-   Spider.use(form, *events) 接受 Task 或参数字典。插件可以首个参数显式接收 Context，也可声明不接收 Context 并在
+8. 共享 Hook 使用 on(phase, index, args, kwargs, match) 与 Task(func, args, kwargs, index, match)，
+   Spider.use(phase, *events) 接受 Task 或参数字典。插件可以首个参数显式接收 Context，也可声明不接收 Context 并在
    调用期间通过对应领域类的 get_context() 取得；两种签名均可绑定时优先显式传参，其他业务参数不按名称反射注入。
    声明按实例绑定，支持方法继承覆盖，
    func 与同步布尔 match 使用相同 Context 传入规则；图内支持同步与异步回调及同步布尔条件，
@@ -301,7 +304,8 @@
    普通回调返回 None，节点实例不保存执行状态；一个插槽的一组异步回调保持串行等待，调用线程不作为资源身份。
    hooks.current 可消除可选首参造成的签名歧义；当前 Context 不使用线程局部栈或进程级单例。
    不支持的阶段在 Spider.use 注册时明确拒绝；install 在打开时执行一次。
-9. run(task_name="all", args=None, kwargs=None) 分派 all/init/spider 并在结束时关闭资源。
+9. run(mode="all", *, timeout=None) 分派 all/init/spider 并在结束时关闭资源，init 模式拒绝 timeout；
+   run、run_all、run_init 与 run_spider 均返回 RunReport，初始化记录位于 report.initialization。
    run_init、run_spider 可在 with Spider(...) 中分开运行；forever=True 时消费者保持服务直到外部关闭。
    初始化调用线程等待 Execution 时定期续租，不为每条种子新增线程。失败记录与检查点受初始化 token/fence 保护。
    初始化失败仍允许已提交种子排空，原始失败继续传播。
@@ -372,7 +376,7 @@
 5. Manager 不创建全局注册表、单例或线程局部状态，get/now/use/recover/clear/fresh 明确接收 Slot。
    不同管理器在同一 Slot 使用不同命名空间；阈值按新请求次数与明确 ttl 秒数计算，use 只登记，
    下一次 get 才回收。Air 自动会话按请求代理路由到 Slot 内对应会话，auth、threshold 与 ttl 照常生效。
-   Before.set_proxy 经 context.assign_proxy 写入并登记所选代理；重试回到 before_request 且该代理已用于下载时，
+   Before.set_proxy 经私有的 context._assign_proxy 写入并登记所选代理；重试回到 before_request 且该代理已用于下载时，
    默认经 context.clear_proxy 丢弃（托管代理不放回供应池）并重新选择；执行配置 crawler.proxy.rotate=False 时沿用原代理，
    可在 Spider options 或单个任务中设置，set_proxy 不另设同义参数。
    业务或 make_request 显式设置的 Request.proxy 不登记，重试中始终保留。context.clear_proxy 显式丢弃请求代理并清除地址。

@@ -145,7 +145,7 @@ def open_resources(spider: Any, initial: Graph, crawl: Graph, call: Graph) -> No
         runtime.register(spider.crawl_graph_name, crawl)
         runtime.register(spider.call_graph_name, call)
         runtime.route(
-            spider.local_submission_event_name,
+            spider._local_submission_event_name,
             graph=spider.crawl_graph_name,
             queue=spider.task_queue.name,
         )

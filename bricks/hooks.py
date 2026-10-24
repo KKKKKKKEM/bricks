@@ -159,16 +159,16 @@ class Binding:
     """当前实例待绑定的一项阶段声明。
 
     Attributes:
-        form: 原样保存的阶段名称，由领域框架验证支持范围。
+        phase: 原样保存的阶段名称，由领域框架验证支持范围。
         task: 可复用的调用描述。
     """
 
-    form: str
+    phase: str
     task: Task
 
 
 def on(
-    form: str,
+    phase: str,
     *,
     index: int | float | None = None,
     args: tuple[Any, ...] = (),
@@ -178,7 +178,7 @@ def on(
     """在方法上声明插件调用，保持原函数及静态／类方法描述符。
 
     Args:
-        form: 阶段名称，如 AFTER_REQUEST。
+        phase: 阶段名称，如 AFTER_REQUEST。
         index: 执行索引，较小值优先。
         args: 追加位置参数。
         kwargs: 追加关键字参数。
@@ -212,7 +212,7 @@ def on(
         setattr(  # noqa: B010
             function,
             "__bricks_hooks__",
-            (Binding(form, task), *getattr(function, "__bricks_hooks__", ())),
+            (Binding(phase, task), *getattr(function, "__bricks_hooks__", ())),
         )
         return callback
 
@@ -241,7 +241,7 @@ def collect(instance: object) -> tuple[Binding, ...]:
                 task = declaration.task
                 result.append(
                     Binding(
-                        declaration.form,
+                        declaration.phase,
                         Task(
                             getattr(instance, name),
                             task.args,

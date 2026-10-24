@@ -435,7 +435,7 @@ def test_subscription_fetch_cfg_and_malformed_vmess():
         link = "vmess://" + base64.b64encode(payload.encode()).decode()
         content = base64.b64encode(link.encode()).decode()
         with pytest.raises(ValueError):
-            extract_nodes(content, form="v2ray")
+            extract_nodes(content, kind="v2ray")
 
 
 @pytest.mark.parametrize("key_type", ["set", "list"])
@@ -562,12 +562,12 @@ def test_subscription_parsing_and_nonmutating_config():
     }
     link = "vmess://" + base64.b64encode(json.dumps(payload).encode()).decode()
     content = base64.b64encode(link.encode()).decode()
-    result = extract_nodes(content, form="v2ray")
+    result = extract_nodes(content, kind="v2ray")
     assert result[0]["tls"] is True and result[0]["ws-opts"]["path"] == "/ws"
     payload["aid"] = ""
     link = "vmess://" + base64.b64encode(json.dumps(payload).encode()).decode()
     content = base64.b64encode(link.encode()).decode()
-    assert extract_nodes(content, form="v2ray")[0]["alterId"] == 0
+    assert extract_nodes(content, kind="v2ray")[0]["alterId"] == 0
     with pytest.raises(yaml.constructor.ConstructorError):
         extract_nodes("!!python/object:builtins.object {}")
     for content in ("error: token expired", "proxies: []"):

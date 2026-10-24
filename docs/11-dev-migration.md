@@ -16,7 +16,10 @@
 | `context.success()` | 删除；存储正常返回即在后置插槽完成后确认，提前结束使用 `raise signals.Success()` |
 | `form.Spider`、`template.Spider` | 合并为 `bricks.spider.form.Spider`，按 Download 分段并逐段持久化，见[配置式爬虫](13-form-spider.md) |
 | `events.on`、const、当前 Context | `bricks.hooks.on`、hooks 常量；回调可显式接收 Context 或在调用期间使用同类 Context.get_context()，业务插槽由 HookNode 执行 |
-| `use(form, {...})` | 保留 func/args/kwargs/index/match 字段；func 与 match 必须是实际函数 |
+| `use(form, {...})`、`context.form` | 改为 `use(phase, {...})`、`context.phase`；func/args/kwargs/index/match 字段不变，func 与 match 必须是实际函数 |
+| `context.install/obtain`（线程变量） | `context.slot_set/slot_get`，按 Slot 而非线程隔离 |
+| `on_retry(context)` | 删除；改为注册 `BEFORE_RETRY` / `AFTER_RETRY` Hook |
+| `run(task_name, args, kwargs)` | `run(mode="all", *, timeout=None)`，各运行入口均返回 RunReport |
 | `plugins.make_seeds.by_*` | CSV、SQLite、Mongo、Redis、range 均已迁入；显式传入恢复 record |
 | `by_csv` 的 `<TABLE>` SQL | 继续支持并替换为临时 data 表；SQL 值参数使用占位符 |
 | SQLite/Mongo 的 Bricks DB 包装器 | 使用原生 SQLite Connection 或 Mongo Collection；不恢复整个 DB 包装层 |
@@ -56,7 +59,7 @@ Context.success/failure/retry、ResponseAction 和 action/stop 标志已移除�
 `raise signals.Retry()` 只在 after_make_request、before_request、download、after_request 有效，
 回边经过重试前后插槽返回 before_request；同次图执行保留 Slot，重新领取任务不保证原 Slot。
 
-`on_retry(context)` 可能运行在首次下载之前，因此 `context.response` 并非始终可用。
+`BEFORE_RETRY` / `AFTER_RETRY` Hook 可能运行在首次下载之前，因此 `context.response` 并非始终可用。
 `crawler.retry.max` 默认 5，与 dev 的 `Request.max_retry` 一致。有界重试耗尽和单个 Failure（例如 404）
 都进入死信并记入 `RunReport.rejections` 与按原因计数的 `RunReport.rejected`，其余种子照常消费，
 对应 dev 的 failure 备份队列；死信可用 `revive_dead` 重新投放。设置 `spider.run.strict` 为 True 时在队列排空后抛出

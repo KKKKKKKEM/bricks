@@ -273,7 +273,7 @@ def test_skip_pipeline_preserves_after_pipeline_slot():
         raise signals.Skip()
 
     spider.use(hooks.BEFORE_PIPELINE, {"func": skip})
-    spider.use(hooks.AFTER_PIPELINE, {"func": lambda ctx: observed.append(ctx.form)})
+    spider.use(hooks.AFTER_PIPELINE, {"func": lambda ctx: observed.append(ctx.phase)})
     assert spider.run().counts["acked"] == 1
     assert spider.stored == [] and observed == [hooks.AFTER_PIPELINE]
 
@@ -344,7 +344,7 @@ def test_predownload_retry_is_bounded_even_without_a_network_attempt():
 
     spider.use(hooks.BEFORE_REQUEST, {"func": retry})
     with pytest.raises(RejectedTasksError, match="retries exhausted"):
-        spider.run(kwargs={"timeout": 3})
+        spider.run(timeout=3)
     assert spider.downloader.calls == [] and spider.report().counts["dead"] == 1
 
 
@@ -467,7 +467,7 @@ def test_initial_put_slots_filter_batch_and_checkpoint_after_after_hook():
 
     spider.use(hooks.BEFORE_PUT_SEEDS, {"func": before})
     spider.use(hooks.AFTER_PUT_SEEDS, {"func": after})
-    record = spider.run("init")
+    record = spider.run("init").initialization
     assert record.progress == {"position": 1}
     assert observed == ["before", "after"] and spider.report().counts["pending"] == 1
 
@@ -476,7 +476,7 @@ def test_claim_hooks_have_real_boundaries_and_local_seed_copy():
     """领取前没有 Slot/种子，领取后修改本地副本再交给图执行。"""
     observed = []
     spider = Example(seeds=[])
-    work = spider.submit({"url": "https://example.com/original"})
+    [work] = spider.submit({"url": "https://example.com/original"})
 
     def before(context):
         """检查实际领取前的上下文。
@@ -501,7 +501,7 @@ def test_claim_hooks_have_real_boundaries_and_local_seed_copy():
 
     spider.use(hooks.BEFORE_GET_SEEDS, {"func": before})
     spider.use(hooks.AFTER_GET_SEEDS, {"func": after})
-    spider.run("spider", kwargs={"timeout": 3})
+    spider.run("spider", timeout=3)
     assert observed == [work.id]
     assert spider.stored == [{"url": "https://example.com/replaced"}]
     assert (
@@ -597,7 +597,7 @@ def test_wait_before_claim_keeps_active_delivery_renewed(renewals):
             raise signals.Wait(0.02)
 
     spider.use(hooks.BEFORE_GET_SEEDS, {"func": delay})
-    assert spider.run(kwargs={"timeout": 5}).counts["acked"] == 2
+    assert spider.run(timeout=5).counts["acked"] == 2
     assert waits and len(spider.stored) == 2
 
 
@@ -643,7 +643,7 @@ def test_claim_timeout_is_not_swallowed_as_an_idle_wait_timeout(origin):
     if origin == "hook":
         spider.use(hooks.BEFORE_GET_SEEDS, {"func": fail})
     with pytest.raises(TimeoutError) as caught:
-        spider.run("spider", kwargs={"timeout": 0.5})
+        spider.run("spider", timeout=0.5)
     assert caught.value is error
     assert spider.report().counts["pending"] == 1
 
@@ -712,7 +712,7 @@ def test_slot_sessions_cookies_and_fixed_proxy_survive_signal_retries(server):
 
         spider.use(hooks.BEFORE_REQUEST, {"func": start})
         spider.use(hooks.AFTER_REQUEST, {"func": retry})
-        assert spider.run(kwargs={"timeout": 8}).counts["acked"] == 2
+        assert spider.run(timeout=8).counts["acked"] == 2
         assert len(received) == 6 and pool.available == 2
         assert all(
             len(values) == 3 and len(set(values)) == 1 for values in trace.values()

@@ -111,7 +111,7 @@ def run_demo(output: Path) -> tuple[air.RunReport, int]:
         spider = ProductSpider(
             start_url, output, concurrency=2, queue_name="products-demo@v1"
         )
-        report = spider.run(kwargs={"timeout": 15})
+        report = spider.run(timeout=15)
     database = sqlite3.connect(output)
     try:
         count = database.execute("SELECT COUNT(*) FROM products").fetchone()[0]

@@ -100,7 +100,7 @@ class HookNode(Node):
         inputs: 初始化状态、入口种子或图内任务端口。
         outputs: 正常、完成以及当前阶段允许的 retry/skip 端口。
         _owner: 提供错误报告和回调生命周期保护的 Spider。
-        _form: 当前插槽名称。
+        _phase: 当前插槽名称。
         _tasks: 打开时固定、已按 index 排序的声明。
         _initial: 是否属于初始化图。
         _retry: 是否允许请求图内重试。
@@ -110,7 +110,7 @@ class HookNode(Node):
     def __init__(
         self,
         owner: Any,
-        form: str,
+        phase: str,
         tasks: tuple[Task, ...],
         *,
         initial: bool = False,
@@ -122,14 +122,14 @@ class HookNode(Node):
 
         Args:
             owner: 当前 Spider。
-            form: 阶段名称。
+            phase: 阶段名称。
             tasks: 有序声明快照。
             initial: 初始化图标志。
             entry: 消费图入口，接收 JSON 种子。
             retry: 是否声明重试端口。
             skip: 是否声明跳过端口。
         """
-        self._owner, self._form, self._tasks = owner, form, tasks
+        self._owner, self._phase, self._tasks = owner, phase, tasks
         self._initial, self._retry, self._skip = initial, retry, skip
         value_type = Initialization if initial else _Task
         normal = "initial" if initial else "task"
@@ -178,7 +178,7 @@ class HookNode(Node):
             context._bind(inputs)
             payload = context._task
             normal = "task"
-        context.form = self._form
+        context.phase = self._phase
         context.checkpoint()
 
         def finish(value: Any) -> Output:
@@ -229,16 +229,16 @@ class HookNode(Node):
             if isinstance(signal, signals.Skip) and self._skip:
                 if isinstance(context, Context):
                     # 属性访问校验跳过前已提供替代数据，缺失时由属性抛出 RuntimeError。
-                    if self._form == "BEFORE_MAKE_REQUEST":
+                    if self._phase == "BEFORE_MAKE_REQUEST":
                         context.request  # noqa: B018
-                    elif self._form == "BEFORE_REQUEST":
+                    elif self._phase == "BEFORE_REQUEST":
                         context.response  # noqa: B018
-                    elif self._form == "BEFORE_PARSE":
+                    elif self._phase == "BEFORE_PARSE":
                         context.items  # noqa: B018
-                elif self._form == "BEFORE_MAKE_SEEDS":
+                elif self._phase == "BEFORE_MAKE_SEEDS":
                     context._initial.iterator = iter(())
                 return Output(payload, "skip")
-            raise TypeError(f"{type(signal).__name__} is not allowed in {self._form}")
+            raise TypeError(f"{type(signal).__name__} is not allowed in {self._phase}")
 
         return _run(
             self._owner,
@@ -305,7 +305,7 @@ class CrawlNode(Node):
         if not isinstance(context, Context):
             raise TypeError("crawl graph requires Context")
         context._bind(inputs)
-        context.form = "ON_" + {"download": "REQUEST", "retry_prepare": "RETRY"}.get(
+        context.phase = "ON_" + {"download": "REQUEST"}.get(
             self._stage, self._stage.upper()
         )
         context.checkpoint()
@@ -431,7 +431,9 @@ class CrawlNode(Node):
                 task.retry_delay = signal.delay
                 task.retry_reason = str(signal) or type(signal).__name__
                 return Output(task, "retry")
-            raise TypeError(f"{type(signal).__name__} is not allowed in {context.form}")
+            raise TypeError(
+                f"{type(signal).__name__} is not allowed in {context.phase}"
+            )
 
         return _run(self._owner, operation, context, finish, route)
 
@@ -484,7 +486,7 @@ class InitNode(Node):
             raise TypeError("initialization graph requires InitContext")
         state = inputs["initial"]
         context._initial = state
-        context.form = "ON_" + self._stage.upper()
+        context.phase = "ON_" + self._stage.upper()
         context.checkpoint()
 
         def operation(current: InitContext) -> Any:
@@ -552,6 +554,8 @@ class InitNode(Node):
                 raise ResponseRejectedError(
                     str(signal) or "initialization marked as failed"
                 ) from signal
-            raise TypeError(f"{type(signal).__name__} is not allowed in {context.form}")
+            raise TypeError(
+                f"{type(signal).__name__} is not allowed in {context.phase}"
+            )
 
         return _run(self._owner, operation, context, finish, route)

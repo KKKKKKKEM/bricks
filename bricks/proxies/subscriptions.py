@@ -32,12 +32,12 @@ def _decode(value: str) -> str:
     ).decode("utf-8")
 
 
-def extract_nodes(content: str, *, form: str = "clash") -> list[dict[str, Any]]:
+def extract_nodes(content: str, *, kind: str = "clash") -> list[dict[str, Any]]:
     """解析明确提供的订阅内容，绝不把文本当作文件或 URL 自动读取。
 
     Args:
         content: Clash YAML 或 Base64 VMess 订阅文本。
-        form: clash 或 v2ray；v2ray 只包含 vmess 链接。
+        kind: clash 或 v2ray；v2ray 只包含 vmess 链接。
 
     Returns:
         独立 Clash 节点字典列表。
@@ -48,7 +48,7 @@ def extract_nodes(content: str, *, form: str = "clash") -> list[dict[str, Any]]:
     """
     if not isinstance(content, str):
         raise TypeError("subscription content must be text")
-    if form == "clash":
+    if kind == "clash":
         try:
             import yaml
         except ModuleNotFoundError as exc:
@@ -67,8 +67,8 @@ def extract_nodes(content: str, *, form: str = "clash") -> list[dict[str, Any]]:
         ):
             raise ValueError("Clash subscription requires named proxy objects")
         return copy.deepcopy(nodes)
-    if form != "v2ray":
-        raise ValueError("subscription form must be clash or v2ray")
+    if kind != "v2ray":
+        raise ValueError("subscription kind must be clash or v2ray")
     nodes = []
     for link in _decode(content).split():
         if not link.startswith("vmess://"):
@@ -122,13 +122,13 @@ def extract_nodes(content: str, *, form: str = "clash") -> list[dict[str, Any]]:
 
 
 def fetch_subscription(
-    request: Request, *, form: str = "clash", downloader: Downloader | None = None
+    request: Request, *, kind: str = "clash", downloader: Downloader | None = None
 ) -> list[dict[str, Any]]:
     """显式下载订阅内容后解析，下载错误原样报告。
 
     Args:
         request: 明确的订阅请求，含调用方设置的凭据和超时。
-        form: clash 或 v2ray。
+        kind: clash 或 v2ray。
         downloader: 借用同步下载器，默认临时 curl_cffi。
 
     Returns:
@@ -148,7 +148,7 @@ def fetch_subscription(
         raise RuntimeError(
             f"subscription request failed: status={response.status_code}"
         ) from response.error
-    return extract_nodes(response.text, form=form)
+    return extract_nodes(response.text, kind=kind)
 
 
 def cfg_tpl(

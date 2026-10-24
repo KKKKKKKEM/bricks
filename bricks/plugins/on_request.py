@@ -128,7 +128,7 @@ class Before:
         """
         context = _context()
         if context.request.proxy is not None:
-            if not context.proxy_spent or not context.crawler_options.proxy_rotate:
+            if not context._proxy_spent or not context.crawler_options.proxy_rotate:
                 return
             context.clear_proxy()
         source = context.target.proxy
@@ -138,10 +138,10 @@ class Before:
             proxy = source.get(context.slot, timeout=timeout)
             if proxy.auth is not None and sync(proxy.auth, context.request) is not None:
                 raise TypeError("proxy auth callback must return None")
-            context.assign_proxy(proxy.proxy)
+            context._assign_proxy(proxy.proxy)
             source.use(context.slot)
         elif source is not None:
-            context.assign_proxy(source)
+            context._assign_proxy(source)
 
     @staticmethod
     @hooks.current

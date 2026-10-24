@@ -173,7 +173,7 @@ def test_crawler_metrics_plugin_counts_requests_retries_and_submissions(server):
     )
     spider.submit({"path": "/echo", "submit": "any"})
     spider.submit({"path": "/error"})
-    report = spider.run("spider", kwargs={"timeout": 10})
+    report = spider.run("spider", timeout=10)
     assert report.counts["acked"] == 2 and report.counts["dead"] == 1
 
     def value(name, **labels):

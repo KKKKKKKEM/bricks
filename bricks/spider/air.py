@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import time
 from collections import deque
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from threading import Event as ThreadEvent
 from threading import Lock, RLock
@@ -351,7 +351,7 @@ class Spider:
         return f"{self.queue_name}.call"
 
     @property
-    def local_submission_event_name(self) -> str:
+    def _local_submission_event_name(self) -> str:
         """返回当前实例用于持久化 Slot 亲和子任务的事件类型。
 
         Returns:
@@ -489,28 +489,35 @@ class Spider:
 
     def submit(
         self,
-        seed: dict[str, Any],
-        *,
+        *seeds: dict[str, Any],
         id: str | None = None,
         options: Mapping[str, Any] | None = None,
-    ) -> Work:
-        """在运行前或运行中显式提交种子。
+    ) -> list[Work]:
+        """在运行前或运行中显式提交一个或多个种子，签名与 Context.submit 一致但没有 Slot 亲和。
+
+        整批种子先全部校验并构造 Work，再依次持久化，非法种子不会导致前面的种子部分入队。
 
         Args:
-            seed: JSON 种子。
-            id: 可选稳定 ID。
+            seeds: JSON 种子对象序列。
+            id: 单种子提交时可指定的稳定 ID。
             options: 覆盖默认配置的选项。
 
         Returns:
-            已接受或去重命中的 Work。
+            已接受或去重命中的 Work 列表。
 
         Raises:
             RuntimeError: 当前实例正在关闭或已经关闭。
+            ValueError: 多个种子同时指定一个 ID。
         """
+        if id is not None and len(seeds) != 1:
+            raise ValueError("explicit id requires exactly one seed")
         with self._lifecycle:
             if self._state in ("closing", "closed"):
                 raise RuntimeError("spider is closed")
-            return self._submit(seed, id=id, options=options)
+            works = [self._make_work(seed, id=id, options=options) for seed in seeds]
+            for work in works:
+                self.task_queue.put(work)
+            return works
 
     def _crawl_context(
         self, base: EngineContext, inputs: Mapping[str, Any]
@@ -581,11 +588,11 @@ class Spider:
         """
         return GraphAssembly(self).build_graphs()
 
-    def _hook_node(self, form: str, **options: Any) -> HookNode:
+    def _hook_node(self, phase: str, **options: Any) -> HookNode:
         """按装配时固定的声明创建独立业务插槽。
 
         Args:
-            form: 插槽名称。
+            phase: 插槽名称。
             options: 初始化、入口和合法路由标志。
 
         Returns:
@@ -597,7 +604,7 @@ class Spider:
         if not self._hooks_ready:
             # install 只在打开时执行一次；此前构造的图会静默缺少全部业务 Hook。
             raise RuntimeError("open the spider before building graphs")
-        return HookNode(self, form, self._hook_tasks.get(form, ()), **options)
+        return HookNode(self, phase, self._hook_tasks.get(phase, ()), **options)
 
     def build_init_graph(self) -> Graph:
         """构造种子初始化图。
@@ -731,17 +738,6 @@ class Spider:
         """
         return self.make_seeds(context, record=context.record)
 
-    def on_retry(self, context: domain.Context) -> Any:
-        """供业务在重试前调整请求，调度与预算仍由图处理。
-
-        Args:
-            context: 含上一次响应的上下文。
-
-        Returns:
-            None。
-        """
-        return None
-
     def is_proxy_error(self, context: domain.Context) -> bool:
         """判断上一次下载失败是否由代理引起，命中时先消耗 max_proxy_retry 而非 max_retry。
 
@@ -782,11 +778,11 @@ class Spider:
             raise TypeError("is_proxy_error must return a boolean synchronously")
         return result
 
-    def use(self, form: str, *events: Task | dict[str, Any]) -> None:
-        """沿用 use(form, *events) 注册可复用插件调用。
+    def use(self, phase: str, *events: Task | dict[str, Any]) -> None:
+        """沿用 use(phase, *events) 注册可复用插件调用。
 
         Args:
-            form: 阶段名称，例如 hooks.AFTER_REQUEST。
+            phase: 阶段名称，例如 hooks.AFTER_REQUEST。
             events: Task 或包含 func/args/kwargs/index/match 的字典。
 
         Raises:
@@ -798,7 +794,7 @@ class Spider:
             if self._state != "new":
                 # opening 状态下插槽已固定，BEFORE_START 内注册不会生效，必须明确失败。
                 raise RuntimeError("plugins must be registered before opening")
-            form = text(form, "form")
+            phase = text(phase, "phase")
             supported = {
                 hook_api.BEFORE_MAKE_SEEDS,
                 hook_api.AFTER_MAKE_SEEDS,
@@ -820,14 +816,14 @@ class Spider:
                 hook_api.BEFORE_GET_SEEDS,
                 hook_api.AFTER_GET_SEEDS,
             }
-            if form not in supported:
-                raise ValueError(f"unsupported Air hook stage: {form}")
+            if phase not in supported:
+                raise ValueError(f"unsupported Air hook stage: {phase}")
             registrations = []
             for event in events:
                 task = Task(**event) if isinstance(event, dict) else event
                 if not isinstance(task, Task):
                     raise TypeError("events must be Task or plugin dictionaries")
-                registrations.append(Binding(form, task))
+                registrations.append(Binding(phase, task))
             self._hooks.extend(registrations)
 
     def install(self) -> None:
@@ -851,7 +847,7 @@ class Spider:
             ValueError: 阶段没有实际执行位置。
             TypeError: 非图边界注册了异步函数。
         """
-        graph_forms = {
+        graph_phases = {
             hook_api.BEFORE_MAKE_SEEDS,
             hook_api.AFTER_MAKE_SEEDS,
             hook_api.BEFORE_PUT_SEEDS,
@@ -867,7 +863,7 @@ class Spider:
             hook_api.BEFORE_PIPELINE,
             hook_api.AFTER_PIPELINE,
         }
-        boundary_forms = {
+        boundary_phases = {
             hook_api.BEFORE_START,
             hook_api.BEFORE_CLOSE,
             hook_api.ERROR_OCCURRED,
@@ -876,21 +872,21 @@ class Spider:
         }
         groups: dict[str, list[Task]] = {}
         for binding in (*hook_api.collect(self), *self._hooks):
-            if binding.form not in graph_forms | boundary_forms:
-                raise ValueError(f"unsupported Air hook stage: {binding.form}")
+            if binding.phase not in graph_phases | boundary_phases:
+                raise ValueError(f"unsupported Air hook stage: {binding.phase}")
             callback = binding.task.func
-            if binding.form in boundary_forms and any(
+            if binding.phase in boundary_phases and any(
                 inspect.iscoroutinefunction(value) or inspect.isasyncgenfunction(value)
                 # 可调用实例的异步 __call__ 不被 iscoroutinefunction 识别，需单独检查。
                 for value in (callback, getattr(callback, "__call__", None))  # noqa: B004
             ):
-                raise TypeError(f"{binding.form} requires synchronous hooks")
-            groups.setdefault(binding.form, []).append(binding.task)
+                raise TypeError(f"{binding.phase} requires synchronous hooks")
+            groups.setdefault(binding.phase, []).append(binding.task)
         self._hook_tasks = {
-            form: tuple(
+            phase: tuple(
                 sorted(tasks, key=lambda task: 0 if task.index is None else task.index)
             )
-            for form, tasks in groups.items()
+            for phase, tasks in groups.items()
         }
 
     def _report_error(
@@ -935,7 +931,10 @@ class Spider:
         """
         try:
             run_hooks(
-                self, self._hook_tasks.get(context.form, ()), context, allow_await=False
+                self,
+                self._hook_tasks.get(context.phase, ()),
+                context,
+                allow_await=False,
             )
         except signals.Pass:
             return
@@ -1062,18 +1061,18 @@ class Spider:
         """申请生产权并驱动初始化图。"""
         return run_initialization(self)
 
-    def run_init(self) -> InitRecord | None:
+    def run_init(self) -> RunReport:
         """只运行初始化；资源保留供后续消费或上下文退出关闭。
 
         Returns:
-            当前初始化记录。
+            当前运行快照，初始化记录位于 initialization。
         """
         external(self)
         with self._operation:
             self.open()
-            if not self._start_allowed:
-                return self.task_queue.initialization()
-            return self._run_init()
+            if self._start_allowed:
+                self._run_init()
+            return self.report()
 
     def report(self) -> RunReport:
         """读取初始化与任务交付状态，关闭后仍可查询借用存储。
@@ -1319,8 +1318,7 @@ class Spider:
             try:
                 self.open()
                 if self._start_allowed:
-                    for seed in seeds:
-                        self.submit(seed)
+                    self.submit(*seeds)
                     self.run_spider(timeout=timeout)
             except BaseException as exc:
                 primary = exc
@@ -1368,43 +1366,31 @@ class Spider:
                 raise TimeoutError("continuous spider wait timed out")
             self._stopping.wait(0.05 if remaining is None else min(0.05, remaining))
 
-    def run(
-        self,
-        task_name: str = "all",
-        args: list[Any] | tuple[Any, ...] | None = None,
-        kwargs: Mapping[str, Any] | None = None,
-    ) -> Any:
-        """沿用 run(task_name, args, kwargs) 分派运行入口，结束后关闭资源。
+    def run(self, mode: str = "all", *, timeout: float | None = None) -> RunReport:
+        """按模式运行一次并在结束时关闭资源。
 
         Args:
-            task_name: all、init 或 spider。
-            args: 传给对应运行方法的位置参数。
-            kwargs: 传给对应运行方法的关键字参数。
+            mode: all 生产并消费，init 只初始化，spider 只消费已有任务。
+            timeout: all 与 spider 等待排空的秒数，None 不限制；init 不等待消费，不接受此参数。
 
         Returns:
-            对应运行方法的结果。
+            结束时的运行快照。
 
         Raises:
-            ValueError: 运行模式不受支持。
-            TypeError: 参数容器类型错误。
+            ValueError: 运行模式不受支持，或 init 模式传入 timeout。
         """
         external(self)
-        methods: dict[str, Callable[..., Any]] = {
-            "all": self.run_all,
-            "init": self.run_init,
-            "spider": self.run_spider,
-        }
-        if task_name not in methods:
-            raise ValueError("task_name must be all, init or spider")
-        if args is not None and not isinstance(args, (tuple, list)):
-            raise TypeError("args must be a list or tuple")
-        if kwargs is not None and not isinstance(kwargs, Mapping):
-            raise TypeError("kwargs must be a mapping")
+        if mode not in ("all", "init", "spider"):
+            raise ValueError("mode must be all, init or spider")
+        if mode == "init" and timeout is not None:
+            raise ValueError("timeout does not apply to mode='init'")
         primary: BaseException | None = None
         try:
-            return methods[task_name](
-                *(() if args is None else args), **({} if kwargs is None else kwargs)
-            )
+            if mode == "init":
+                return self.run_init()
+            if mode == "spider":
+                return self.run_spider(timeout=timeout)
+            return self.run_all(timeout=timeout)
         except BaseException as exc:
             primary = exc
             raise

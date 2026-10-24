@@ -111,7 +111,7 @@ class _Task:
         proxy_retries: 未消耗重试预算的代理错误重试次数，初始零。
         retry_delay: 本次重试等待秒数；None 使用执行配置 crawler.retry.delay。
         retry_reason: 最近一次重试触发原因，耗尽时用于诊断。
-        proxy: assign_proxy 写入的代理地址及写入时的 attempt，未托管时为 None。
+        proxy: _assign_proxy 写入的代理地址及写入时的 attempt，未托管时为 None。
     """
 
     seed: dict[str, Any]
@@ -151,7 +151,7 @@ class HookContext(CurrentContext):
 
     Attributes:
         target: 当前 Spider。
-        form: 当前边界插槽名称。
+        phase: 当前边界插槽名称。
         lease: 领取后可见的任务凭据，其他边界为 None；禁止自行确认。
         slot: 本地交付已经分配的 Slot，领取前及启停时为 None。
         error: 当前报告的原异常，非错误插槽为 None。
@@ -159,7 +159,7 @@ class HookContext(CurrentContext):
     """
 
     target: Spider
-    form: str
+    phase: str
     lease: TaskLease | None = None
     slot: Slot | None = None
     error: BaseException | None = None
@@ -206,7 +206,7 @@ class Context(CurrentContext, EngineContext):
 
     Attributes:
         target: 当前 Spider，仅保存装配与业务方法，不保存当前请求状态。
-        form: 当前业务步骤或插件阶段名称。
+        phase: 当前业务步骤或插件阶段名称。
         _task: 当前输入携带的图内状态。
         _input: 工厂看到的原始输入，用于识别后续 Hook 的显式替换。
         _call: 是否属于同步调用图；调用执行没有根 Work，拒绝 current 亲和的派生。
@@ -218,7 +218,7 @@ class Context(CurrentContext, EngineContext):
         *,
         base: EngineContext,
         task: _Task,
-        form: str = "ON_CONSUME",
+        phase: str = "ON_CONSUME",
     ) -> None:
         """组合执行能力并绑定当前业务状态。
 
@@ -226,11 +226,11 @@ class Context(CurrentContext, EngineContext):
             target: 当前 Spider。
             base: 引擎提供的基础 Context。
             task: 当前图内任务。
-            form: 当前阶段名称。
+            phase: 当前阶段名称。
         """
         super().__init__(parent=base)
         self.target = target
-        self.form = form
+        self.phase = phase
         self._task = task
         self._input: Mapping[str, Any] = {}
         self._call = False
@@ -335,8 +335,8 @@ class Context(CurrentContext, EngineContext):
         self.request.proxy = None
         self._task.proxy = None
 
-    def assign_proxy(self, proxy: str) -> None:
-        """写入代理插件选定的请求代理，并登记为可在重试时轮换的地址。
+    def _assign_proxy(self, proxy: str) -> None:
+        """写入代理插件选定的请求代理，并登记为可在重试时轮换的地址；仅供 set_proxy 插件使用。
 
         Args:
             proxy: 已规范的代理地址。
@@ -345,8 +345,8 @@ class Context(CurrentContext, EngineContext):
         self._task.proxy = (proxy, self._task.attempt)
 
     @property
-    def proxy_spent(self) -> bool:
-        """判断当前请求代理是否由 assign_proxy 写入且之后已经发起过下载。
+    def _proxy_spent(self) -> bool:
+        """判断当前请求代理是否由 _assign_proxy 写入且之后已经发起过下载；仅供 set_proxy 插件使用。
 
         业务或 make_request 显式设置的代理不受此登记影响，始终返回 False。
 
@@ -391,7 +391,7 @@ class Context(CurrentContext, EngineContext):
             return super().emit(event_type, payload)
         return self.target.runtime.emit(event_type, payload)
 
-    def install(self, name: str, value: Any, *, nx: bool = False) -> Any:
+    def slot_set(self, name: str, value: Any, *, nx: bool = False) -> Any:
         """把业务资源写入当前 Slot，供后续取得同一 Slot 的 Context 使用。
 
         Args:
@@ -421,7 +421,7 @@ class Context(CurrentContext, EngineContext):
         resources[name] = value
         return value
 
-    def obtain(self, name: str, default: Any = None) -> Any:
+    def slot_get(self, name: str, default: Any = None) -> Any:
         """读取当前 Slot 中的具名业务资源。
 
         Args:
@@ -667,7 +667,7 @@ class Context(CurrentContext, EngineContext):
         for work in works:
             if affinity == "current":
                 self.emit(
-                    self.target.local_submission_event_name,
+                    self.target._local_submission_event_name,
                     LocalSubmission(work),
                     affinity="current",
                 )
@@ -683,7 +683,7 @@ class InitContext(CurrentContext, EngineContext):
 
     Attributes:
         target: 当前 Spider。
-        form: 当前初始化或插件阶段。
+        phase: 当前初始化或插件阶段。
         _initial: 本轮图内生产状态。
     """
 
@@ -693,7 +693,7 @@ class InitContext(CurrentContext, EngineContext):
         *,
         base: EngineContext,
         initial: Initialization,
-        form: str = "ON_INIT",
+        phase: str = "ON_INIT",
     ) -> None:
         """组合执行能力与本轮生产状态。
 
@@ -701,11 +701,11 @@ class InitContext(CurrentContext, EngineContext):
             target: 当前 Spider。
             base: 基础执行上下文。
             initial: 本轮生产状态。
-            form: 当前阶段名称。
+            phase: 当前阶段名称。
         """
         super().__init__(parent=base)
         self.target = target
-        self.form = form
+        self.phase = phase
         self._initial = initial
 
     @property

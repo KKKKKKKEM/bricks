@@ -165,7 +165,7 @@ def test_stages_carry_seeds_fan_out_details_and_keep_pages_in_stage():
     spider = Catalog(
         downloader=downloader, task_queue=queue, queue_name="catalog", concurrency=2
     )
-    report = spider.run(kwargs={"timeout": 5})
+    report = spider.run(timeout=5)
     assert report.counts == {"pending": 0, "leased": 0, "acked": 7, "dead": 0}
     assert sorted(spider.stored, key=lambda row: row["id"]) == [
         {"name": str(item), "id": item} for item in (10, 11, 20, 21)
@@ -197,7 +197,7 @@ def test_interrupted_stage_resumes_without_losing_persisted_next_stage():
     queue.put(listing)
     assert queue.claim("dead-worker", lease_seconds=0.2) is not None
     assert queue.put_claim(detail, "dead-worker", lease_seconds=0.2) is not None
-    spider.run("spider", kwargs={"timeout": 5})
+    spider.run("spider", timeout=5)
     assert queue.counts() == {"pending": 0, "leased": 0, "acked": 3, "dead": 0}
     assert sorted(row["id"] for row in spider.stored) == [20, 21]
     assert downloader.hits[BASE + "/detail/20"] == 1

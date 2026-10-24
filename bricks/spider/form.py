@@ -478,7 +478,9 @@ class Config:
         object.__setattr__(self, "spider", tuple(self.spider))
         object.__setattr__(self, "init", tuple(self.init))
         object.__setattr__(
-            self, "events", {form: tuple(tasks) for form, tasks in self.events.items()}
+            self,
+            "events",
+            {phase: tuple(tasks) for phase, tasks in self.events.items()},
         )
 
 
@@ -658,8 +660,8 @@ class Spider(air.Spider):
         if not isinstance(config, Config):
             raise TypeError("form spider config must be Config")
         self._stages = _compile(config.spider)
-        for form, events in config.events.items():
-            self.use(form, *events)
+        for phase, events in config.events.items():
+            self.use(phase, *events)
         # 下载后的 Task 排在其他响应检查之后，推进下一段排在用户后置插件之前。
         self.use(hooks.AFTER_REQUEST, Task(self._request_tasks, index=math.inf))
         self.use(hooks.AFTER_PIPELINE, Task(self._advance, index=-math.inf))
