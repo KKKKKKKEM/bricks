@@ -12,9 +12,8 @@ from interlace.engine.errors import ExecutionCancelledError, ExecutionError
 from bricks import DownloadNode, Response, hooks, signals
 from bricks.downloaders.curl_cffi import CurlCffiDownloader
 from bricks.queues import MemoryTaskQueue
-from bricks.spider import Spider
+from bricks.spider import RejectedTasksError, Spider
 from bricks.spider._nodes import HookNode
-from bricks.spider.context import ResponseRejectedError
 
 
 class Echo:
@@ -229,8 +228,7 @@ def test_terminal_signal_interrupts_callback_and_remaining_hooks(signal):
         {"func": lambda ctx: trace.append("later")},
     )
     if signal is signals.Failure:
-        with pytest.raises(ExecutionError, match="seed marked as failed"):
-            spider.run()
+        assert spider.run().rejected == {"seed marked as failed": 1}
         assert spider.report().counts["dead"] == 1
     else:
         assert spider.run().counts["acked"] == 1
@@ -301,7 +299,7 @@ def test_skip_download_requires_and_uses_explicit_cached_response():
 def test_async_retry_runs_explicit_retry_slots_and_keeps_request():
     """异步 Hook 的 Retry 沿图内回边执行，重试前后插槽有明确顺序。"""
     trace, slot_ids = [], []
-    spider = Example(max_retry=2)
+    spider = Example(options={"crawler.retry.max": 2})
 
     async def retry(context):
         """前两次下载后通过异步信号触发重试。
@@ -334,7 +332,7 @@ def test_async_retry_runs_explicit_retry_slots_and_keeps_request():
 
 def test_predownload_retry_is_bounded_even_without_a_network_attempt():
     """下载前反复 Retry 也消耗预算，不能因 attempt 为零而无限循环。"""
-    spider = Example(max_retry=2)
+    spider = Example(options={"crawler.retry.max": 2, "spider.run.strict": True})
 
     def retry(context):
         """在真正下载前重试。
@@ -345,7 +343,7 @@ def test_predownload_retry_is_bounded_even_without_a_network_attempt():
         raise signals.Retry()
 
     spider.use(hooks.BEFORE_REQUEST, {"func": retry})
-    with pytest.raises(ExecutionError, match="retries exhausted"):
+    with pytest.raises(RejectedTasksError, match="retries exhausted"):
         spider.run(kwargs={"timeout": 3})
     assert spider.downloader.calls == [] and spider.report().counts["dead"] == 1
 
@@ -532,8 +530,7 @@ def test_claim_signal_explicitly_finishes_without_starting_graph(signal):
 
     spider.use(hooks.AFTER_GET_SEEDS, {"func": terminate})
     if signal is signals.Failure:
-        with pytest.raises(ResponseRejectedError, match="claimed seed rejected"):
-            spider.run("spider")
+        assert spider.run("spider").rejected == {"claimed seed rejected": 1}
         assert spider.report().counts["dead"] == 1
     else:
         assert spider.run("spider").counts["acked"] == 1
@@ -585,7 +582,7 @@ def test_wait_before_claim_keeps_active_delivery_renewed(renewals):
     spider = Slow(
         seeds=[{"url": "https://example.com/1"}, {"url": "https://example.com/2"}],
         concurrency=2,
-        lease_seconds=0.3,
+        options={"spider.queue.lease": 0.3},
     )
     watch = renewals(spider.task_queue)
 

@@ -232,7 +232,7 @@ class Download:
             False 时沿用上一段种子。首段不能使用。
         affinity: 进入本段的任务派发方式；current 持久化后优先在当前 Slot 继续，
             any 只入队等待任意 Worker 领取。
-        max_retry: 本段下载重试上限；None 沿用 Spider 的 max_retry，执行配置 crawler.retry.max 优先。
+        max_retry: 本段下载重试上限；None 沿用默认 5，执行配置 crawler.retry.max 优先。
         ok: 本段成功判断规则，语法同 bypass 的 ok，可以是 callable；None 使用默认状态码规则，
             执行配置 crawler.response.ok 优先。
     """
@@ -564,7 +564,7 @@ class Context(air.Context):
 
     @property
     def max_retry(self) -> int:
-        """取得重试上限：执行配置优先，其次本段 Download.max_retry，最后 Spider 的 max_retry。
+        """取得重试上限：执行配置优先，其次本段 Download.max_retry，最后为默认 5。
 
         Returns:
             首次下载之后允许的额外尝试次数。

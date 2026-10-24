@@ -34,6 +34,9 @@
 | 启停、领取和错误插槽 | 以 HookContext 在真实边界同步执行；物理线程启停和 ON_* 状态标记不作为 Air 插槽 |
 | `bricks.lib.proxies.*` | `bricks.proxies`；固定/API/Redis/Clash 供应源和 Manager 已迁入 |
 | `context.clear_proxy()` | 显式丢弃请求代理与管理器选择；自动会话模式下下一次请求取得新地址并路由到对应会话 |
+| 重试时清除代理、`$retainProxy` | 默认 `Before.set_proxy` 在重试时丢弃已用代理并重新选择；执行配置 `crawler.proxy.rotate=False` 沿用原代理，不再按次数保留 |
+| `ProxyError` 不计重试次数 | 执行配置 `crawler.proxy.retry`（默认 5）为代理错误提供独立上限，用尽后计入 `crawler.retry.max`；判定可重写 `is_proxy_error(context)` |
+| `spider.threshold` 等实例配置 | 实例配置统一为 options 中的 `spider.*` 键（strict、租约、轮询、会话等），任务配置为 `crawler.*`；构造参数只保留基本参数与资源 |
 | 代理 `ref` 字符串配置 | 直接构造供应源对象并传给 Spider 或 Manager |
 | Clash 构造时改全局模式 | 改为显式 configure；拒绝占用期间切换共享出口 |
 | Clash 订阅工具 | 独立 extract_nodes/fetch_subscription/cfg_tpl/subscribe，解析与联网分开 |
@@ -54,8 +57,10 @@ Context.success/failure/retry、ResponseAction 和 action/stop 标志已移除�
 回边经过重试前后插槽返回 before_request；同次图执行保留 Slot，重新领取任务不保证原 Slot。
 
 `on_retry(context)` 可能运行在首次下载之前，因此 `context.response` 并非始终可用。
-有界重试耗尽会让 `run()` 在已接受任务排空后抛出失败；单个 Failure（例如 404）也会使本次运行失败。
-构造 `strict=False` 时两者仍进入死信，但只记入 `RunReport.rejections`，不抛出。
+`crawler.retry.max` 默认 5，与 dev 的 `Request.max_retry` 一致。有界重试耗尽和单个 Failure（例如 404）
+都进入死信并记入 `RunReport.rejections` 与按原因计数的 `RunReport.rejected`，其余种子照常消费，
+对应 dev 的 failure 备份队列；死信可用 `revive_dead` 重新投放。设置 `spider.run.strict` 为 True 时在队列排空后抛出
+`RejectedTasksError` 汇总报告。
 `survey(extract=...)` 对提前 Success 尚未产生的 request、response 或 items 返回 None。
 
 初始化断点不是消费图每个步骤的持久快照。种子读取的稳定排序、Mongo 业务唯一索引、外部写入幂等、

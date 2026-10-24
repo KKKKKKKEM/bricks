@@ -15,6 +15,7 @@ from interlace.spi import Work
 
 from bricks import AsyncDownloadNode, Items, Request, Response
 from bricks.models import CrawlerOptions
+from bricks.models.options import DEFAULT_RETRY_MAX
 from bricks.proxies import Manager
 from bricks.queues import InitLease, TaskLease, TaskQueue
 from bricks.queues.models import LocalSubmission
@@ -107,7 +108,10 @@ class _Task:
         items: 解析结果，初始 None。
         attempt: 已经发起的下载次数，初始 0。
         retries: 已消耗的重试次数，初始零，包括下载前触发的重试。
-        retry_delay: 本次重试等待秒数；None 使用 Spider 配置。
+        proxy_retries: 未消耗重试预算的代理错误重试次数，初始零。
+        retry_delay: 本次重试等待秒数；None 使用执行配置 crawler.retry.delay。
+        retry_reason: 最近一次重试触发原因，耗尽时用于诊断。
+        proxy: assign_proxy 写入的代理地址及写入时的 attempt，未托管时为 None。
     """
 
     seed: dict[str, Any]
@@ -116,8 +120,10 @@ class _Task:
     items: Items | None = None
     attempt: int = 0
     retries: int = 0
+    proxy_retries: int = 0
     retry_delay: float | None = None
-    retry_reason: str | None = None  # 最近一次重试触发原因，耗尽时用于诊断。
+    retry_reason: str | None = None
+    proxy: tuple[str, int] | None = None
 
 
 @dataclass
@@ -327,6 +333,33 @@ class Context(CurrentContext, EngineContext):
                 raise RuntimeError("managed proxies require a Slot")
             manager.clear(self.slot)
         self.request.proxy = None
+        self._task.proxy = None
+
+    def assign_proxy(self, proxy: str) -> None:
+        """写入代理插件选定的请求代理，并登记为可在重试时轮换的地址。
+
+        Args:
+            proxy: 已规范的代理地址。
+        """
+        self.request.proxy = proxy
+        self._task.proxy = (proxy, self._task.attempt)
+
+    @property
+    def proxy_spent(self) -> bool:
+        """判断当前请求代理是否由 assign_proxy 写入且之后已经发起过下载。
+
+        业务或 make_request 显式设置的代理不受此登记影响，始终返回 False。
+
+        Returns:
+            已用该代理下载过时为 True。
+        """
+        record = self._task.proxy
+        return (
+            record is not None
+            and self._task.request is not None
+            and self._task.request.proxy == record[0]
+            and self._task.attempt > record[1]
+        )
 
     def emit(
         self,
@@ -515,6 +548,15 @@ class Context(CurrentContext, EngineContext):
         return self._task.retries
 
     @property
+    def proxy_retries(self) -> int:
+        """取得未消耗重试预算的代理错误重试次数。
+
+        Returns:
+            从零开始的次数，上限为执行配置 crawler.proxy.retry。
+        """
+        return self._task.proxy_retries
+
+    @property
     def crawler_options(self) -> CrawlerOptions:
         """解析当前执行配置中的 crawler.* 键。
 
@@ -529,7 +571,7 @@ class Context(CurrentContext, EngineContext):
 
     @property
     def max_retry(self) -> int:
-        """取得当前任务的下载重试上限：执行配置 crawler.retry.max 优先，否则为 Spider 的 max_retry。
+        """取得当前任务的下载重试上限：执行配置 crawler.retry.max 优先，缺省为 5。
 
         Returns:
             首次下载之后允许的额外尝试次数。
@@ -539,8 +581,7 @@ class Context(CurrentContext, EngineContext):
         """
         value = self.crawler_options.retry_max
         if value is None:
-            limit: int = self.target._max_retries
-            return limit
+            return DEFAULT_RETRY_MAX
         return value
 
     @property

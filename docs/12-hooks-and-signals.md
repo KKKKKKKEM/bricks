@@ -77,7 +77,7 @@ Signal 继承 BaseException，因此业务代码中的 `except Exception` 不会
 
 `Retry` 每经过一次 retry 节点就消耗一个预算，即使 Hook 在真正下载前要求重试，也不会无限循环。
 `context.attempt` 是实际下载次数，`context.retries` 是已消耗重试次数。
-`delay=None` 使用 Spider.retry_delay；显式 delay 是本次等待秒数。重试只重新下载及执行相关插槽，
+`delay=None` 使用执行配置 `crawler.retry.delay`；显式 delay 是本次等待秒数。重试只重新下载及执行相关插槽，
 不会重新运行 make_request、解析或存储；代理与会话不会自动更换。
 
 | Skip 所在插槽 | 必须提供的替代数据 | 后继 |

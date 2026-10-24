@@ -14,7 +14,7 @@ import pytest
 from interlace.engine import Slot
 
 from bricks import Request, Response, hooks
-from bricks.plugins.on_request import Before
+from bricks.plugins.on_request import After, Before
 from bricks.proxies import (
     ApiProxy,
     BaseProxy,
@@ -575,13 +575,17 @@ def test_subscription_parsing_and_nonmutating_config():
             extract_nodes(content)
 
 
-@pytest.mark.parametrize("rotate", [False, True])
-def test_air_retries_pin_proxy_and_close_recovers_owned_slots(rotate):
-    """默认重试保留代理，只有显式 clear_proxy 才切换，关闭时归还占用。
+@pytest.mark.parametrize("rotate", [None, False])
+def test_air_retries_rotate_proxy_and_close_recovers_owned_slots(rotate):
+    """默认重试丢弃已用代理并重新选择，crawler.proxy.rotate=False 沿用原代理，关闭时归还占用。
 
     Args:
-        rotate: 是否在业务重试回调中显式丢弃代理。
+        rotate: crawler.proxy.rotate 的值，None 表示不设置而使用默认 True。
     """
+    options = {"crawler.retry.max": 2}
+    if rotate is not None:
+        options["crawler.proxy.rotate"] = rotate
+    rotate = rotate is None
     source = Supply(threshold=1)
     seen = []
     attempts = {}
@@ -622,27 +626,18 @@ def test_air_retries_pin_proxy_and_close_recovers_owned_slots(rotate):
             return [{"url": "https://example.com/1"}, {"url": "https://example.com/2"}]
 
         def install(self):
-            """注册一次生成后在重试中保留的 UA。"""
-            super().install()
+            """注册代理插件、成功检查与一次生成后在重试中保留的 UA。"""
             self.use(
                 hooks.BEFORE_REQUEST,
+                {"func": Before.set_proxy},
                 {"func": Before.fake_ua, "kwargs": {"factory": lambda: uuid4().hex}},
             )
-
-        def on_retry(self, context):
-            """仅在显式策略要求时丢弃代理。
-
-            Args:
-                context: 当前重试上下文。
-            """
-            if rotate:
-                context.clear_proxy()
+            self.use(hooks.AFTER_REQUEST, {"func": After.bypass, "index": 1000})
 
     spider = RetrySpider(
         proxy=source,
         downloader=Download(),
-        max_retry=2,
-        slot_session_reuse=False,
+        options={**options, "spider.session.reuse": False},
     )
     assert spider.run().counts["acked"] == 2
     assert len(source.issued) == (6 if rotate else 2)
@@ -652,6 +647,184 @@ def test_air_retries_pin_proxy_and_close_recovers_owned_slots(rotate):
     assert len({value[1] for value in seen[:3]}) == (3 if rotate else 1)
     assert len({value[2] for value in seen[:3]}) == 1
     assert seen[0][1] != seen[3][1]
+
+
+class ProxyError(ConnectionError):
+    """与传输库同名的测试代理异常。"""
+
+
+class ProxyFailures:
+    """前 failures 次下载返回代理传输失败的下载器。
+
+    Attributes:
+        failures: 返回代理失败的下载次数。
+        error: 失败时携带的异常。
+        proxies: 各次下载实际使用的代理。
+    """
+
+    def __init__(self, failures, error=None):
+        """固定失败次数与异常。
+
+        Args:
+            failures: 返回代理失败的下载次数。
+            error: 失败异常，默认 ProxyError。
+        """
+        self.failures = failures
+        self.error = ProxyError("tunnel refused") if error is None else error
+        self.proxies = []
+
+    def fetch(self, request):
+        """记录代理并返回失败或成功响应。
+
+        Args:
+            request: 当前请求。
+
+        Returns:
+            status_code=-1 的失败响应，或成功响应。
+        """
+        self.proxies.append(request.proxy)
+        if len(self.proxies) <= self.failures:
+            return Response(status_code=-1, error=self.error, request=request)
+        return Response(b"{}", status_code=200, request=request)
+
+
+class OneSeed(Spider):
+    """只消费一条种子并解析为空记录的测试爬虫。"""
+
+    def make_seeds(self, context, **kwargs):
+        """提供一条种子。
+
+        Args:
+            context: 初始化上下文。
+            kwargs: 恢复记录。
+
+        Returns:
+            单条种子。
+        """
+        return {"url": "https://example.com"}
+
+    def parse(self, context):
+        """返回空记录。
+
+        Args:
+            context: 当前响应上下文。
+
+        Returns:
+            空记录列表。
+        """
+        return []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ProxyError("refused"), ConnectionError("curl: (7) Failed to connect over proxy")],
+)
+def test_proxy_errors_use_independent_budget_and_rotate(error):
+    """代理错误先消耗 crawler.proxy.retry，不占用 crawler.retry.max，并且每次重试换代理。
+
+    Args:
+        error: 按类名或信息识别的代理异常。
+    """
+    downloader = ProxyFailures(3, error)
+    spider = OneSeed(
+        proxy=Supply(),
+        downloader=downloader,
+        options={"crawler.retry.max": 0, "crawler.proxy.retry": 3},
+    )
+    report = spider.run()
+    assert report.counts["acked"] == 1 and report.rejected == {}
+    assert len(downloader.proxies) == 4 and len(set(downloader.proxies)) == 4
+
+
+def test_proxy_error_budget_falls_back_to_retry_budget():
+    """代理重试额度用尽或设为 0 时，代理错误照常消耗 crawler.retry.max。"""
+    exhausted = OneSeed(
+        proxy=Supply(),
+        downloader=ProxyFailures(9),
+        options={"crawler.retry.max": 1, "crawler.proxy.retry": 2},
+    )
+    report = exhausted.run()
+    assert report.counts["dead"] == 1
+    assert len(exhausted.downloader.proxies) == 4
+    disabled = OneSeed(
+        proxy=Supply(),
+        downloader=ProxyFailures(9),
+        options={"crawler.retry.max": 1, "crawler.proxy.retry": 0},
+    )
+    assert disabled.run().counts["dead"] == 1
+    assert len(disabled.downloader.proxies) == 2
+    direct = OneSeed(downloader=ProxyFailures(9), options={"crawler.retry.max": 1})
+    assert direct.run().counts["dead"] == 1
+    assert len(direct.downloader.proxies) == 2
+
+
+def test_is_proxy_error_can_be_overridden_and_must_return_bool():
+    """子类可替换代理错误判定，非布尔结果明确失败。"""
+
+    class Never(OneSeed):
+        """把所有失败都视为普通失败。"""
+
+        def is_proxy_error(self, context):
+            """不识别代理错误。
+
+            Args:
+                context: 当前重试上下文。
+
+            Returns:
+                False。
+            """
+            return False
+
+    spider = Never(
+        proxy=Supply(),
+        downloader=ProxyFailures(9),
+        options={"crawler.retry.max": 1},
+    )
+    assert spider.run().counts["dead"] == 1
+    assert len(spider.downloader.proxies) == 2
+
+    class Broken(OneSeed):
+        """返回非法结果的判定。"""
+
+        def is_proxy_error(self, context):
+            """返回非布尔值。
+
+            Args:
+                context: 当前重试上下文。
+
+            Returns:
+                非布尔值。
+            """
+            return 1
+
+    with pytest.raises(Exception, match="must return a boolean"):
+        Broken(proxy=Supply(), downloader=ProxyFailures(1)).run()
+
+
+def test_explicit_request_proxy_is_kept_across_retries():
+    """make_request 显式设置的代理不被默认轮换替换。"""
+
+    class Pinned(OneSeed):
+        """在请求上显式指定代理。"""
+
+        def make_request(self, context):
+            """构造带固定代理的请求。
+
+            Args:
+                context: 当前上下文。
+
+            Returns:
+                带显式代理的请求。
+            """
+            return Request(context.seeds["url"], proxy="http://127.0.0.1:9000")
+
+    source = Supply()
+    spider = Pinned(
+        proxy=source, downloader=ProxyFailures(2), options={"crawler.retry.max": 0}
+    )
+    assert spider.run().counts["acked"] == 1
+    assert spider.downloader.proxies == ["http://127.0.0.1:9000"] * 3
+    assert source.issued == []
 
 
 def test_explicit_request_proxy_wins_and_default_imports_are_lazy():
@@ -699,7 +872,9 @@ def test_explicit_request_proxy_wins_and_default_imports_are_lazy():
             return Request(context.seeds["url"], proxy="http://localhost:9999")
 
     spider = ExplicitProxySpider(
-        proxy=source, downloader=Download(), slot_session_reuse=False
+        proxy=source,
+        downloader=Download(),
+        options={"spider.session.reuse": False},
     )
     assert spider.run().counts["acked"] == 1
     assert source.issued == []
@@ -713,3 +888,20 @@ def test_explicit_request_proxy_wins_and_default_imports_are_lazy():
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_proxy_retry_options_can_be_overridden_per_task():
+    """单个任务可覆盖 Spider 默认的代理轮换与代理重试预算。"""
+    downloader = ProxyFailures(2)
+    spider = OneSeed(
+        proxy=Supply(),
+        downloader=downloader,
+        options={"crawler.retry.max": 0, "crawler.proxy.retry": 0},
+    )
+    spider.submit(
+        {"url": "https://example.com/pinned"},
+        options={"crawler.proxy.retry": 2, "crawler.proxy.rotate": False},
+    )
+    report = spider.run("spider")
+    assert report.counts["acked"] == 1
+    assert len(downloader.proxies) == 3 and len(set(downloader.proxies)) == 1

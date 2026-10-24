@@ -218,7 +218,8 @@ Interlace 当前 GraphWorker 对普通执行失败返回 REJECT，因此并不�
 
 可选参数 `raise_dead: Callable[[Work, BaseException], bool] | None` 在死信决定写入之后才调用；
 返回 False 时错误只保留在存储的 dead 记录中，不经 wait_idle/close 向等待方传播。租约丢失与存储错误不经此判定，
-判定函数自身失败会替代原错误传播。Air 的 `strict=False` 即基于此把业务拒绝转为 RunReport 摘要。
+判定函数自身失败会替代原错误传播。Air 即基于此把业务拒绝转为 RunReport 摘要而不中断消费，
+`spider.run.strict` 为 True 时再于排空后汇总抛出。
 
 每次经过任务存储的交付都建立新的本地 Slot 链，包括使用 MemoryTaskQueue 时。
 QueueBackend 实现 Interlace 的 `LocalTaskPublisher.submit_local`：本地 Router 已为分支 retain SlotLease，

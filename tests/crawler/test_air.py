@@ -26,10 +26,11 @@ from interlace.spi import ExecutionLimits
 
 from bricks import DownloadNode, Items, Request, Response, hooks, signals
 from bricks.downloaders.curl_cffi import AsyncCurlCffiDownloader, CurlCffiDownloader
+from bricks.models import SpiderSettings
 from bricks.plugins import on_request, scripts
 from bricks.proxies import BaseProxy, Manager
 from bricks.queues import MemoryTaskQueue
-from bricks.spider import Context, Spider
+from bricks.spider import Context, RejectedTasksError, ResponseRejectedError, Spider
 
 
 class FakeDownloader:
@@ -310,7 +311,7 @@ def test_download_retries_are_bounded_before_parse_and_storage():
     spider = SimpleSpider(
         [{"url": "https://example.com/retry"}],
         downloader=downloader,
-        retry_delay=0.01,
+        options={"crawler.retry.delay": 0.01},
     )
     report = spider.run(kwargs={"timeout": 5})
     assert report.counts["acked"] == 1
@@ -319,21 +320,29 @@ def test_download_retries_are_bounded_before_parse_and_storage():
     assert len(spider.stored) == 1 and spider.stored[0]["attempt"] == 3
 
 
-@pytest.mark.parametrize("path,expected", [("fail", 3), ("forbidden", 1), ("boom", 1)])
-def test_download_failure_rejects_and_does_not_store(path, expected):
-    """耗尽、明确拒绝和程序错误都保留失败，不运行存储。
+@pytest.mark.parametrize(
+    "path,expected,rejected",
+    [("fail", 6, True), ("forbidden", 1, True), ("boom", 1, False)],
+)
+def test_download_failure_rejects_and_does_not_store(path, expected, rejected):
+    """耗尽与明确拒绝进入死信并报告，程序错误照常抛出，均不运行存储。
 
     Args:
         path: 触发失败的 URL 路径。
-        expected: 期望下载次数。
+        expected: 期望下载次数，默认 crawler.retry.max 为 5。
+        rejected: 是否为不中断运行的业务拒绝。
     """
     downloader = FakeDownloader()
     spider = SimpleSpider(
         [{"url": f"https://example.com/{path}"}],
         downloader=downloader,
     )
-    with pytest.raises(ExecutionError):
-        spider.run(kwargs={"timeout": 5})
+    if rejected:
+        report = spider.run(kwargs={"timeout": 5})
+        assert sum(report.rejected.values()) == 1
+    else:
+        with pytest.raises(ExecutionError):
+            spider.run(kwargs={"timeout": 5})
     assert len(downloader.calls) == expected
     assert spider.stored == []
     assert spider.report().counts["dead"] == 1
@@ -846,9 +855,11 @@ def test_success_and_failure_signals_skip_download():
     assert first.run(kwargs={"timeout": 5}).counts["acked"] == 1
     assert downloader.calls == [] and first.stored == []
     second = StopEarly(
-        [{"url": "https://example.com/skip", "failed": True}], downloader=downloader
+        [{"url": "https://example.com/skip", "failed": True}],
+        downloader=downloader,
+        options={"spider.run.strict": True},
     )
-    with pytest.raises(ExecutionError, match="seed marked as failed"):
+    with pytest.raises(RejectedTasksError, match="seed marked as failed x1"):
         second.run(kwargs={"timeout": 5})
     assert second.report().counts["dead"] == 1
     assert downloader.calls == []
@@ -1155,7 +1166,7 @@ def test_initialization_lease_is_renewed_during_slow_seed_factory(renewals):
             assert release.wait(3)
             return {"url": "https://example.com/one"}
 
-    spider = SlowFactory(task_queue=queue, lease_seconds=0.6)
+    spider = SlowFactory(task_queue=queue, options={"spider.queue.lease": 0.6})
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
             running = executor.submit(spider.run_init)
@@ -1200,8 +1211,8 @@ def test_failure_signal_prevents_default_pipeline():
             raise signals.Failure()
 
     spider = Failed(downloader=FakeDownloader())
-    with pytest.raises(ExecutionError, match="seed marked as failed"):
-        spider.run(kwargs={"timeout": 5})
+    report = spider.run(kwargs={"timeout": 5})
+    assert report.rejected == {"seed marked as failed": 1}
     assert spider.report().counts["dead"] == 1
 
 
@@ -1917,7 +1928,7 @@ def test_auto_session_routes_rotating_proxies_to_per_proxy_sessions():
         seeds=[{"url": f"https://example.com/{index}"} for index in range(3)],
         downloader=factory,
         proxy=Manager(Rotating()),
-        session_proxies=1,
+        options={"spider.session.proxies": 1},
     )
     spider.run(kwargs={"timeout": 5})
     rows = spider.stored
@@ -1989,7 +2000,10 @@ def test_task_options_override_retry_budget_and_success_rule():
     downloader = FakeDownloader()
     queue = MemoryTaskQueue("options")
     spider = SimpleSpider(
-        downloader=downloader, task_queue=queue, queue_name="options", max_retry=0
+        downloader=downloader,
+        task_queue=queue,
+        queue_name="options",
+        options={"crawler.retry.max": 0},
     )
     spider.submit(
         {"url": "https://example.test/a/retry"}, options={"crawler.retry.max": 2}
@@ -1999,8 +2013,8 @@ def test_task_options_override_retry_budget_and_success_rule():
         {"url": "https://example.test/forbidden"},
         options={"crawler.response.ok": "response.status_code == 403"},
     )
-    with pytest.raises(Exception, match="retries exhausted"):
-        spider.run("spider", kwargs={"timeout": 5})
+    report = spider.run("spider", kwargs={"timeout": 5})
+    assert report.rejected == {"download retries exhausted; last status=500": 1}
     assert queue.counts() == {"pending": 0, "leased": 0, "acked": 2, "dead": 1}
     assert {row["url"]: row["attempt"] for row in spider.stored} == {
         "https://example.test/a/retry": 3,
@@ -2009,21 +2023,110 @@ def test_task_options_override_retry_budget_and_success_rule():
     assert downloader.attempts["https://example.test/b/retry"] == 1
 
 
-def test_non_strict_run_reports_business_rejections_but_raises_program_errors():
-    """strict=False 时业务拒绝只进入死信和报告，程序错误仍让运行入口抛错。"""
+def test_business_rejections_do_not_interrupt_but_program_errors_raise():
+    """默认业务拒绝只进入死信和报告，其余任务照常消费；程序错误仍让运行入口抛错。"""
     queue = MemoryTaskQueue("lenient")
-    spider = SimpleSpider(task_queue=queue, max_retry=0, strict=False)
-    spider.submit({"url": "https://example.test/ok"})
+    spider = SimpleSpider(task_queue=queue, options={"crawler.retry.max": 0})
     spider.submit({"url": "https://example.test/fail"})
     spider.submit({"url": "https://example.test/forbidden"})
+    spider.submit({"url": "https://example.test/ok"})
     report = spider.run("spider", kwargs={"timeout": 5})
     assert report.counts == {"pending": 0, "leased": 0, "acked": 1, "dead": 2}
     assert len(report.rejections) == 2
-    assert any("retries exhausted" in line for line in report.rejections)
-    assert any("status=403" in line for line in report.rejections)
+    assert report.rejected == {
+        "download retries exhausted; last status=500": 1,
+        "response rejected: status=403": 1,
+    }
 
-    broken = SimpleSpider(task_queue=MemoryTaskQueue("broken"), strict=False)
+    broken = SimpleSpider(task_queue=MemoryTaskQueue("broken"))
     broken.submit({"url": "https://example.test/boom"})
     with pytest.raises(Exception, match="downloader configuration broken"):
         broken.run("spider", kwargs={"timeout": 5})
     assert broken.report().rejections == ()
+
+
+def test_strict_run_drains_queue_before_reporting_rejections():
+    """strict=True 不在首个拒绝处停止，排空全部任务后以汇总异常报告。"""
+    queue = MemoryTaskQueue("strict")
+    spider = SimpleSpider(task_queue=queue, options={"spider.run.strict": True})
+    for index in range(3):
+        spider.submit({"url": f"https://example.test/{index}/forbidden"})
+    for index in range(5):
+        spider.submit({"url": f"https://example.test/ok/{index}"})
+    with pytest.raises(RejectedTasksError) as caught:
+        spider.run("spider", kwargs={"timeout": 5})
+    assert queue.counts() == {"pending": 0, "leased": 0, "acked": 5, "dead": 3}
+    assert caught.value.report.rejected == {"response rejected: status=403": 3}
+    assert "3 task(s) rejected" in str(caught.value)
+    assert len(spider.stored) == 5
+
+
+def test_rejection_reasons_are_bounded():
+    """不同拒绝原因的计数键有上限，超出部分合并到 (other)。"""
+    spider = SimpleSpider()
+    work = spider._make_work({"url": "https://example.test/"})
+    for index in range(60):
+        assert not spider._raise_dead(work, ResponseRejectedError(f"reason {index}"))
+    rejected = spider.report().rejected
+    assert len(rejected) == 51 and rejected["(other)"] == 10
+    assert len(spider.report().rejections) == 20
+    assert spider._raise_dead(work, RuntimeError("bug"))
+
+
+def test_spider_settings_are_split_from_task_options():
+    """spider.* 键在构造时拆出且不进入任务，其余键随 Work 持久化。"""
+    plain = SimpleSpider()
+    spider = SimpleSpider(
+        options={
+            "spider.run.strict": True,
+            "spider.queue.lease": 5,
+            "spider.session.proxies": 2,
+            "crawler.retry.delay": 0.5,
+            "mode": "fast",
+        }
+    )
+    work = spider._make_work({"url": "https://example.test/"})
+    assert work.options == {"crawler.retry.delay": 0.5, "mode": "fast"}
+    assert spider._strict is True and spider._ttl == 5.0
+    assert spider._session_proxies == 2
+    assert (
+        SpiderSettings.split(dict(SpiderSettings(lease=5).to_options()))[0].lease == 5
+    )
+    assert (
+        plain._make_work({"url": "https://example.test/"}).id
+        == SimpleSpider(options={"spider.run.strict": True})
+        ._make_work({"url": "https://example.test/"})
+        .id
+    )
+
+
+@pytest.mark.parametrize(
+    "options,error",
+    [
+        ({"spider.unknown": 1}, "unknown spider settings: spider.unknown"),
+        ({"spider.run.strict": 1}, "spider.run.strict must be a boolean"),
+        ({"spider.queue.lease": 0}, "spider.queue.lease must be positive"),
+        ({"spider.session.proxies": 0}, "spider.session.proxies must be an integer"),
+        ({"crawler.retry.delay": -1}, "crawler.retry.delay must be nonnegative"),
+        ({"crawler.proxy.rotate": "no"}, "crawler.proxy.rotate must be a boolean"),
+        ({"crawler.proxy.retry": True}, "crawler.proxy.retry must be an integer"),
+    ],
+)
+def test_dotted_options_are_validated_at_construction(options, error):
+    """实例级与任务级点分配置在构造时校验，错误信息指出配置键。
+
+    Args:
+        options: 非法配置。
+        error: 期望的错误信息片段。
+    """
+    with pytest.raises((TypeError, ValueError), match=error):
+        SimpleSpider(options=options)
+
+
+def test_spider_settings_cannot_be_set_per_task():
+    """提交任务时携带 spider.* 键明确报错，不静默写入 Work。"""
+    spider = SimpleSpider()
+    with pytest.raises(ValueError, match="instance-level"):
+        spider.submit(
+            {"url": "https://example.test/"}, options={"spider.run.strict": True}
+        )

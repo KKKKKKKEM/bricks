@@ -259,7 +259,6 @@ class CrawlNode(Node):
         _stage: 构造时固定的操作名称。
         _callback: 业务方法或 None。
         _download: 已装配的领域下载节点。
-        _retry_delay: 默认重试等待秒数。
         _summarize: 完成阶段替代默认摘要的同步函数，None 输出 items/attempts/retries 计数。
     """
 
@@ -272,7 +271,6 @@ class CrawlNode(Node):
         callback: Callable[..., Any] | None = None,
         *,
         download: DownloadNode | AsyncDownloadNode | None = None,
-        retry_delay: float = 0,
         summarize: Callable[[Any], dict[str, Any]] | None = None,
     ) -> None:
         """固定业务操作、资源与输出类型。
@@ -282,11 +280,10 @@ class CrawlNode(Node):
             stage: 业务操作名。
             callback: 显式接收 Context 的方法。
             download: 借用下载节点。
-            retry_delay: 默认等待秒数。
             summarize: 完成阶段从 Context 生成 summary 端口值的函数。
         """
         self._owner, self._stage, self._callback = owner, stage, callback
-        self._download, self._retry_delay = download, retry_delay
+        self._download = download
         self._summarize = summarize
         ports: dict[str, type[Any]] = {"task": _Task, "complete": _Task}
         if stage == "download":
@@ -340,6 +337,13 @@ class CrawlNode(Node):
                     "retries": task.retries,
                 }
             if self._stage == "retry":
+                if (
+                    task.response is not None
+                    and task.proxy_retries < current.crawler_options.proxy_retry
+                    and self._owner._proxy_error(current)
+                ):
+                    task.proxy_retries += 1
+                    return None
                 if task.retries >= current.max_retry:
                     detail = (
                         f"last status={task.response.status_code}"
@@ -354,7 +358,7 @@ class CrawlNode(Node):
                 async def wait() -> None:
                     """等待本次重试并清理上一响应，期间仍持有当前 Slot。"""
                     delay = (
-                        self._retry_delay
+                        current.crawler_options.retry_delay
                         if task.retry_delay is None
                         else task.retry_delay
                     )

@@ -1,6 +1,6 @@
 """代码式爬虫基类及其领域上下文；不转导出编排引擎类型。"""
 
-from .air import RunReport, Spider
+from .air import RejectedTasksError, RunReport, Spider
 from .context import Affinity, Context, HookContext, InitContext, ResponseRejectedError
 
 __all__ = [
@@ -8,6 +8,7 @@ __all__ = [
     "Context",
     "InitContext",
     "HookContext",
+    "RejectedTasksError",
     "ResponseRejectedError",
     "RunReport",
     "Spider",

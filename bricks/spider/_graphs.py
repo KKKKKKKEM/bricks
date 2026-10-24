@@ -166,9 +166,7 @@ class GraphAssembly:
             "before_retry": hook(hook_api.BEFORE_RETRY),
             "retry_prepare": CrawlNode(spider, "retry_prepare", spider.on_retry),
             "after_retry": hook(hook_api.AFTER_RETRY),
-            "retry_wait": CrawlNode(
-                spider, "retry_wait", retry_delay=spider._retry_delay
-            ),
+            "retry_wait": CrawlNode(spider, "retry_wait"),
             "complete": CrawlNode(
                 spider,
                 "complete",

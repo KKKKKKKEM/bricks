@@ -33,7 +33,7 @@ spider = MySpider(
 spider.run()
 ```
 
-`MySpider` 继承 `air.Spider`。业务参数沿用 concurrency、downloader、task_queue、queue_name、proxy、forever 的命名：
+`MySpider` 继承 `air.Spider`。构造参数只保留基本参数与资源，其余配置统一写成 options 中的点分键：
 
 | 参数 | 契约 |
 | --- | --- |
@@ -43,41 +43,64 @@ spider.run()
 | queue_name | 注入队列时必须等于其 name；缺省取队列名或爬虫类完整名称 |
 | proxy | 固定地址、ProxyProvider 或 Manager，Request 的显式代理优先；不接受动态 ref 配置 |
 | forever | True 时空队列仍保持消费，默认 False |
-| max_retry / retry_delay | 额外重试预算（默认 2）和等待秒数（默认 0）；下载前的 Retry 也消耗预算，单个任务可用执行配置覆盖 |
-| options / limits | 默认 JSON 执行配置及单种子 ExecutionLimits |
-| lease_seconds / init_timeout | 交付和初始化租约秒数，以及初始化图的执行超时 |
-| poll_interval | 队列空轮询间隔秒数，默认 0.05；任务完成会唤醒领取循环 |
-| slot_session_reuse | 是否自动装配并复用每 Slot 同步会话，默认 True；False 使用下载器的独立请求路径 |
-| session_proxies | 自动会话模式下每个 Slot 的 ProxySessions 上限，默认 4；按代理地址各建一个会话，超出时关闭最久未用的 |
-| strict | 默认 True，业务拒绝使 run()/run_spider() 抛错；False 时只记入死信与 RunReport.rejections |
+| options | 点分配置：`spider.*` 为实例级配置，其余（含 `crawler.*` 与业务键）为合并进每个任务的默认执行配置 |
+| limits | 单种子 ExecutionLimits |
 | plugins | 安装到 Spider 自建 Runtime 的 Interlace 插件序列，默认空；不能提供任务后端 |
 | slots | 借用的本地 SlotProvider，资源归调用方管理 |
 
-这些配置应在打开实例前确定，不在运行中修改。不同进程使用同一队列名称时，必须注册相同版本的业务流程和配置。
+options 的键分为两类：
 
-重试次数与成功判断可以按任务设置，配置随 Work 持久化，进程重启后仍生效：
+| 键 | 默认 | 含义 |
+| --- | --- | --- |
+| `spider.run.strict` | False | 业务拒绝只记入死信与 RunReport；True 时在队列排空后抛出 RejectedTasksError |
+| `spider.init.timeout` | None | 单次初始化执行超时秒数，None 不限制 |
+| `spider.queue.lease` | 30 | 交付和初始化租约秒数 |
+| `spider.queue.poll` | 0.05 | 队列空轮询间隔秒数；任务完成会唤醒领取循环 |
+| `spider.session.reuse` | True | 是否自动装配并复用每 Slot 同步会话；False 使用下载器的独立请求路径 |
+| `spider.session.proxies` | 4 | 自动会话模式下每个 Slot 的 ProxySessions 上限；按代理地址各建一个会话，超出时关闭最久未用的 |
+| `crawler.retry.max` | 5 | 首次下载后的额外重试预算；下载前的 Retry 也消耗预算 |
+| `crawler.retry.delay` | 0 | 重试等待秒数，`Retry(delay=...)` 优先 |
+| `crawler.proxy.rotate` | True | 重试时 set_proxy 是否更换已用于下载的代理，见[代理管理](10-proxies.md) |
+| `crawler.proxy.retry` | 5 | 代理错误不消耗 `crawler.retry.max` 的独立上限，用尽后照常消耗重试预算，0 表示不单独计数 |
+
+`spider.*` 由 `bricks.models.SpiderSettings` 在构造时拆出并校验，未知键报错；它只属于当前实例，不写入任务，
+也不影响 Work ID，因此在 `submit` 等任务级 options 中携带 `spider.*` 会明确报错。其余键（`crawler.*` 及会话、指纹、
+成功规则等，见下文 CrawlerOptions）随每个 Work 持久化，可以按任务覆盖，进程重启后仍生效：
 
 ```python
+spider = MySpider(
+    concurrency=8,
+    options={"spider.run.strict": True, "crawler.retry.max": 3, "crawler.retry.delay": 1},
+)
 context.submit(seed, options={"crawler.retry.max": 5})
 context.submit(seed, options={"crawler.response.ok": "response.get('code') == 0"})
 spider = MySpider(options={"crawler.response.ok": {"response.status_code == 404": "raise signals.Success"}})
 ```
 
-`context.max_retry` 读取当前任务的重试上限：执行配置 `crawler.retry.max` 优先，form 另有段级 `Download.max_retry`，
-最后为 Spider 的 max_retry。`context.ok_rule` 读取执行配置 `crawler.response.ok`，form 另有段级 `Download.ok`；
+这些配置应在打开实例前确定，不在运行中修改。不同进程使用同一队列名称时，必须注册相同版本的业务流程和配置。
+
+`context.max_retry` 读取当前任务的重试上限：执行配置 `crawler.retry.max` 优先（含 Spider options 合并的默认值），
+form 另有段级 `Download.max_retry`，最后为默认 5。`context.ok_rule` 读取执行配置 `crawler.response.ok`，form 另有段级 `Download.ok`；
 默认注册的 `After.bypass` 未显式传入 ok 时使用它，仍为 None 时采用默认状态码规则。Spider 的 options 会合并进每个任务，
 因此与单任务配置同级，优先于 form 的段级设置。执行配置只接受 JSON 值，callable 规则通过 `bypass(ok=...)`
 参数或 form 的 `Download(ok=...)` 声明。重试耗尽时任务进入 dead，可用队列的 `revive_dead` 重新投放。
 执行配置的框架键统一使用 `crawler.` 前缀。
 
 `bricks.models.CrawlerOptions` 是 `crawler.*` 键的冻结数据类：session_reuse（默认 True）、impersonate、retry_max、
-response_ok（字符串或映射）、response_scripts（映射）与 form_stage。`CrawlerOptions.parse(options)` 校验全部
-`crawler.*` 键，未知键抛出 ValueError；`to_options()` 只返回非默认键，可与业务键合并：
+retry_delay、proxy_rotate、proxy_retry、response_ok（字符串或映射）、response_scripts（映射）与 form_stage。
+`CrawlerOptions.parse(options)` 校验全部 `crawler.*` 键，未知键或 `spider.*` 键抛出 ValueError；
+`SpiderSettings.split(options)` 返回实例级配置与其余执行配置。两者的 `to_options()` 都只返回非默认键，可合并后传给 Spider：
 
 ```python
-from bricks.models import CrawlerOptions
+from bricks.models import CrawlerOptions, SpiderSettings
 
-spider = MySpider(options={**CrawlerOptions(retry_max=3).to_options(), "my.key": 1})
+spider = MySpider(
+    options={
+        **CrawlerOptions(retry_max=3).to_options(),
+        **SpiderSettings(strict=True).to_options(),
+        "my.key": 1,
+    }
+)
 ```
 
 Spider 在构造时和每次构建 Work（submit）时校验，DownloadNode 在每次 firing 时校验；
@@ -90,8 +113,22 @@ Spider 在构造时和每次构建 Work（submit）时校验，DownloadNode 在�
 | parse(context) | 返回 Items 或 list[dict]；默认返回请求和响应快照 |
 | item_pipeline(context) | 执行存储并正常返回 None，继续后置插槽与确认收尾 |
 | on_retry(context) | 可选的业务重试准备，响应可能尚不存在；返回 None，预算和调度由图负责 |
+| is_proxy_error(context) | 同步返回 bool，判断上一次下载失败是否由代理引起；命中时先消耗 crawler.proxy.retry |
 
 `on_retry(context)` 可能在首次下载前运行，因此 `response` 尚不存在；重试耗尽错误包含最后响应状态码，或无响应时的重试触发类型。
+
+默认 `is_proxy_error` 要求响应为传输失败（status_code=-1）、请求带代理，且异常类名为 ProxyError 或错误信息含
+proxy（例如 curl 的 `Failed to connect ... over proxy`）。命中且 `context.proxy_retries` 未达 `crawler.proxy.retry` 时，
+本次重试不计入 `context.retries`。HTTPS 隧道被代理拒绝（如 curl 报告的 407）同样是传输失败并计为代理错误；
+HTTP 请求经代理收到的普通 407 响应仍按状态码规则处理。
+需要更精确的判定时在子类重写：
+
+```python
+class MySpider(Spider):
+    def is_proxy_error(self, context):
+        error = context.response.error
+        return error is not None and "tunnel" in str(error)
+```
 
 业务方法支持普通 def 与 async def；异步 make_seeds 应返回同步种子集合，不使用异步生成器。
 同步方法由引擎的执行线程调用，Awaitable 交给引擎的异步运行器等待，不将全部同步业务放入异步循环。
@@ -165,14 +202,15 @@ survey 是手动消费，不是副作用沙箱。默认内存队列按实例隔�
 
 省略 extract 或传空序列返回完成节点的 Context 列表；指定字段时返回属性映射，均按完成顺序排列。
 提前 Success 产生的结果可能尚未经过下载或解析；提取缺失属性时对应值为 None，不影响批次中其他结果。
-默认 strict=True 时，run() 会在已接受任务排空后报告任务失败，单项 Failure（例如 404）也会使本次 run() 抛出错误。
+单项 Failure（例如 404）或重试耗尽进入死信，不中断其余种子；`spider.run.strict` 为 True 时 survey 在排空后抛出 RejectedTasksError。
 异步 Graph 路径的 ERROR_OCCURRED Hook 同步运行在共享事件循环线程；阻塞型回调会暂停其他 Slot 的异步任务。
 返回的 Context 仅用于读取结果，执行和自建资源已经结束；不是继续提交、发事件或复用已关闭会话的句柄。
 后置插件失败仍传播异常且不 ACK。forever=True 不适合一次性结果收集，survey 会明确拒绝。
 
 ## Context 与种子提交
 
-`air.Context` 提供 seeds、request、response、items、target、task_queue、queue_name、form、attempt 和 retries。
+`air.Context` 提供 seeds、request、response、items、target、task_queue、queue_name、form、attempt、retries 和 proxy_retries。
+代理插件经 `context.assign_proxy(address)` 写入可在重试时轮换的代理，`context.proxy_spent` 表示该代理已用于下载。
 request/response/items 在对应阶段完成之前不可读取。数据在同一图内沿 Output 传递，不保存在共享 Spider 或 Node 上。
 seeds 的修改只影响当前交付，不回写原始队列任务或自动重算 ID。
 
@@ -279,7 +317,8 @@ Hook 自身的 match 不支持表达式字符串或动态函数路径；需要�
 或 `After.conditional_scripts`。当前 Context 只在回调作用域内可见，不是事件或资源注册表。
 
 异步 Graph 路径的 `ERROR_OCCURRED` 同步运行在共享事件循环线程；阻塞型错误钩子会暂停所有 Slot 的异步工作。
-`run()` 在排空已接受的任务后报告失败；strict=True 时一项失败任务（例如 HTTP 404 被 bypass 判为 Failure）会使整体运行抛错。
+一项失败任务（例如 HTTP 404 被 bypass 判为 Failure）只进入死信并计入 RunReport，不中断其余任务；
+`spider.run.strict` 为 True 时 `run()` 在队列排空后汇总抛错。
 
 图内支持 BEFORE/AFTER_MAKE_SEEDS、BEFORE/AFTER_PUT_SEEDS、BEFORE/AFTER_MAKE_REQUEST、
 BEFORE/AFTER_REQUEST、BEFORE/AFTER_RETRY、BEFORE/AFTER_PARSE、BEFORE/AFTER_PIPELINE。
@@ -304,12 +343,22 @@ forever=True 的消费者在空队列时仍保持运行，外部 close 会通知
 初始化失败会记录断点并允许已经提交的种子排空，原始异常仍向调用方传播。
 InitRecord 表示生产状态，RunReport.counts 表示当前共享队列快照，不替代各 Worker 的异常收集或外部生产者的结束协议。
 
-`strict=False` 时，Failure 信号和重试耗尽仍写入死信，但 run()/run_spider() 不因此抛错，而是记入
-`RunReport.rejections`：本进程最近 20 条 `"work_id: error"` 字符串。程序错误、存储错误与初始化失败仍然抛出。
-`RunReport(initialization, counts, rejections=())` 只是本进程摘要，不替代跨进程错误收集。
+Failure 信号和重试耗尽是业务拒绝：任务写入死信，消费继续，run()/run_spider() 正常返回 RunReport。
+`report.rejections` 是本进程最近 20 条 `"work_id: error"` 字符串，`report.rejected` 按原因计数
+（例如 `{"response rejected: status=404": 12}`），最多 50 个不同原因，其余合并到 `"(other)"`。
+`spider.run.strict` 为 True 时不在首个拒绝处停止，而是排空队列后抛出 `bricks.spider.RejectedTasksError`，其 `report` 属性
+携带同一份报告。程序错误、存储错误与初始化失败不受该开关影响，仍然抛出。
+
+```python
+report = spider.run()
+if report.rejected:
+    spider.task_queue.revive_dead(100)  # 确认原因后可批量重投死信
+```
+
+`RunReport(initialization, counts, rejections=(), rejected={})` 只是本进程摘要，不替代跨进程错误收集。
 
 未注入 slots 且同步 downloader 支持 SessionDownloader 时，Air 按 concurrency 自动创建长期 Slot，并为每个 Slot 装配
-`ProxySessions`：首次下载时才惰性创建会话，每个代理地址一个，数量上限为 session_proxies；执行停止后关闭全部会话。
+`ProxySessions`：首次下载时才惰性创建会话，每个代理地址一个，数量上限为 `spider.session.proxies`；执行停止后关闭全部会话。
 爬虫作者无需构造 SlotPool 或重写 build_download_node。
 异步 Session 与自定义多资源 Slot 可参考[会话示例](../examples/crawler_session.py)显式装配。
 注入的 SlotPool、显式会话和 Redis 客户端由调用方在 Spider 停止后关闭；

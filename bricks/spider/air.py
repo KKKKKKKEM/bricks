@@ -6,7 +6,7 @@ import inspect
 import time
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from threading import Event as ThreadEvent
 from threading import Lock, RLock
 from typing import Any, cast
@@ -43,8 +43,8 @@ from bricks.downloaders import SessionDownloader
 from bricks.downloaders.curl_cffi import CurlCffiDownloader
 from bricks.downloaders.proxy_sessions import ProxySessions
 from bricks.hooks import Binding, Task
-from bricks.models import CrawlerOptions
-from bricks.models.options import IMPERSONATE, RETRY_MAX
+from bricks.models import CrawlerOptions, SpiderSettings
+from bricks.models.options import IMPERSONATE, PROXY_RETRY, PROXY_ROTATE, RETRY_MAX
 from bricks.plugins import on_request
 from bricks.proxies import Manager, ProxyProvider, format_proxy
 from bricks.queues import (
@@ -71,10 +71,19 @@ from .context import (
     InitContext,
 )
 
-__all__ = ["Context", "InitContext", "HookContext", "RunReport", "Spider"]
+__all__ = [
+    "Context",
+    "InitContext",
+    "HookContext",
+    "RejectedTasksError",
+    "RunReport",
+    "Spider",
+]
 
 
 _REJECTION_LIMIT = 20  # RunReport 保留的最近业务拒绝条数。
+_REASON_LIMIT = 50  # 按原因计数的不同原因上限，超出部分合并到 _OTHER_REASON。
+_OTHER_REASON = "(other)"  # 超出原因上限的拒绝计数键。
 
 
 @dataclass(frozen=True)
@@ -84,28 +93,55 @@ class RunReport:
     Attributes:
         initialization: 当前初始化记录，未初始化时为 None。
         counts: pending、leased、acked 和 dead 数量，调用方拥有独立副本。
-        rejections: strict=False 时本进程未抛出的最近业务拒绝，格式为 "Work ID: 错误"，
-            最多保留 20 条；完整死信仍在任务存储中。
+        rejections: 本进程最近的业务拒绝，格式为 "Work ID: 错误"，最多保留 20 条；
+            完整死信仍在任务存储中。
+        rejected: 本进程业务拒绝按原因的计数，调用方拥有独立副本；最多 50 个不同原因，
+            其余合并到 "(other)"。
     """
 
     initialization: InitRecord | None
     counts: dict[str, int]
     rejections: tuple[str, ...] = ()
+    rejected: dict[str, int] = field(default_factory=dict)
 
 
-def _business_rejection(error: BaseException) -> bool:
-    """判断错误是否为 Failure 信号或重试耗尽产生的业务拒绝。
+class RejectedTasksError(RuntimeError):
+    """strict=True 时，队列排空后汇总报告本进程的业务拒绝。
+
+    Attributes:
+        report: 排空时的运行快照，含按原因计数与最近拒绝。
+    """
+
+    def __init__(self, report: RunReport) -> None:
+        """按原因计数生成可读的汇总信息。
+
+        Args:
+            report: 排空时的运行快照。
+        """
+        total = sum(report.rejected.values())
+        reasons = ", ".join(
+            f"{reason} x{count}" for reason, count in report.rejected.items()
+        )
+        super().__init__(f"{total} task(s) rejected: {reasons}")
+        self.report = report
+
+
+def _rejection_reason(error: BaseException) -> str | None:
+    """取得 Failure 信号或重试耗尽产生的业务拒绝原因。
 
     Args:
         error: 已写入死信的交付错误。
 
     Returns:
-        错误本身或其 Graph 执行错误的直接原因是 ResponseRejectedError 时为 True。
+        错误本身或其 Graph 执行错误的直接原因是 ResponseRejectedError 时返回其信息，否则为 None。
     """
-    return isinstance(error, domain.ResponseRejectedError) or (
-        isinstance(error, ExecutionError)
-        and isinstance(error.__cause__, domain.ResponseRejectedError)
-    )
+    if isinstance(error, ExecutionError) and isinstance(
+        error.__cause__, domain.ResponseRejectedError
+    ):
+        error = error.__cause__
+    if isinstance(error, domain.ResponseRejectedError):
+        return str(error) or type(error).__name__
+    return None
 
 
 def _extract_attribute(context: Context, name: str) -> Any:
@@ -137,12 +173,11 @@ class Spider:
         _slots: 当前进程的 Slot 提供器，外部注入时不负责关闭。
         _own_slots: 是否由本实例创建 SlotPool。
         _owned_proxy_slots: 自建 Slot 列表，停止执行后归还其中的托管代理。
-        _options: 构造时复制的默认 JSON 执行配置。
+        _settings: 构造时从 options 拆出的 spider.* 实例级配置，不随任务持久化。
+        _options: 构造时复制的默认 JSON 执行配置，不含 spider.* 键，合并进每个任务。
         _limits: 每个消费执行的限制。
-        _init_timeout: 单次初始化执行超时秒数，None 不限制。
-        _ttl: 初始化租约及消费交付租约的秒数。
-        _max_retries: 下载失败后的额外尝试上限。
-        _retry_delay: 下载重试等待秒数。
+        _init_timeout: 单次初始化执行超时秒数，None 不限制，来自 spider.init.timeout。
+        _ttl: 初始化租约及消费交付租约的秒数，来自 spider.queue.lease。
         _hooks: 当前实例在启动前登记的回调。
         _installed: 是否已经完成一次 install，失败时回滚本次注册。
         _hook_tasks: 打开时固定的各阶段声明，不通过 Runtime.attach 装配业务 Hook。
@@ -151,12 +186,13 @@ class Spider:
         _runtime: 自有 Runtime，尚未打开时为 None。
         _backend: 自有队列消费适配器，存储由调用方管理。
         _auto_session: 是否由框架为每个自建 Slot 装配按请求代理路由的同步会话。
-        _session_proxies: 自动会话模式下每个 Slot 同时保留的代理会话数量上限。
-        _poll_interval: QueueBackend 领取循环的轮询间隔秒数。
+        _session_proxies: 自动会话模式下每个 Slot 同时保留的代理会话数量上限，来自 spider.session.proxies。
+        _poll_interval: QueueBackend 领取循环的轮询间隔秒数，来自 spider.queue.poll。
         _owned_sessions: 框架创建并在执行停止后关闭的各 Slot 代理会话路由。
-        _strict: 业务拒绝进入死信后是否让运行入口抛错。
-        _rejections: strict=False 时最近的业务拒绝摘要，按发生顺序保留最多 20 条。
-        _rejections_lock: 保护 _rejections，交付线程与查询方并发访问。
+        _strict: 队列排空后是否以 RejectedTasksError 汇总报告本进程的业务拒绝，来自 spider.run.strict。
+        _rejections: 最近的业务拒绝摘要，按发生顺序保留最多 20 条。
+        _rejected: 业务拒绝按原因的计数，最多 50 个不同原因。
+        _rejections_lock: 保护 _rejections 与 _rejected，交付线程与查询方并发访问。
         _plugins: 构造时复制的 Interlace 插件，打开时装入自有 Runtime，由 Runtime 关闭时卸载。
         _init_execution: 当前初始化执行，便于 close 协作式取消。
         _operation: 串行化公开运行入口，不限制各种子执行并发。
@@ -184,14 +220,6 @@ class Spider:
         slots: SlotProvider | None = None,
         options: Mapping[str, Any] | None = None,
         limits: ExecutionLimits | None = None,
-        max_retry: int = 2,
-        retry_delay: float = 0,
-        lease_seconds: float = 30,
-        init_timeout: float | None = None,
-        poll_interval: float = 0.05,
-        slot_session_reuse: bool = True,
-        session_proxies: int = 4,
-        strict: bool = True,
         plugins: Sequence[Plugin] = (),
     ) -> None:
         """沿用业务参数命名，构造时不启动消费者或生成种子。
@@ -204,22 +232,14 @@ class Spider:
             proxy: 固定地址、供应源或 Manager，Request 的显式代理优先。
             forever: 队列暂时为空时是否持续消费，默认 False。
             slots: 借用的本进程 Slot 资源池。
-            options: 默认 JSON 执行配置。
+            options: 点分配置。`spider.*` 键是实例级配置（见 SpiderSettings），构造时拆出且不写入任务；
+                其余键（含 `crawler.*`，见 CrawlerOptions）是默认 JSON 执行配置，合并进每个任务。
             limits: 每个消费 Graph 的执行限制。
-            max_retry: 首次下载后的额外尝试上限，默认 2。
-            retry_delay: 下载重试等待秒数，默认 0。
-            lease_seconds: 初始化和交付租约秒数，默认 30。
-            poll_interval: 队列轮询间隔秒数，默认 0.05。
-            slot_session_reuse: 是否为自建 Slot 自动复用同步会话，默认 True。
-            session_proxies: 自动会话模式下每个 Slot 按代理地址保留的会话上限，默认 4，
-                超过时关闭最久未使用的会话。
-            strict: 默认 True，Failure 或重试耗尽进入死信后运行入口抛错；False 只把业务拒绝
-                记入 RunReport.rejections，程序错误、存储错误和初始化失败仍然抛出。
             plugins: 打开时装入自有 Runtime 的 Interlace 插件，例如指标聚合；不能再提供任务后端。
 
         Raises:
             TypeError: 参数不符合公开协议。
-            ValueError: 名称、并发、重试次数、会话上限、时间或 crawler.* 执行配置非法。
+            ValueError: 名称、并发，或 spider.*、crawler.* 配置非法。
         """
         default_name = (
             task_queue.name
@@ -233,16 +253,11 @@ class Spider:
             raise ValueError("queue_name must match task_queue.name")
         if type(concurrency) is not int or concurrency < 1:
             raise ValueError("concurrency must be a positive integer")
-        if type(max_retry) is not int or max_retry < 0:
-            raise ValueError("max_retry must be a nonnegative integer")
         if type(forever) is not bool:
             raise TypeError("forever must be boolean")
-        if type(slot_session_reuse) is not bool:
-            raise TypeError("slot_session_reuse must be boolean")
-        if type(strict) is not bool:
-            raise TypeError("strict must be boolean")
-        if type(session_proxies) is not int or session_proxies < 1:
-            raise ValueError("session_proxies must be a positive integer")
+        settings, task_options = SpiderSettings.split(
+            {} if options is None else options
+        )
         if isinstance(proxy, str):
             proxy = format_proxy(proxy)
         elif proxy is not None and not isinstance(proxy, Manager):
@@ -258,7 +273,9 @@ class Spider:
             getattr(self.downloader, "fetch", None)
         ):
             raise TypeError("downloader must be an instance with fetch")
-        validated = make_work(self.crawl_graph_name, {}, options=options, limits=limits)
+        validated = make_work(
+            self.crawl_graph_name, {}, options=task_options, limits=limits
+        )
         CrawlerOptions.parse(validated.options)
         self.task_queue = (
             MemoryTaskQueue(self.queue_name) if task_queue is None else task_queue
@@ -270,25 +287,25 @@ class Spider:
         self._own_slots = slots is None
         self._auto_session = (
             slots is None
-            and slot_session_reuse
+            and settings.session_reuse
             and not inspect.iscoroutinefunction(self.downloader.fetch)
             and isinstance(self.downloader, SessionDownloader)
             and getattr(self.downloader, "slot_session_reuse", True) is True
         )
-        self._session_proxies = session_proxies
+        self._settings = settings
+        self._session_proxies = settings.session_proxies
         self._owned_sessions: list[ProxySessions] = []
-        self._strict = strict
+        self._strict = settings.strict
         self._rejections: deque[str] = deque(maxlen=_REJECTION_LIMIT)
+        self._rejected: dict[str, int] = {}
         self._rejections_lock = Lock()
         self._plugins = tuple(plugins)
         self._owned_proxy_slots: list[Slot] = []
         self._options = dict(validated.options)
         self._limits = validated.limits
-        self._init_timeout = None if init_timeout is None else seconds(init_timeout)
-        self._ttl = seconds(lease_seconds)
-        self._max_retries = max_retry
-        self._retry_delay = seconds(retry_delay, positive=False)
-        self._poll_interval = seconds(poll_interval)
+        self._init_timeout = settings.init_timeout
+        self._ttl = settings.lease
+        self._poll_interval = settings.poll
         self._hooks: list[Binding] = []
         self._installed = False
         self._hook_tasks: dict[str, tuple[Task, ...]] = {}
@@ -431,7 +448,7 @@ class Spider:
 
         Raises:
             TypeError: 种子或配置类型非法。
-            ValueError: 存在未知或非法的 crawler.* 执行配置。
+            ValueError: 存在未知或非法的 crawler.* 执行配置，或含实例级 spider.* 键。
         """
         if type(seed) is not dict:
             raise TypeError("seed must be a JSON object")
@@ -724,6 +741,46 @@ class Spider:
             None。
         """
         return None
+
+    def is_proxy_error(self, context: domain.Context) -> bool:
+        """判断上一次下载失败是否由代理引起，命中时先消耗 max_proxy_retry 而非 max_retry。
+
+        默认要求传输失败（status_code=-1）且请求带代理，异常类名为 ProxyError 或信息含 proxy。
+        子类可重写为同步布尔判断。
+
+        Args:
+            context: 含上一次响应的上下文。
+
+        Returns:
+            判定为代理错误时为 True。
+        """
+        response = context.response
+        error = response.error
+        if response.status_code != -1 or error is None or context.request.proxy is None:
+            return False
+        return (
+            any(kind.__name__ == "ProxyError" for kind in type(error).__mro__)
+            or "proxy" in str(error).lower()
+        )
+
+    def _proxy_error(self, context: domain.Context) -> bool:
+        """调用 is_proxy_error 并校验同步布尔结果。
+
+        Args:
+            context: 含上一次响应的上下文。
+
+        Returns:
+            判定结果。
+
+        Raises:
+            TypeError: 判定函数返回非布尔值或 Awaitable。
+        """
+        result = self.is_proxy_error(context)
+        if type(result) is not bool:
+            if inspect.iscoroutine(result):
+                result.close()
+            raise TypeError("is_proxy_error must return a boolean synchronously")
+        return result
 
     def use(self, form: str, *events: Task | dict[str, Any]) -> None:
         """沿用 use(form, *events) 注册可复用插件调用。
@@ -1022,28 +1079,50 @@ class Spider:
         """读取初始化与任务交付状态，关闭后仍可查询借用存储。
 
         Returns:
-            当前队列的独立快照，附带本进程最近未抛出的业务拒绝。
+            当前队列的独立快照，附带本进程的业务拒绝摘要与按原因计数。
         """
         with self._rejections_lock:
             rejections = tuple(self._rejections)
+            rejected = dict(self._rejected)
         return RunReport(
-            self.task_queue.initialization(), self.task_queue.counts(), rejections
+            self.task_queue.initialization(),
+            self.task_queue.counts(),
+            rejections,
+            rejected,
         )
 
+    def _drained(self) -> RunReport:
+        """生成排空时的报告，strict 时汇总抛出本进程的业务拒绝。
+
+        Returns:
+            当前运行快照。
+
+        Raises:
+            RejectedTasksError: strict=True 且本进程存在业务拒绝。
+        """
+        report = self.report()
+        if self._strict and report.rejected:
+            raise RejectedTasksError(report)
+        return report
+
     def _raise_dead(self, work: Work, error: BaseException) -> bool:
-        """决定已写入死信的交付错误是否交给运行入口抛出。
+        """决定已写入死信的交付错误是否交给运行入口立即抛出。
 
         Args:
             work: 进入死信的任务。
             error: 交付错误。
 
         Returns:
-            strict 或非业务拒绝时为 True；否则记录摘要并返回 False。
+            非业务拒绝时为 True；业务拒绝记录摘要与原因计数后返回 False，不中断消费。
         """
-        if self._strict or not _business_rejection(error):
+        reason = _rejection_reason(error)
+        if reason is None:
             return True
         with self._rejections_lock:
             self._rejections.append(f"{work.id}: {error}")
+            if reason not in self._rejected and len(self._rejected) >= _REASON_LIMIT:
+                reason = _OTHER_REASON
+            self._rejected[reason] = self._rejected.get(reason, 0) + 1
         return False
 
     def run_spider(self, *, timeout: float | None = None) -> RunReport:
@@ -1056,6 +1135,7 @@ class Spider:
             当前队列状态。
 
         Raises:
+            RejectedTasksError: strict=True 且排空时本进程存在业务拒绝。
             BaseException: 消费执行、等待或存储失败。
         """
         external(self)
@@ -1065,7 +1145,7 @@ class Spider:
                 return self.report()
             self._consume()
             self._wait_idle(timeout)
-            return self.report()
+            return self._drained()
 
     def call(
         self,
@@ -1117,7 +1197,12 @@ class Spider:
         port: int = 8000,
         token: str | None = None,
         allowed_hosts: Sequence[str] | None = None,
-        allowed_options: Sequence[str] = (RETRY_MAX, IMPERSONATE),
+        allowed_options: Sequence[str] = (
+            RETRY_MAX,
+            IMPERSONATE,
+            PROXY_ROTATE,
+            PROXY_RETRY,
+        ),
         max_active_executions: int = 128,
         metrics: Metrics | None = None,
     ) -> None:
@@ -1133,7 +1218,7 @@ class Spider:
             port: HTTP 端口。
             token: 可选 Bearer 令牌；监听非回环地址时应设置。
             allowed_hosts: 允许的 Host 头，None 使用服务默认值。
-            allowed_options: 远程请求允许携带的执行配置键，默认重试上限与预设指纹。
+            allowed_options: 远程请求允许携带的执行配置键，默认重试上限、预设指纹与两项代理重试配置。
             max_active_executions: 服务允许同时存在的活跃执行数。
             metrics: 可选指标聚合器，提供时开放 GET /metrics；其插件需已通过 plugins 装入。
 
@@ -1336,6 +1421,7 @@ class Spider:
             初始化结束且队列排空时的快照。
 
         Raises:
+            RejectedTasksError: strict=True 且排空时本进程存在业务拒绝。
             BaseException: 初始化或消费失败，已接受的种子仍可排空，原失败继续传播。
         """
         external(self)
@@ -1378,7 +1464,7 @@ class Spider:
                     raise failure  # noqa: B904
                 if failure is not None:
                     raise failure
-                return self.report()
+                return self._drained()
             except BaseException as exc:
                 primary = exc
                 raise

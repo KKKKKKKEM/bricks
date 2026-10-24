@@ -230,12 +230,17 @@
 
 ### 第九条：Air 爬虫基类与领域插件
 
-1. `bricks.spider.air.Spider` 保留 concurrency、downloader、task_queue、queue_name、proxy、forever 等业务参数，
-   concurrency 默认 1，forever 默认 False；poll_interval 暴露给 QueueBackend，默认 0.05 秒。
+1. `bricks.spider.air.Spider` 的构造参数只保留 concurrency、downloader、task_queue、queue_name、proxy、forever、
+   slots、options、limits、plugins 等基本参数与资源，concurrency 默认 1，forever 默认 False；其余配置统一为 options
+   中的点分键。`spider.*` 是实例级配置，由 `bricks.models.SpiderSettings.split` 在构造时拆出并校验，未知键报错，
+   不写入任务、不参与 Work ID：spider.run.strict（默认 False）、spider.init.timeout（默认 None）、
+   spider.queue.lease（交付与初始化租约秒数，默认 30）、spider.queue.poll（QueueBackend 轮询秒数，默认 0.05）、
+   spider.session.reuse（默认 True）与 spider.session.proxies（默认 4）。其余键作为默认执行配置合并进每个任务；
+   任务级 options 携带 `spider.*` 键时明确报错。
    下载器按 fetch 协议注入，queue_name 必须与已注入任务存储的 name 一致；proxy 接受固定地址、ProxyProvider 或 Manager，
-   固定地址显式规范为 URL，供应源由实例装配成 Manager。未注入 slots、同步 downloader 实现 SessionDownloader 且未声明
-   slot_session_reuse=False 时，框架按 concurrency 创建长期 Slot，每个 Slot 装配 ProxySessions(max_sessions=session_proxies，
-   默认 4) 与 DownloadNode，在停止执行后关闭；托管代理的 auth、threshold、ttl 照常按请求生效，轮换地址即路由到对应会话。
+   固定地址显式规范为 URL，供应源由实例装配成 Manager。未注入 slots、同步 downloader 实现 SessionDownloader，
+   spider.session.reuse 与下载器的 slot_session_reuse 均未设为 False 时，框架按 concurrency 创建长期 Slot，每个 Slot 装配
+   ProxySessions(max_sessions=spider.session.proxies) 与 DownloadNode，在停止执行后关闭；托管代理的 auth、threshold、ttl 照常按请求生效，轮换地址即路由到对应会话。
    同步浏览器、异步 Session 或自定义多资源 Slot 仍由调用方显式装配。plugins 接受 Interlace 插件并在打开时装入自有 Runtime，
    不能再提供任务后端；指标等扩展经此装配，Spider 不内置统计方法。
 2. 运行装配初始化、消费与同步调用三张领域 Graph。公开 Spider API 与生命周期编排位于 `bricks.spider.air`，
@@ -260,8 +265,11 @@
    不经过请求插槽、代理插件或重试，会话模式按 request.proxy 选择 Slot 内会话；下载器同步异步类别不匹配时明确拒绝。
    框架执行配置键统一使用 `crawler.` 前缀，不使用 `$` 前缀键；`bricks.models.CrawlerOptions` 一次解析并校验全部
    crawler.* 键，未知键在构造 Work 与节点读取时明确报错，to_options() 只生成非默认键。context.max_retry 按执行配置
-   crawler.retry.max、form 段级 Download.max_retry、Spider max_retry 的顺序取重试上限；context.ok_rule 读取
+   crawler.retry.max（含 Spider options 合并的默认值）、form 段级 Download.max_retry、默认 5 的顺序取重试上限；context.ok_rule 读取
    crawler.response.ok，form 另回退段级 Download.ok。重试耗尽一律进入 dead，不按成功丢弃。
+   crawler.retry.delay 为重试等待秒数（默认 0，Retry(delay=...) 优先）；crawler.proxy.retry 默认 5，是 is_proxy_error
+   判定的代理错误不消耗 crawler.retry.max 的独立上限，用尽后照常消耗重试预算，0 表示不单独计数。is_proxy_error(context) 可由子类重写为同步布尔判断，默认要求
+   status_code=-1、请求带代理，且异常类名为 ProxyError 或信息含 proxy；context.proxy_retries 读取已用次数。
 5. context.submit(*obj, affinity="current") 与初始化使用同一稳定 Work 构造规则，返回 Work 列表而不返回未来 Context。
    current 通过实例内本地 Event 交给 QueueBackend.put_claim，原子持久化并优先携带当前 SlotLease 执行；any 只 put
    到待领取队列，允许任意 Worker 领取。两者均持久化并按 Work.id 去重；显式 id 只用于单种子提交，配置从
@@ -296,9 +304,11 @@
 9. run(task_name="all", args=None, kwargs=None) 分派 all/init/spider 并在结束时关闭资源。
    run_init、run_spider 可在 with Spider(...) 中分开运行；forever=True 时消费者保持服务直到外部关闭。
    初始化调用线程等待 Execution 时定期续租，不为每条种子新增线程。失败记录与检查点受初始化 token/fence 保护。
-   初始化失败仍允许已提交种子排空，原始失败继续传播；run 在已接受任务排空后仍报告任务失败。
-   strict 默认 True，单项 Failure 或重试耗尽也会使 run 抛错；strict=False 只把这两类业务拒绝写入死信并记入
-   RunReport.rejections（本进程最近 20 条），程序错误、存储错误与初始化失败仍然抛出。
+   初始化失败仍允许已提交种子排空，原始失败继续传播。
+   单项 Failure 或重试耗尽是业务拒绝：写入死信、记入 RunReport.rejections（本进程最近 20 条）与 rejected
+   （按原因计数，最多 50 个原因，其余合并为 "(other)"），不中断消费。spider.run.strict 默认 False，run 正常返回报告；
+   为 True 时在队列排空后抛出携带报告的 RejectedTasksError，不在首个拒绝处停止。
+   程序错误、存储错误与初始化失败不受该开关影响，仍然抛出。
 10. Spider 关闭自建 Runtime、QueueBackend、SlotPool 及框架自动创建的同步下载会话；注入的 Slot 资源、
     显式会话与 Redis 客户端由调用方在停止执行后关闭。关闭协作式取消初始化并排空已接受的消费，
     不强杀同步函数；禁止在自身业务或插件回调中重入阻塞生命周期方法。RunReport 返回队列快照与本进程业务拒绝摘要，
@@ -329,8 +339,8 @@
     尚未产生的部分为 None。call(seed, options=None) 经 Runtime.start(slots=...) 在本实例 SlotPool 内执行，复用 Slot
     会话；调用没有根 Work，不 ACK、不写死信，失败原样抛出。调用中 current 亲和的 submit/emit 明确拒绝，any 照常持久化。
     serve() 在同一 Runtime 上以 Interlace GraphService 提供 HTTP/JSON-RPC 与可选 /metrics，传入本实例 SlotPool，
-    服务期间运行队列消费者，服务器退出后关闭实例。远程 options 仅接受 allowed_options，默认 crawler.retry.max 与
-    crawler.fingerprint.impersonate；crawler.response.ok/scripts 执行可信 Python，不得默认开放给远程请求。
+    服务期间运行队列消费者，服务器退出后关闭实例。远程 options 仅接受 allowed_options，默认 crawler.retry.max、
+    crawler.fingerprint.impersonate、crawler.proxy.rotate 与 crawler.proxy.retry；crawler.response.ok/scripts 执行可信 Python，不得默认开放给远程请求。
 
 ### 第十条：可复用领域插件与代理管理
 
@@ -362,7 +372,10 @@
 5. Manager 不创建全局注册表、单例或线程局部状态，get/now/use/recover/clear/fresh 明确接收 Slot。
    不同管理器在同一 Slot 使用不同命名空间；阈值按新请求次数与明确 ttl 秒数计算，use 只登记，
    下一次 get 才回收。Air 自动会话按请求代理路由到 Slot 内对应会话，auth、threshold 与 ttl 照常生效。
-   Air 已选 Request.proxy 在重试中保留，不自动更换会话或代理。context.clear_proxy 显式丢弃请求代理并清除地址。
+   Before.set_proxy 经 context.assign_proxy 写入并登记所选代理；重试回到 before_request 且该代理已用于下载时，
+   默认经 context.clear_proxy 丢弃（托管代理不放回供应池）并重新选择；执行配置 crawler.proxy.rotate=False 时沿用原代理，
+   可在 Spider options 或单个任务中设置，set_proxy 不另设同义参数。
+   业务或 make_request 显式设置的 Request.proxy 不登记，重试中始终保留。context.clear_proxy 显式丢弃请求代理并清除地址。
    供应源无可用代理时报错，不静默直连；程序错误、取消、认证和回收失败不转换为空代理。
 6. 会话代理仍在 prepare_session 时固定，托管请求代理不热切现有会话。Clash 控制器是共享出口，
    同一实例只允许一个未归还占用，重叠获取立即失败；不在构造时修改模式，不承诺隔离外部控制者。

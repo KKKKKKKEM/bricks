@@ -113,7 +113,11 @@ class Before:
     @staticmethod
     @hooks.current
     def set_proxy(timeout: float | None = 30) -> None:
-        """选择固定代理或当前 Slot 的代理。
+        """选择固定代理或当前 Slot 的代理，重试时按执行配置 crawler.proxy.rotate 更换已用代理。
+
+        Request 上由业务显式设置的代理始终保留；只有本插件写入且已经用于下载的代理会在
+        重试回到 before_request 时经 context.clear_proxy() 丢弃，托管代理不放回供应池。
+        crawler.proxy.rotate 为 False 时重试沿用原代理。
 
         Args:
             timeout: 代理供应源最大等待秒数，默认 30 秒。
@@ -124,7 +128,9 @@ class Before:
         """
         context = _context()
         if context.request.proxy is not None:
-            return
+            if not context.proxy_spent or not context.crawler_options.proxy_rotate:
+                return
+            context.clear_proxy()
         source = context.target.proxy
         if isinstance(source, Manager):
             if context.slot is None:
@@ -132,10 +138,10 @@ class Before:
             proxy = source.get(context.slot, timeout=timeout)
             if proxy.auth is not None and sync(proxy.auth, context.request) is not None:
                 raise TypeError("proxy auth callback must return None")
-            context.request.proxy = proxy.proxy
+            context.assign_proxy(proxy.proxy)
             source.use(context.slot)
-        else:
-            context.request.proxy = source
+        elif source is not None:
+            context.assign_proxy(source)
 
     @staticmethod
     @hooks.current

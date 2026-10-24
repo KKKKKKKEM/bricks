@@ -202,7 +202,10 @@ records = result.to_list()
 | --- | --- |
 | session_reuse | `crawler.session.reuse`，默认 True |
 | impersonate | `crawler.fingerprint.impersonate`，默认 None |
-| retry_max | `crawler.retry.max`，默认 None |
+| retry_max | `crawler.retry.max`，默认 None（回退 form 段级上限，再回退 5） |
+| retry_delay | `crawler.retry.delay`，非负秒数，默认 0 |
+| proxy_rotate | `crawler.proxy.rotate`，重试时是否更换已用代理，默认 True |
+| proxy_retry | `crawler.proxy.retry`，代理错误的独立重试上限，非负整数，默认 5 |
 | response_ok | `crawler.response.ok`，字符串或 `Mapping[str, str]`，默认 None |
 | response_scripts | `crawler.response.scripts`，`Mapping[str, str]`，默认空 |
 | form_stage | `crawler.form.stage`，form 当前段序号，非负整数，默认 0 |
@@ -214,7 +217,29 @@ parsed = CrawlerOptions.parse({"crawler.retry.max": 3, "my.key": 1})
 options = {**CrawlerOptions(retry_max=3).to_options(), "my.key": 1}
 ```
 
-`parse(options)` 校验全部 `crawler.*` 键，未知的 `crawler.*` 键抛出 ValueError，其他业务键不受影响；
+`parse(options)` 校验全部 `crawler.*` 键，未知的 `crawler.*` 键或任何 `spider.*` 键抛出 ValueError，其他业务键不受影响；
 `to_options()` 只返回非默认键，可直接与业务键合并后传给 Spider 或 Runtime。
+
+## 实例配置 SpiderSettings
+
+`bricks.models.SpiderSettings` 是 Spider 实例级 `spider.*` 配置的冻结数据类。它与执行配置写在同一个 options 中，
+构造 Spider 时由 `SpiderSettings.split(options)` 拆出，不写入任务、不参与 Work ID：
+
+| 字段 | 配置键与默认值 |
+| --- | --- |
+| strict | `spider.run.strict`，默认 False |
+| init_timeout | `spider.init.timeout`，正秒数或 None，默认 None |
+| lease | `spider.queue.lease`，正秒数，默认 30 |
+| poll | `spider.queue.poll`，正秒数，默认 0.05 |
+| session_reuse | `spider.session.reuse`，默认 True |
+| session_proxies | `spider.session.proxies`，正整数，默认 4 |
+
+```python
+from bricks.models import SpiderSettings
+
+settings, task_options = SpiderSettings.split({"spider.run.strict": True, "crawler.retry.max": 3})
+```
+
+未知的 `spider.*` 键抛出 ValueError；`to_options()` 只返回非默认键。
 
 [上一章：架构与依赖](01-architecture.md) · [文档目录](README.md) · [下一章：爬虫下载](03-crawler-download.md)

@@ -17,12 +17,22 @@ spider.run()
 ```
 
 `proxy` 接受地址字符串、`ProxyProvider` 或 `Manager`。供应源自动装配成实例级 Manager，
-缓存保存在当前 Slot。`Request.proxy` 的显式地址优先；已选地址在同一请求重试时保留。
+缓存保存在当前 Slot。`Request.proxy` 的显式地址优先，并在重试中始终保留。
 `threshold` 是允许的新请求次数，`ttl` 是最大占用秒数，两者都可以为 None。
-达到阈值不会中断正在重试的请求，下一次获取代理时才轮换。
 Air 自动会话模式按 `Request.proxy` 把请求路由到当前 Slot 内对应地址的会话（见 `ProxySessions`），
-托管代理按请求轮换，`auth`、`threshold` 与 `ttl` 照常生效。业务明确判定代理失效时，可在 `on_retry(context)` 中
-调用 `context.clear_proxy()`：它丢弃请求代理与管理器选择，下一次请求取得新地址及对应会话；默认重试不会调用它。
+托管代理按请求轮换，`auth`、`threshold` 与 `ttl` 照常生效。
+
+默认注册的 `Before.set_proxy` 在重试时更换代理：它选定的地址一旦用于下载，重试回到 before_request 时会调用
+`context.clear_proxy()` 丢弃该地址（托管代理不放回供应池），再取得新地址及对应会话。下载前触发的 Retry
+尚未使用代理，不会轮换。需要在重试中沿用原代理（例如保持会话 Cookie）时，把执行配置 `crawler.proxy.rotate`
+设为 False；它可以作为 Spider 默认值，也可以只覆盖个别任务：
+
+```python
+spider = MySpider(proxy=provider, options={"crawler.proxy.rotate": False})
+context.submit(seed, options={"crawler.proxy.rotate": False})
+```
+
+代理连接失败（见 Spider 的 `is_proxy_error`）先消耗独立的 `crawler.proxy.retry`（默认 5），不占用 `crawler.retry.max`。
 
 | 供应源 | 行为 |
 | --- | --- |
@@ -74,7 +84,7 @@ slot["crawler.downloaders"] = {"default": session}
 
 Air 使用自建 Slot 和同步 SessionDownloader 时，每个 Slot 装配一个
 [`ProxySessions`](03-crawler-download.md#按代理分会话)：按请求代理惰性创建会话，转发前清除 Request.proxy，
-超过 `session_proxies` 时关闭最久未用的会话，执行停止后关闭全部会话并归还代理。Cookie 按“Slot × 代理”隔离，
+超过 `spider.session.proxies` 时关闭最久未用的会话，执行停止后关闭全部会话并归还代理。Cookie 按“Slot × 代理”隔离，
 更换代理即使用另一会话，Cookie 不迁移。直接使用 [Slot 会话下载节点](03-crawler-download.md)、
 异步 Session 或注入自定义 SlotPool 时，调用方仍按上述顺序显式管理。
 

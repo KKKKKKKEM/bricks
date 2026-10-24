@@ -901,14 +901,11 @@ def test_bypass_unmatched_mapping_uses_status_defaults(status, attempts, accepte
             """
             return []
 
-    spider = BypassSpider(downloader=Downloader())
+    spider = BypassSpider(downloader=Downloader(), options={"crawler.retry.max": 2})
     spider.submit({"url": "https://example.test"})
     with spider:
-        if accepted:
-            assert spider.run_spider(timeout=3).counts["acked"] == 1
-        else:
-            with pytest.raises(ExecutionError):
-                spider.run_spider(timeout=3)
+        counts = spider.run_spider(timeout=3).counts
+    assert counts["acked" if accepted else "dead"] == 1
     assert len(calls) == attempts
 
 

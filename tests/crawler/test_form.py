@@ -185,7 +185,10 @@ def test_interrupted_stage_resumes_without_losing_persisted_next_stage():
     downloader = SiteDownloader()
     queue = MemoryTaskQueue("catalog")
     spider = Catalog(
-        downloader=downloader, task_queue=queue, queue_name="catalog", lease_seconds=1
+        downloader=downloader,
+        task_queue=queue,
+        queue_name="catalog",
+        options={"spider.queue.lease": 1},
     )
     listing = spider._make_work({"page": 2, "token": "t1"}, options={STAGE_OPTION: 1})
     detail = spider._make_work(

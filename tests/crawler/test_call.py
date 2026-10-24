@@ -167,7 +167,9 @@ def test_crawler_metrics_plugin_counts_requests_retries_and_submissions(server):
     base, _, _ = server
     metrics = Metrics()
     spider = Echo(
-        base, max_retry=1, strict=False, plugins=[metrics.plugin, crawler_metrics]
+        base,
+        options={"crawler.retry.max": 1},
+        plugins=[metrics.plugin, crawler_metrics],
     )
     spider.submit({"path": "/echo", "submit": "any"})
     spider.submit({"path": "/error"})

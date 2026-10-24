@@ -106,6 +106,7 @@ uv sync --locked --extra redis --extra mongo
 ## 请求、分页与条件动作
 
 - `Before.set_proxy(timeout=30)`：由 Air 默认注册，选择固定代理或当前 Slot 代理；请求显式值优先。
+  重试时默认丢弃本插件已用于下载的代理并重新选择，执行配置 `crawler.proxy.rotate=False` 沿用原代理，见[代理管理](10-proxies.md)。
 - `Before.fake_ua()`：展开请求头中的 `@chrome/@edge/@mobile/@pc/@random`，也可传同步 factory。
 - `After.show_response` 保留 `handle`、`fmt`；默认记录响应摘要。`fmt=1` 仅列出请求头名称及请求体是否存在，
   不输出任何请求头值或请求体内容；代理认证、请求 URL 中的认证信息、查询参数值及片段均脱敏。
